@@ -22,7 +22,12 @@ from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
     ProviderRoundResult,
 )
-from general_manager.chat.providers.base import DoneEvent, TextChunkEvent, TokenUsage
+from general_manager.chat.providers.base import (
+    DoneEvent,
+    TextChunkEvent,
+    TokenUsage,
+    ToolCallEvent,
+)
 
 
 class _SynthesisProvider:
@@ -50,7 +55,7 @@ def _settings() -> PlannedChatSettings:
         enabled=True,
         profiles=MappingProxyType({"synthesizer": profile}),
         roles=MappingProxyType(
-            {"synthesizer": "synthesizer", "fallback_executor": "synthesizer"}
+            {"synthesizer": "synthesizer", "fallback": "synthesizer"}
         ),
         catalog_source=None,
     )
@@ -94,6 +99,38 @@ def test_synthesis_rejects_unknown_evidence_reference() -> None:
         asyncio.run(
             synthesize_answer("show parts", _store(), {}, _settings(), RoundBudget(()))
         )
+
+
+@pytest.mark.parametrize("call_count", [1, 2])
+def test_synthesis_rejects_all_tools_and_accounts_for_rejected_round(
+    call_count: int,
+) -> None:
+    calls = tuple(
+        ToolCallEvent(f"call_{index}", "query", {"manager": "Part"})
+        for index in range(call_count)
+    )
+    budget = RoundBudget(())
+    with patch(
+        "general_manager.chat.planned.synthesis.complete_provider_round",
+        side_effect=[
+            ProviderRoundResult("", calls[0], TokenUsage(2, 3), calls),
+            ProviderRoundResult(
+                '{"answer":"No parts found.","evidence_ids":["ev-query-1"]}',
+                None,
+                TokenUsage(5, 7),
+            ),
+        ],
+    ) as complete:
+        result = asyncio.run(
+            synthesize_answer("show parts", _store(), {}, _settings(), budget)
+        )
+
+    assert complete.call_count == 2
+    assert all(call.args[2] == [] for call in complete.call_args_list)
+    assert budget.global_used == 2
+    assert result.usage == TokenUsage(7, 10)
+    assert result.evidence_ids == ("ev-query-1",)
+    assert result.answer == "No parts found."
 
 
 def test_synthesis_rejects_empty_evidence_ids_and_carries_failed_usage() -> None:

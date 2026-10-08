@@ -32,7 +32,7 @@ GENERAL_MANAGER = {
 | `provider` | `"general_manager.chat.providers.OllamaProvider"` | Dotted provider class path. The class is constructed without arguments for each HTTP/SSE request or WebSocket connection. |
 | `provider_config` | `{}` | Mapping read by the selected provider. Supported keys depend on the adapter. |
 | `provider_profiles` | `{}` | Optional named provider-profile mappings used by planned roles. Each profile supplies `provider`, `provider_config`, and `trust_group`. |
-| `planned` | `{}` | Optional planned read-orchestration settings. `enabled` defaults to `False`; see [Planned read orchestration](#planned-read-orchestration). |
+| `planned` | `{}` | Planned read-orchestration settings. `enabled` defaults to `True`; see [Planned read orchestration](#planned-read-orchestration). |
 | `permission` | `None` | Callable or dotted path receiving `(user, scope)`. Returning `False` denies the request or socket. |
 | `allowed_origins` | `None` | Explicit WebSocket origin list. When empty, Channels' allowed-host origin validator is used. |
 | `allowed_mutations` | `[]` | Exact generated GraphQL mutation names the `mutate` tool may execute. |
@@ -42,8 +42,8 @@ GENERAL_MANAGER = {
 | `query_timeout_seconds` | `None` | Optional database query timeout in seconds. It is converted to milliseconds for supported database execution. |
 | `max_retries_per_message` | `3` | Maximum non-mutation tool-loop retries in one user turn. |
 | `max_mutations_per_message` | `8` | Maximum mutation tool executions in one user turn, including a mutation resumed after confirmation. Set `0` to disallow writes for a turn. |
-| `max_total_rounds_per_message` | `None` | Optional positive cap for legacy provider rounds in a turn, including summaries and recovery. When omitted, the cap is `max_retries_per_message + max_mutations_per_message + 2`. Planned reads retain their separate orchestration budgets. |
-| `tool_strategy` | `"discovery"` | `discovery` exposes the stable discovery tool set; `direct` adds one query tool per exposed manager. |
+| `max_total_rounds_per_message` | `None` | Optional positive cap for legacy provider rounds in a turn, including summaries and recovery. When omitted, the cap is `max_retries_per_message + max_mutations_per_message + 2`. Normal planned reads count rounds without a round cap and retain their stage deadlines. |
+| `tool_strategy` | `"discovery"` | `discovery` exposes the stable discovery tool set for the retained mutation workflow; `direct` replaces that set with one query tool per exposed manager. This setting does not select read orchestration. |
 | `recover_missing_tool_calls` | `False` | Add bounded recovery prompts when a model answers without required tools or returns no answer after tools. |
 | `system_prompt` | `""` | Project-specific instructions appended to the built-in system prompt. |
 | `max_recent_messages` | `20` | Recent persisted messages retained verbatim when conversation context is built. |
@@ -573,11 +573,24 @@ runner internals. See the [task guide](../howto/run_chat_evals.md) and
 
 ## Planned read orchestration
 
-Planned orchestration is opt-in. Legacy `provider` and `provider_config` keep
-their existing behavior; when `planned.enabled` is false, GeneralManager selects
-the legacy loop before it creates a planner. A planned read that the planner
-classifies as a mutation is sent through that unchanged legacy loop, so planned
-executors never receive the `mutate` tool.
+Planner and synthesis share the clarification-topic distinction: `criterion`
+asks for the missing standard of an open evaluative judgment; `metric` asks for
+the missing measurement of an already defined analysis. They ask only for
+choices still unresolved by the user or an applicable definition. Once the
+standard and measurement are supplied, they do not ask for them again. The
+existing structured question renderer and closed topic vocabulary are unchanged.
+
+All new HTTP, SSE, and WebSocket messages use Planned orchestration. The planner
+classifies reads and writes before dispatch. Reads have three processing stages:
+planner, executor, and synthesizer. A shared `fallback` profile handles recovery
+under the existing trust and deadline checks; task complexity does not select a
+provider. A validated mutation plan enters the retained mutation workflow, which
+keeps its permissions, confirmation, ownership, duplicate, and retry checks. The
+write provider is constructed only when that workflow needs it.
+
+`planned.enabled=False` is deprecated: it emits `DeprecationWarning` and still
+uses Planned. Invalid settings fail validation rather than selecting an older
+read loop. The global `CHAT.enabled` switch still controls whether chat is exposed.
 
 ```python
 GENERAL_MANAGER = {
@@ -601,10 +614,9 @@ GENERAL_MANAGER = {
             "catalog": "myproject.chat.get_manager_catalog",
             "roles": {
                 "planner": "strong_local",
-                "simple_executor": "fast_local",
-                "complex_executor": "strong_local",
+                "executor": "strong_local",
                 "synthesizer": "strong_local",
-                "fallback_executor": "strong_local",
+                "fallback": "strong_local",
             },
             "max_concurrent_tasks": 3,
             "evidence_timeout_seconds": 90,
@@ -614,8 +626,12 @@ GENERAL_MANAGER = {
 }
 ```
 
-The required role names are `planner`, `simple_executor`, `complex_executor`,
-`synthesizer`, and `fallback_executor`. If `provider_profiles` is omitted,
+The required role names are `planner`, `executor`, `synthesizer`, and `fallback`.
+Old role maps must be migrated explicitly: select the desired executor profile
+and rename the recovery role to `fallback`. The removed
+`planned.routing.select_executor_role` API has no replacement; every task uses
+`executor`, subject to recovery. `routing_features` remains validated descriptive
+plan metadata and does not select a provider. If `provider_profiles` is omitted,
 planned mode creates the implicit `default` profile from the legacy provider and
 configuration, assigns every role to it, and uses trust group `default`. Every
 profile used by a normal turn must share one `trust_group`; client HTTP, SSE,
@@ -656,12 +672,22 @@ and terminal reason. Raw tool results, manager names, plans, credentials, and
 exceptions are excluded; the existing configured field redaction and result-size
 limits still apply to the generic audit layer.
 
+Planned synthesis receives the current request, eligible resolved evidence and a
+turn-local snapshot of `GENERAL_MANAGER["CHAT"]["system_prompt"]`, when that
+setting is a nonempty string. Only this configured text is added; generated
+schema prompts and conversation history are not copied. This preserves existing
+application definitions across planning, follow-ups and synthesis fallback.
+Schema field descriptions remain inside their original evidence payloads.
+Definitions are reference data, not instructions or proof of record values.
+Their manager and field scope must be respected; missing or conflicting meanings
+must not be invented. Evidence eligibility, tool permissions and provider limits
+are unchanged.
+
 ### Planned settings and catalog
 
 The settings helpers normalize the nested `planned` mapping into immutable
-profile and role data. `get_planned_chat_settings()` returns disabled settings
-with the legacy provider as an implicit `default` profile when planned mode is
-off. When enabled, all five required roles must resolve to configured profiles,
+profile and role data. `get_planned_chat_settings()` always enables Planned
+reads. All four required roles must resolve to configured profiles,
 all mapped profiles must share one `trust_group`, and each configured provider
 must support the explicit configuration construction used by
 `build_profile_provider()`.
@@ -791,10 +817,19 @@ application owns a custom chat transport or deterministic test harness. Normal
 applications should configure `CHAT["planned"]` and use the existing transport
 routes. `plan_request()` performs at most one correction and one fallback
 attempt; `complete_provider_round()` accepts exactly one terminal `DoneEvent`
-and either text or one tool call; `synthesize_answer()` references only eligible
-resolved evidence.
+and either text or ordered tool calls with unique IDs; `synthesize_answer()`
+references only eligible resolved evidence. `ProviderRoundResult.tool_calls`
+contains every accepted call in order. Its original three positional arguments
+and `tool_call` accessor remain supported; `tool_call` is the first call or
+`None` for a text response.
 
 ::: general_manager.chat.planned.budget.RoundBudget
+
+Normal planned-turn factories use `RoundBudget(root_ids, enforce_limits=False)`.
+Counts remain integers; unbounded limits and remaining values are `None`.
+Direct `RoundBudget(root_ids)` construction preserves the historical admission
+limits for existing callers. Explicit numeric `global_limit` and `subtree_limit`
+values remain enforceable in either mode.
 
 ::: general_manager.chat.planned.budget.RoundBudgetExhausted
 
@@ -812,9 +847,6 @@ resolved evidence.
 
 ::: general_manager.chat.planned.provider_calls.complete_provider_round
 
-::: general_manager.chat.planned.routing.ExecutorRole
-
-::: general_manager.chat.planned.routing.select_executor_role
 
 ::: general_manager.chat.planned.synthesis.SynthesisFailedError
 
@@ -843,3 +875,259 @@ resolved evidence.
 ::: general_manager.chat.planned.scheduler.prepare_planned_turn
 
 ::: general_manager.chat.planned.scheduler.iter_planned_read_events
+
+
+### GraphQL-native read contract (version 2)
+
+At the root, `query.fields` selects row fields directly, for example
+`["code"]`. The adapter adds the root `items` and `pageInfo` wrapper. Nested
+collection selections still include their advertised `items`/`pageInfo` paths.
+
+Read tools now use the exact executable GraphQL names. `get_manager_schema`
+returns `contract_version: 2`, valid `roots`, scalar `fields`, directed
+`relations` (including wrapper paths), root arguments, and named `types` with
+nullability, defaults and input shapes. Domain manager names remain stable
+identifiers for discovery and provenance. The runtime schema supplies all
+executable names; no Python spelling aliases are accepted.
+
+For example, use `isActive`, `densityGCm3`, `shippedAt_Gte` or an explicitly
+customized field name exactly as returned by schema discovery. A former
+`is_active` field request must be migrated, unless that is the actual GraphQL
+name in a schema configured without automatic camel casing. Filtering likewise
+uses the actual input object, including its declared relation depth. Relation
+filters for managers without `chat_exposed = True` are omitted from discovery
+and rejected before execution, including nested arguments and effective input
+defaults. This chat boundary does not change public GraphQL permissions.
+
+```json
+{
+  "manager": "Project",
+  "filters": {"customer": {"code": "C01"}},
+  "fields": [
+    "code",
+    {
+      "field": "materialsList",
+      "arguments": {"pageSize": 10},
+      "fields": [{"items": ["code", "name"]}, {"pageInfo": ["totalCount"]}]
+    }
+  ]
+}
+```
+
+The example requires those fields to be exposed by the application's schema.
+Use `root` when a manager has several advertised roots. Optional `arguments`
+contains exact root arguments, such as `orderBy`, `page`, or `includeInactive`
+**only when advertised**. `filters` is a convenience input for the actual
+filter argument (including its explicit custom name) and cannot also be
+provided in `arguments`. `limit` and
+`offset` retain their tool pagination semantics; when specifying a native page
+greater than one, its page size must be explicit or resolvable from the schema
+or configured cap. Native argument defaults are preserved before caps and
+coverage calculations, at both root and nested pages. Nested selections support scalar
+names, `{fieldName: [fields]}`, and `{field, arguments, fields}`. Output keys
+retain their GraphQL names.
+
+The response retains `data`, `total_count` and `has_more`, and adds `complete`.
+`has_more` refers to the root page; `complete` describes whether this response
+contains the full root result and complete selected nested pages. Missing nested
+page totals cannot establish completeness. Partial responses remain usable for
+bounded questions; exhaustive questions need all relevant pages. Configured
+result caps also clamp supported nested pages.
+
+`find_path` returns directed executable selection paths, including `items` for
+page wrappers. It does not invent reverse edges. Inspect another manager when a
+schema detail marks its output as a `reference`. Discovery and both transports'
+planner payloads remain compact; expanded schema types are loaded on demand.
+The existing 200,000-character provider guard remains unchanged.
+
+Version 2 currently supports exposed manager roots returning generated pages,
+object/leaf selections and typed arguments. Unions, interfaces, fragments,
+arbitrary roots and Python aliases are unsupported. The read compiler uses
+GraphQL ASTs and typed variables and executes existing resolvers with the same
+request context and deadlines. Schema validation errors are actionable executor
+feedback, not evidence. Other backend errors retain their generic public error.
+REST serialization and mutation inputs/confirmation rules are unchanged. Existing
+Python callers of the read tools must migrate their requested names explicitly;
+there is no silent legacy conversion.
+
+Structured clarification responses contain only `clarification.language` (`de`,
+`en`, `fr`) and a nonempty unique `clarification.requirements` list drawn from
+`criterion`, `metric`, `horizon`, `population`, `customer_identity`,
+`record_selector`, and `unit`. The runtime renders fixed questions; this branch
+accepts no free answer text, result claims, entity names, numbers, or evidence IDs.
+The existing read plan must still resolve schema/identity evidence. Data answers
+continue to require nonempty unique eligible `evidence_ids`; mixed answers and
+questions use that grounded branch. The normal fallback, delivery, and persistence
+paths apply to both response shapes.
+
+### Deferred calculation binding validation
+
+A deferred `bind_calculation` action is validated against concrete, same-task
+source evidence before the binding becomes immutable. Each declared source must
+already be linked to its requirement. Root query populations must be complete;
+value paths must select numeric scalars and grouping/unit paths must be compatible.
+A relation's `items` array is not a scalar, even when it contains one row. Query
+the related manager as the root population instead. Derived bindings require
+recomputed, compatible predecessor calculations. Failed admission leaves the
+requirement unbound so the executor can correct its query or binding.
+
+Rejected root query bindings now report each linked query evidence ID and its
+reproduced source error, alongside the attempted value, grouping and unit paths.
+Observed scalar paths come only from mappings in that source's actual root rows;
+collections are never flattened and no field is inferred from schemas or prose.
+The listed non-null scalar paths are present in every observed row. They describe
+observed structure, not numeric suitability or a suggested binding. Heterogeneous
+paths are counted separately; foreign and unlinked evidence is excluded.
+Observations are bounded to 64 scalar paths, depth 16 and 4096 visited nodes per
+row, with an explicit observation truncation marker. The existing 1024-character
+feedback limit and `truncated` flag still apply. Diagnostics neither select a
+source nor repair a binding, and the original admission validator is unchanged.
+Unsupported diagnostic contexts retain their previous error message.
+
+Repeated validation failures terminate only when the same normalized action and
+feedback recur against unchanged structured task, dependency and evidence inputs,
+after that feedback was supplied in a completed provider round. Corrected actions,
+changed evidence and successful operations permit continued work. Diagnosed action
+cycles carry `reason_origin=scheduler_validation_cycle` and a `validation_cycle`
+proof containing the first, feedback-delivery and repeated pass numbers plus hashes
+of action, feedback and evidence state. Audit records contain no raw input payloads.
+Transport exceptions retain their separate origin and are not validation cycles.
+
+### Schema transport projection
+
+Planned requests can encode repeated schema definitions through the versioned
+`gm.schema-data/1` format. This changes only the provider transport view. The
+planner and executor select eligible schema positions from runtime evidence and
+persisted schema-tool origins before serialization. Ordinary user text, query
+rows, errors, native tool exchanges and application instructions are not searched
+for JSON or schema-shaped values.
+
+The `REFERENCE_DATA` user block retains its usual top-level fields and adds
+`schema_transport`, containing the format explanation, a request-local object
+table and an occurrence map. References are interpreted only at those declared
+schema positions. They point backward within the table. Literal marker-shaped
+objects are escaped. Every occurrence keeps its task, evidence or historical
+origin binding even when several occurrences share an identical value. There is
+no shared cache across requests or users. Equality of a value does not create an
+evidence link or permission.
+
+Historical schema text is eligible only when conversion of a persisted
+`get_manager_schema` row supplies its structured result and origin. Its rendered
+text must match that result exactly. Other historical text remains unchanged.
+Original roles, indices, JSON formatting and text remain available to replay and
+adjudication. The evaluator records original logical messages separately from
+transport hashes and occurrence bindings, and profiles identify the transport
+contract version.
+
+Before dispatch, expansion is checked against the original reference and the
+independent occurrence bindings. Invalid references, foreign bindings, unused
+objects, expansion beyond bounded depth, work or size, and mismatched hashes are
+rejected. Small requests retain their original encoding when projection would
+not reduce the serialized size. The existing 200,000-character Responses request
+guard still measures the final body, including protocol text, table and escaping.
+It does not truncate data or retry an oversized request.
+
+Lossless offline replay and smaller payloads do not establish model comprehension
+or improved answers. A new live evaluation needs separately reviewed controls
+bound to this source revision and transport version; previous controls and
+historical scores are not relabeled.
+
+### Completed task context for synthesis
+
+The synthesizer also receives the objectives, requirement descriptions and
+completion criteria of resolved root tasks. These are the actual runtime tasks,
+including valid changes made during execution. Each requirement lists only
+selected evidence records linked to it by `EvidenceStore.for_requirement()`;
+evidence names are not used to infer links. Synthesis eligibility filtering still
+applies. Query restrictions and completeness remain in the original call identity
+and payload rather than a second interpretation.
+
+This versioned internal context describes planner intent and runtime work. A
+planner assumption is not user consent, and completed coverage does not establish
+an unambiguous user scope. Visible user messages and the existing application
+context retain their roles. No authoritative open-decision state is invented, and
+no new clarification admission gate is introduced. Both supported response
+branches and the bounded fallback retain their existing behavior.
+
+HTTP, SSE and WebSocket answers do not automatically append this context, task
+lists, completion criteria or internal evidence IDs. The model may use relevant
+substantive details in its answer. This is a context improvement, not a proven
+fix for any particular model response; live effectiveness remains unmeasured.
+
+
+### Snapshot-bound schema inspection (protocol 3)
+
+The public `get_manager_schema` tool, including Python calls through
+`execute_chat_tool`, defaults to `view="overview"`. It returns exact executable
+root argument signatures and defaults, output field signatures, relations and
+`type_manifest`. Inspection protocol 3 includes only direct signature references
+and visible relation manager references in the overview manifest. Transitive input
+graphs are discovered from each subsequent detail manifest. Responses carry
+`inspection_version=3`, and snapshot preimages bind projection version 3; old
+version-2 snapshot tokens require fresh observation. The manifest reports input/object/enum/scalar definitions,
+related manager references, or unsupported types. It does not recursively expand
+fields or enum values. The full Python inspection APIs `manager_schema(manager)`,
+`get_manager_schema_summary(manager)` and `tools.get_manager_schema(manager)`
+retain full output by default for compatibility. For the last helper, use an
+explicit `view` keyword to request a tagged selective view.
+
+```python
+overview = execute_chat_tool("get_manager_schema", {"manager": "Part"}, context)
+# Choose these names from this observed type_manifest; never guess generated names.
+needed = [name for name, info in overview["type_manifest"].items()
+          if info["kind"] in {"input", "enum"}]
+details = execute_chat_tool("get_manager_schema", {
+    "manager": "Part", "view": "detail", "types": needed,
+    "snapshot": overview["snapshot"],
+}, context)
+```
+
+Detail requires a nonempty distinct list of exact reachable names and that
+manager's snapshot. It returns each selected direct definition exactly as in the
+full exposure-filtered GraphQL contract, without recursive expansion. It also returns
+the selected definitions and their immediately referenced types in `type_manifest`.
+Load further referenced definitions by these newly observed names at the same
+manager snapshot. A manager reference is a boundary:
+inspect its target manager's own overview and snapshot before requesting its
+fields. Unions/interfaces/fragments remain unsupported. Full inspection is
+available only by explicit `view="full"`; invalid or stale selectors return an
+atomic error without partial definitions or automatic full fallback. Hidden
+managers return no schema. Default, enum and exposure changes invalidate detail
+tokens. Schema inspection is fresh on every tool call and never served from the
+turn cache.
+
+Planned schema requirements may declare `schema={"manager": "Part", "view":
+"detail", "types": ["observedType"], "snapshot": "current"}`. `current` binds to
+the latest successful schema capture across all tasks in the current turn for this manager; a literal
+digest binds exactly that snapshot and must still be current. Overview/full
+bindings use `types=[]`. Detail fragments become completion proof only when all
+required types are covered at one current snapshot, and the completion selection
+must include that full coverage. A full view can satisfy narrower scopes;
+detail cannot satisfy overview. Snapshot mismatch or hidden-manager feedback
+invalidates old proof until fresh observation. Requirements with no `schema`
+binding retain full-inspection semantics. Prose descriptions never select scope.
+
+`schema_complete` means a full contract was returned; `query.complete` describes
+data population coverage. Selective projection intentionally does not round-trip
+to the full schema. The v24 reference codec remains the separate lossless codec.
+Measure complete discovery → details → query exchanges, including cumulative
+request characters, when comparing model input size.
+
+The lossless reference codec also applies to synthesis. It selects only schema
+payloads from eligible resolved evidence and schema history with verified stored
+tool origins. Each occurrence retains its own evidence, task, call and provenance
+binding. The original reference, query results, history text and completed task
+context reconstruct exactly; schema descriptions remain data without instruction
+authority. Synthesis keeps its `RESOLVED_REFERENCE_DATA=` prefix. The internal
+codec helper still defaults to `REFERENCE_DATA=` for planner/executor callers;
+tool defaults and the production synthesis timeout of 30 seconds are unchanged.
+
+Rejected planned `complete` actions retain strict evidence selection and requirement
+coverage. `unsatisfied_requirements` feedback names uncovered requirement IDs and,
+for a bound grouped reduction, the source query ID and missing or duplicate groups.
+The groups come from the verified selected query population and declared binding;
+nested relations and business descriptions do not define a different population.
+Invalid or forged selected evidence receives no coverage claim. Diagnostic text
+uses the existing 1024-character bound and explicitly marks truncation. Gather or
+select the missing evidence before completing; repeated identical rejected actions
+after delivered feedback retain the scheduler's validation-cycle stop.

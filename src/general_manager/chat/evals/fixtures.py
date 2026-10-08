@@ -45,8 +45,16 @@ def _reset_eval_schema() -> None:
         delattr(PathMap, "instance")
 
 
-def setup_toy_schema() -> None:
-    """Register the Material, Part, and Project toy eval schema."""
+def setup_toy_schema(
+    *, data: Mapping[str, list[Mapping[str, Any]]] | None = None
+) -> None:
+    """Register the Material, Part, and Project toy eval schema.
+
+    ``data`` is an optional in-memory fixture override.  Records may refer to
+    related records by id, name, or a mapping containing either key.  The
+    default data remains the small three-material fixture used by the shipped
+    eval datasets.
+    """
     _reset_eval_schema()
 
     class MaterialManager:
@@ -64,22 +72,59 @@ def setup_toy_schema() -> None:
 
         chat_exposed = True
 
-    materials = [
-        {"id": 1, "name": "Steel", "density": 7.8},
-        {"id": 2, "name": "Aluminum", "density": 2.7},
-        {"id": 3, "name": "Cobalt", "density": 8.9},
-    ]
-    materials_by_name = {item["name"]: item for item in materials}
-    parts = [
-        {"id": 1, "name": "Bolt", "material": materials_by_name["Steel"]},
-        {"id": 2, "name": "Bearing", "material": materials_by_name["Aluminum"]},
-        {"id": 3, "name": "Gear", "material": materials_by_name["Cobalt"]},
-    ]
-    parts_by_name = {item["name"]: item for item in parts}
-    projects = [
-        {"id": 1, "name": "Apollo", "parts": [parts_by_name["Gear"]]},
-        {"id": 2, "name": "Mercury", "parts": [parts_by_name["Bearing"]]},
-    ]
+    if data is None:
+        raw_materials: list[Mapping[str, Any]] = [
+            {"id": 1, "name": "Steel", "density": 7.8},
+            {"id": 2, "name": "Aluminum", "density": 2.7},
+            {"id": 3, "name": "Cobalt", "density": 8.9},
+        ]
+        raw_parts: list[Mapping[str, Any]] = [
+            {"id": 1, "name": "Bolt", "material": 1},
+            {"id": 2, "name": "Bearing", "material": 2},
+            {"id": 3, "name": "Gear", "material": 3},
+        ]
+        raw_projects: list[Mapping[str, Any]] = [
+            {"id": 1, "name": "Apollo", "parts": [3]},
+            {"id": 2, "name": "Mercury", "parts": [2]},
+        ]
+    else:
+        raw_materials = list(data.get("materials", []))
+        raw_parts = list(data.get("parts", []))
+        raw_projects = list(data.get("projects", []))
+
+    materials = [dict(item) for item in raw_materials]
+
+    def _resolve_record(
+        reference: Any,
+        records: list[dict[str, Any]],
+        relation_name: str,
+    ) -> dict[str, Any]:
+        if isinstance(reference, Mapping):
+            if "id" in reference:
+                reference = reference["id"]
+            elif "name" in reference:
+                reference = reference["name"]
+        for record in records:
+            if reference in {record.get("id"), record.get("name")}:
+                return record
+        raise ValueError(  # noqa: TRY003
+            f"Unknown {relation_name} fixture reference: {reference!r}"
+        )
+
+    parts = []
+    for raw_part in raw_parts:
+        part = dict(raw_part)
+        part["material"] = _resolve_record(part.get("material"), materials, "material")
+        parts.append(part)
+
+    projects = []
+    for raw_project in raw_projects:
+        project = dict(raw_project)
+        project["parts"] = [
+            _resolve_record(reference, parts, "part")
+            for reference in project.get("parts", [])
+        ]
+        projects.append(project)
 
     class MaterialType(_GrapheneObjectType):
         """Materials used in manufacturing."""
@@ -103,6 +148,7 @@ def setup_toy_schema() -> None:
         """Filter input for material query evals."""
 
         name = graphene.String()
+        name__icontains = graphene.String()
         density__gt = graphene.Float()
 
     class PartFilter(_GrapheneInputObjectType):
@@ -116,6 +162,7 @@ def setup_toy_schema() -> None:
         """Filter input for project and nested part/material evals."""
 
         name = graphene.String()
+        name__icontains = graphene.String()
         parts__name = graphene.String()
         parts__material__name = graphene.String()
         parts__material__name__icontains = graphene.String()
@@ -183,9 +230,13 @@ def setup_toy_schema() -> None:
         return True
 
     def _page_payload(
-        records: list[dict[str, Any]], page_size: int | None
+        records: list[dict[str, Any]], page_size: int | None, page: int = 1
     ) -> dict[str, Any]:
-        items = records[:page_size] if page_size is not None else records
+        items = (
+            records[(page - 1) * page_size : page * page_size]
+            if page_size is not None
+            else records
+        )
         return {
             "items": items,
             "page_info": {"total_count": len(records)},
@@ -198,41 +249,44 @@ def setup_toy_schema() -> None:
             MaterialPageType,
             filter=graphene.Argument(MaterialFilter),
             page_size=graphene.Int(),
+            page=graphene.Int(default_value=1),
         )
         partmanager_list = graphene.Field(
             PartPageType,
             filter=graphene.Argument(PartFilter),
             page_size=graphene.Int(),
+            page=graphene.Int(default_value=1),
         )
         projectmanager_list = graphene.Field(
             ProjectPageType,
             filter=graphene.Argument(ProjectFilter),
             page_size=graphene.Int(),
+            page=graphene.Int(default_value=1),
         )
 
         def resolve_materialmanager_list(  # type: ignore[no-untyped-def]
-            self, info, filter=None, page_size=None
+            self, info, filter=None, page_size=None, page=1
         ):
             """Return material fixture rows matching the provided filters."""
             del self, info
             rows = [item for item in materials if _matches_filter(item, filter)]
-            return _page_payload(rows, page_size)
+            return _page_payload(rows, page_size, page)
 
         def resolve_partmanager_list(  # type: ignore[no-untyped-def]
-            self, info, filter=None, page_size=None
+            self, info, filter=None, page_size=None, page=1
         ):
             """Return part fixture rows matching the provided filters."""
             del self, info
             rows = [item for item in parts if _matches_filter(item, filter)]
-            return _page_payload(rows, page_size)
+            return _page_payload(rows, page_size, page)
 
         def resolve_projectmanager_list(  # type: ignore[no-untyped-def]
-            self, info, filter=None, page_size=None
+            self, info, filter=None, page_size=None, page=1
         ):
             """Return project fixture rows matching the provided filters."""
             del self, info
             rows = [item for item in projects if _matches_filter(item, filter)]
-            return _page_payload(rows, page_size)
+            return _page_payload(rows, page_size, page)
 
     GraphQL.graphql_type_registry = {
         "MaterialManager": MaterialType,
@@ -344,9 +398,13 @@ def setup_large_schema(*, manager_count: int = 150, chain_length: int = 8) -> No
         return all(record.get(str(key)) == value for key, value in filters.items())
 
     def _page_payload(
-        records: list[dict[str, Any]], page_size: int | None
+        records: list[dict[str, Any]], page_size: int | None, page: int = 1
     ) -> dict[str, Any]:
-        items = records[:page_size] if page_size is not None else records
+        items = (
+            records[(page - 1) * page_size : page * page_size]
+            if page_size is not None
+            else records
+        )
         return {"items": items, "page_info": {"total_count": len(records)}}
 
     query_attrs: dict[str, Any] = {}
@@ -356,17 +414,18 @@ def setup_large_schema(*, manager_count: int = 150, chain_length: int = 8) -> No
             page_types[name],
             filter=graphene.Argument(filter_types[name]),
             page_size=graphene.Int(),
+            page=graphene.Int(default_value=1),
         )
 
         def _make_resolver(manager_name: str) -> Any:
-            def _resolver(self, info, filter=None, page_size=None):  # type: ignore[no-untyped-def]
+            def _resolver(self, info, filter=None, page_size=None, page=1):  # type: ignore[no-untyped-def]
                 del self, info
                 rows = [
                     item
                     for item in records_by_manager[manager_name]
                     if _matches_filter(item, filter)
                 ]
-                return _page_payload(rows, page_size)
+                return _page_payload(rows, page_size, page)
 
             return _resolver
 
@@ -494,11 +553,16 @@ def _expand_planned_script(entries: list[Any]) -> list[dict[str, Any]]:
 
 
 def _planned_task_id(messages: list[object]) -> str | None:
-    """Read the task ID from a planned executor's reference-data message."""
-    if not messages:
-        return None
-    content = getattr(messages[-1], "content", "")
-    if not isinstance(content, str) or not content.startswith("REFERENCE_DATA="):
+    """Read the current user reference, which can precede native tool history."""
+    for message in reversed(messages):
+        content = getattr(message, "content", "")
+        if (
+            getattr(message, "role", None) == "user"
+            and isinstance(content, str)
+            and content.startswith("REFERENCE_DATA=")
+        ):
+            break
+    else:
         return None
     try:
         reference = json.loads(content.removeprefix("REFERENCE_DATA="))
@@ -523,10 +587,9 @@ def planned_role_overrides(
         )
         for role in (
             "planner",
-            "simple_executor",
-            "complex_executor",
+            "executor",
             "synthesizer",
-            "fallback_executor",
+            "fallback",
         )
     }
 
