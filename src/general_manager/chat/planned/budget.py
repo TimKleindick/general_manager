@@ -1,4 +1,4 @@
-"""One hard global and per-root round ledger for planned chat."""
+"""Global and per-root round accounting with optional admission limits."""
 
 from __future__ import annotations
 
@@ -37,10 +37,10 @@ def _key_error(message: str) -> NoReturn:
     raise KeyError(message)
 
 
-class _RemainingView(dict[str, int]):
+class _RemainingView(dict[str, int | None]):
     """Mapping view that also supports convenient ``view(root_id)`` access."""
 
-    def __call__(self, root_id: str) -> int:
+    def __call__(self, root_id: str) -> int | None:
         return self[root_id]
 
 
@@ -50,11 +50,19 @@ class RoundBudget:
     Global-only calls (planner and synthesizer) use :meth:`consume_global`.
     Executor calls use :meth:`consume_subtree`, which atomically charges both
     the global and owning-root ledgers.
+
+    Direct construction retains its historical limits. Normal planned turns
+    use ``enforce_limits=False`` to count rounds without an admission cap.
+    ``None`` means unbounded; callers may still assign explicit numeric limits.
     """
 
-    subtree_limit = 15
+    subtree_limit: int | None = 15
 
-    def __init__(self, root_ids: Collection[str]) -> None:
+    def __init__(
+        self, root_ids: Collection[str], *, enforce_limits: bool = True
+    ) -> None:
+        if not isinstance(enforce_limits, bool):
+            _type_error("enforce_limits must be a boolean.")
         if isinstance(root_ids, (str, bytes, bytearray)):
             _type_error("root_ids must be a collection of root IDs.")
         roots = tuple(root_ids)
@@ -65,7 +73,8 @@ class RoundBudget:
         if len(set(roots)) != len(roots):
             _value_error("root IDs must be unique.")
         self.root_ids = roots
-        self.global_limit = min(5 + 13 * len(roots), 80)
+        self.global_limit = min(5 + 13 * len(roots), 80) if enforce_limits else None
+        self.subtree_limit = type(self).subtree_limit if enforce_limits else None
         self._global_count = 0
         self._subtree_counts = {root_id: 0 for root_id in roots}
 
@@ -78,11 +87,15 @@ class RoundBudget:
         return self._global_count
 
     @property
-    def global_remaining(self) -> int:
-        return self.global_limit - self._global_count
+    def global_remaining(self) -> int | None:
+        return (
+            None
+            if self.global_limit is None
+            else self.global_limit - self._global_count
+        )
 
     @property
-    def remaining_global(self) -> int:
+    def remaining_global(self) -> int | None:
         return self.global_remaining
 
     @property
@@ -97,13 +110,15 @@ class RoundBudget:
     def subtree_remaining(self) -> _RemainingView:
         return _RemainingView(
             {
-                root_id: self.subtree_limit - count
+                root_id: None
+                if self.subtree_limit is None
+                else self.subtree_limit - count
                 for root_id, count in self._subtree_counts.items()
             }
         )
 
     @property
-    def remaining(self) -> dict[str, int]:
+    def remaining(self) -> dict[str, int | None]:
         return {"global": self.global_remaining, **self.subtree_remaining}
 
     def subtree_count(self, root_id: str) -> int:
@@ -117,18 +132,21 @@ class RoundBudget:
 
     def consume_global(self) -> None:
         """Charge one planner/synthesizer request to the global budget."""
-        if self.global_remaining <= 0:
+        remaining = self.global_remaining
+        if remaining is not None and remaining <= 0:
             _budget_error("global planned-chat round budget is exhausted.")
         self._global_count += 1
 
     def consume_subtree(self, root_id: str) -> None:
         """Charge one executor request globally and to its owning root."""
         self._ensure_root(root_id)
-        if self.global_remaining <= 0:
+        global_remaining = self.global_remaining
+        if global_remaining is not None and global_remaining <= 0:
             _budget_error(
                 "global planned-chat round budget is exhausted.", root_id=root_id
             )
-        if self.subtree_remaining[root_id] <= 0:
+        subtree_remaining = self.subtree_remaining[root_id]
+        if subtree_remaining is not None and subtree_remaining <= 0:
             _budget_error(
                 f"planned-chat subtree round budget for {root_id!r} is exhausted.",
                 root_id=root_id,

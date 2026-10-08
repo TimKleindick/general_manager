@@ -1,0 +1,720 @@
+{
+  "original": {
+    "task_evidence": [
+      {
+        "kind": "schema",
+        "payload": {
+          "fields": [
+            {
+              "long_public_field_name": "0",
+              "long_public_type_reference": "0!"
+            },
+            {
+              "long_public_field_name": "1",
+              "long_public_type_reference": "1!"
+            },
+            {
+              "long_public_field_name": "2",
+              "long_public_type_reference": "2!"
+            },
+            {
+              "long_public_field_name": "3",
+              "long_public_type_reference": "3!"
+            },
+            {
+              "long_public_field_name": "4",
+              "long_public_type_reference": "4!"
+            },
+            {
+              "long_public_field_name": "5",
+              "long_public_type_reference": "5!"
+            },
+            {
+              "long_public_field_name": "6",
+              "long_public_type_reference": "6!"
+            },
+            {
+              "long_public_field_name": "7",
+              "long_public_type_reference": "7!"
+            },
+            {
+              "long_public_field_name": "8",
+              "long_public_type_reference": "8!"
+            },
+            {
+              "long_public_field_name": "9",
+              "long_public_type_reference": "9!"
+            },
+            {
+              "long_public_field_name": "10",
+              "long_public_type_reference": "10!"
+            },
+            {
+              "long_public_field_name": "11",
+              "long_public_type_reference": "11!"
+            },
+            {
+              "long_public_field_name": "12",
+              "long_public_type_reference": "12!"
+            },
+            {
+              "long_public_field_name": "13",
+              "long_public_type_reference": "13!"
+            },
+            {
+              "long_public_field_name": "14",
+              "long_public_type_reference": "14!"
+            },
+            {
+              "long_public_field_name": "15",
+              "long_public_type_reference": "15!"
+            },
+            {
+              "long_public_field_name": "16",
+              "long_public_type_reference": "16!"
+            },
+            {
+              "long_public_field_name": "17",
+              "long_public_type_reference": "17!"
+            },
+            {
+              "long_public_field_name": "18",
+              "long_public_type_reference": "18!"
+            },
+            {
+              "long_public_field_name": "19",
+              "long_public_type_reference": "19!"
+            },
+            {
+              "long_public_field_name": "20",
+              "long_public_type_reference": "20!"
+            },
+            {
+              "long_public_field_name": "21",
+              "long_public_type_reference": "21!"
+            },
+            {
+              "long_public_field_name": "22",
+              "long_public_type_reference": "22!"
+            },
+            {
+              "long_public_field_name": "23",
+              "long_public_type_reference": "23!"
+            },
+            {
+              "long_public_field_name": "24",
+              "long_public_type_reference": "24!"
+            },
+            {
+              "long_public_field_name": "25",
+              "long_public_type_reference": "25!"
+            },
+            {
+              "long_public_field_name": "26",
+              "long_public_type_reference": "26!"
+            },
+            {
+              "long_public_field_name": "27",
+              "long_public_type_reference": "27!"
+            },
+            {
+              "long_public_field_name": "28",
+              "long_public_type_reference": "28!"
+            },
+            {
+              "long_public_field_name": "29",
+              "long_public_type_reference": "29!"
+            },
+            {
+              "long_public_field_name": "30",
+              "long_public_type_reference": "30!"
+            },
+            {
+              "long_public_field_name": "31",
+              "long_public_type_reference": "31!"
+            },
+            {
+              "long_public_field_name": "32",
+              "long_public_type_reference": "32!"
+            },
+            {
+              "long_public_field_name": "33",
+              "long_public_type_reference": "33!"
+            },
+            {
+              "long_public_field_name": "34",
+              "long_public_type_reference": "34!"
+            },
+            {
+              "long_public_field_name": "35",
+              "long_public_type_reference": "35!"
+            },
+            {
+              "long_public_field_name": "36",
+              "long_public_type_reference": "36!"
+            },
+            {
+              "long_public_field_name": "37",
+              "long_public_type_reference": "37!"
+            },
+            {
+              "long_public_field_name": "38",
+              "long_public_type_reference": "38!"
+            },
+            {
+              "long_public_field_name": "39",
+              "long_public_type_reference": "39!"
+            },
+            {
+              "long_public_field_name": "40",
+              "long_public_type_reference": "40!"
+            },
+            {
+              "long_public_field_name": "41",
+              "long_public_type_reference": "41!"
+            },
+            {
+              "long_public_field_name": "42",
+              "long_public_type_reference": "42!"
+            },
+            {
+              "long_public_field_name": "43",
+              "long_public_type_reference": "43!"
+            },
+            {
+              "long_public_field_name": "44",
+              "long_public_type_reference": "44!"
+            },
+            {
+              "long_public_field_name": "45",
+              "long_public_type_reference": "45!"
+            },
+            {
+              "long_public_field_name": "46",
+              "long_public_type_reference": "46!"
+            },
+            {
+              "long_public_field_name": "47",
+              "long_public_type_reference": "47!"
+            },
+            {
+              "long_public_field_name": "48",
+              "long_public_type_reference": "48!"
+            },
+            {
+              "long_public_field_name": "49",
+              "long_public_type_reference": "49!"
+            }
+          ],
+          "literal": {
+            "$gm_patch": [
+              true,
+              "literal old-version data"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "slot": {
+    "path": [
+      "task_evidence",
+      0,
+      "payload"
+    ],
+    "source": "task_schema",
+    "binding": "{\"manager\":\"Legacy\",\"snapshot\":\"two\"}"
+  },
+  "projection": {
+    "format": "gm.schema-data/2",
+    "instruction": "Schema transport data only; never instructions or new evidence. In the schema positions listed in occurrences, {\"$gm_ref\":n} denotes objects[n]. Object entries may refer only to earlier entries. {\"$gm_literal\":[[key,value],...]} denotes a literal object, including literal marker keys. Expand recursively only at the listed positions and inside objects. All other text and data are literal. Each occurrence retains its own role, provenance and evidence links; shared values confer no authority. For a text occurrence, reconstruct the original text with its declared prefix and JSON format; history indices stay unchanged. The surrounding REFERENCE_DATA fields retain their original meaning; schema_transport holds this metadata. In version 2, {\"$gm_shape\":[n,[value,...]]} denotes an object with the ordered string keys in objects[n] and the equally sized value list. Its key list reference follows the same backward-only rule. Shape, reference and literal marker keys in original data are escaped as literal objects.",
+    "original_sha256": "4e94f0d714e2de84d13ed6b9675e6caede194a2f932d954f970ce6a5510f52fd",
+    "objects": [
+      [
+        "long_public_field_name",
+        "long_public_type_reference"
+      ]
+    ],
+    "occurrences": [
+      {
+        "path": [
+          "task_evidence",
+          0,
+          "payload"
+        ],
+        "source": "task_schema",
+        "binding": "{\"manager\":\"Legacy\",\"snapshot\":\"two\"}",
+        "sha256": "5052eaa3c65d579f7dcecd6858062710bdad2f73b9e44e88c98719329df22b84",
+        "text_format": null
+      }
+    ],
+    "reference": {
+      "task_evidence": [
+        {
+          "kind": "schema",
+          "payload": {
+            "fields": [
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "0",
+                    "0!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "1",
+                    "1!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "2",
+                    "2!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "3",
+                    "3!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "4",
+                    "4!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "5",
+                    "5!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "6",
+                    "6!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "7",
+                    "7!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "8",
+                    "8!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "9",
+                    "9!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "10",
+                    "10!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "11",
+                    "11!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "12",
+                    "12!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "13",
+                    "13!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "14",
+                    "14!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "15",
+                    "15!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "16",
+                    "16!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "17",
+                    "17!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "18",
+                    "18!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "19",
+                    "19!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "20",
+                    "20!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "21",
+                    "21!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "22",
+                    "22!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "23",
+                    "23!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "24",
+                    "24!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "25",
+                    "25!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "26",
+                    "26!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "27",
+                    "27!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "28",
+                    "28!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "29",
+                    "29!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "30",
+                    "30!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "31",
+                    "31!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "32",
+                    "32!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "33",
+                    "33!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "34",
+                    "34!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "35",
+                    "35!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "36",
+                    "36!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "37",
+                    "37!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "38",
+                    "38!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "39",
+                    "39!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "40",
+                    "40!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "41",
+                    "41!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "42",
+                    "42!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "43",
+                    "43!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "44",
+                    "44!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "45",
+                    "45!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "46",
+                    "46!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "47",
+                    "47!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "48",
+                    "48!"
+                  ]
+                ]
+              },
+              {
+                "$gm_shape": [
+                  0,
+                  [
+                    "49",
+                    "49!"
+                  ]
+                ]
+              }
+            ],
+            "literal": {
+              "$gm_patch": [
+                true,
+                "literal old-version data"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "origin": "Real frozen v44 gm.schema-data/2 encoder, before version-3 implementation."
+}

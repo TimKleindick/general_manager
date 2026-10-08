@@ -21,13 +21,16 @@ def judge_answer_quality(
     answer_contains: list[str],
     answer_excludes: list[str],
     answer_text: str,
+    *,
+    require_all: bool = False,
 ) -> AnswerQualityScore:
     """Score the final answer on expected keyword/fact presence.
 
     ``answer_contains`` items are checked case-insensitively against the full
     answer text.  The score is the fraction of expected items found.  The case
     passes when the score is >= 80% **and** none of the ``answer_excludes``
-    items appear.
+    items appear. Strict turn contracts set ``require_all`` so every expected
+    fact must be present.
     """
     answer_lower = answer_text.lower()
 
@@ -42,7 +45,8 @@ def judge_answer_quality(
     unexpected = [item for item in answer_excludes if item.lower() in answer_lower]
 
     score = found / len(answer_contains) if answer_contains else 1.0
-    passed = score >= AnswerQualityScore.PASS_THRESHOLD and len(unexpected) == 0
+    threshold = 1.0 if require_all else AnswerQualityScore.PASS_THRESHOLD
+    passed = score >= threshold and len(unexpected) == 0
 
     return AnswerQualityScore(
         passed=passed,
