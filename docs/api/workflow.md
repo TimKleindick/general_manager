@@ -256,6 +256,12 @@ state is in memory only and is not shared across processes.
 
 ::: general_manager.workflow.backends.celery.CeleryWorkflowEngine
 
+`start(...)` captures a shallow `dict(...)` copy of input before persistence.
+Async dispatch uses that captured input after the outer transaction commits;
+later top-level changes to the caller's mapping do not affect the task payload.
+Rolling back the transaction or the savepoint containing `start(...)` discards
+the task publication. Nested objects are not deep-copied or JSON-normalized.
+
 Correlation reuse checks for an existing active or completed execution before
 inserting. Protection against concurrent inserts also requires database support
 for the conditional unique constraint. MariaDB does not enforce that constraint,

@@ -137,7 +137,8 @@ class CeleryWorkflowEngine:
 
         Parameters:
             workflow: Workflow definition to execute.
-            input_data: Optional JSON-like payload copied with `dict(...)`.
+            input_data: Optional JSON-like payload shallow-copied with `dict(...)`
+                before persistence and reused for async handler dispatch.
             correlation_id: Optional durable dedupe key scoped to
                 `workflow.workflow_id`.
             metadata: Optional metadata copied with `dict(...)`.
@@ -224,13 +225,14 @@ class CeleryWorkflowEngine:
                     except Exception as exc:  # noqa: BLE001
                         state = "failed"
                         error = f"Failed to resolve workflow handler path '{handler_path}': {exc}"
+            execution_input = dict(input_data or {})
             try:
                 with transaction.atomic():
                     record = WorkflowExecutionRecord.objects.create(
                         execution_id=execution_id,
                         workflow_id=workflow.workflow_id,
                         state=state,
-                        input_data=dict(input_data or {}),
+                        input_data=execution_input,
                         output_data=output_data,
                         correlation_id=correlation_id,
                         started_at=started_at,
@@ -263,7 +265,7 @@ class CeleryWorkflowEngine:
                         lambda: execute_workflow_handler.delay(
                             execution_id,
                             dispatch_handler_path,
-                            dict(input_data or {}),
+                            dict(execution_input),
                         )
                     )
                 elif not async_mode:
