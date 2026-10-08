@@ -1,0 +1,2692 @@
+[
+  {
+    "id": "E001",
+    "managers": 5,
+    "language": "DE",
+    "turns": [
+      "Finde bitte den Kunden, den wir intern XYZ nennen."
+    ],
+    "contract": "customer",
+    "focus": "Alias → eindeutiger Kunde",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Return C01 (XYZ Industrie); XYZ is its unique alias. No supplier/order substitute.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E002",
+    "managers": 5,
+    "language": "FR",
+    "turns": [
+      "Quels projets appartiennent au client XYZ ?"
+    ],
+    "contract": "projects",
+    "focus": "Kunde → Projekte",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora and P02 Borealis for C01; distinct customer-owned project rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E003",
+    "managers": 5,
+    "language": "DE",
+    "turns": [
+      "Welcher Werkstoff ist mit dem roten Metall gemeint?"
+    ],
+    "contract": "material",
+    "focus": "ReadOnly-Stammdaten und Alias",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "M01 Copper; aliases Kupfer, cuivre, red metal, rotes Metall, métal rouge, CU-ETP. Brass/Messing/laiton is M03, never Copper.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E004",
+    "managers": 5,
+    "language": "EN",
+    "turns": [
+      "How many pieces did Aurora ship in calendar year 2025?"
+    ],
+    "contract": "shipments",
+    "focus": "Projekt → Ist-Lieferungen, Zeitraum und Einheit",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P01 actual gross shipments during [2025-01-01,2026-01-01): 120 pieces; do not use plans, revenue, returns, or 2026 rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E005",
+    "managers": 5,
+    "language": "FR",
+    "turns": [
+      "Quel est le chiffre d’affaires prévu d’Aurora pour 2027, en euros hors taxes ?"
+    ],
+    "contract": "revenue",
+    "focus": "Calculation → Database; Plan explizit",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P01 2027 planned net revenue EUR 12,000 from ProjectCommercial Calculation input project=P01/year=2027; not cash collected or invoices.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E006",
+    "managers": 10,
+    "language": "DE",
+    "turns": [
+      "Welches Projekt erzielt nächstes Jahr den höchsten geplanten Nettoumsatz in Euro?"
+    ],
+    "contract": "rank_revenue",
+    "focus": "Datum, Calculation und Ranking",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P02 EUR 30,000; then P03 24,000; P06 18,000; P01 12,000; P04 10,000; P05 8,000; P07 8,000; P08 5,000. Highest=P02.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E007",
+    "managers": 10,
+    "language": "EN",
+    "turns": [
+      "What is our most important project?",
+      "Rank by planned net revenue in euros in 2027."
+    ],
+    "contract": "clarify_importance",
+    "focus": "Rückfrage und Übernahme des Kriteriums",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Turn 1 ask criterion, with no unsupported winner; turn 2 uses revenue criterion and returns P02 EUR 30,000. No repeated clarification once specified.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E008",
+    "managers": 10,
+    "language": "DE",
+    "turns": [
+      "Wie entwickelt sich Kunde XYZ in den nächsten Jahren?",
+      "Ich meine geplante Liefermengen in Stück für 2027 bis 2031."
+    ],
+    "contract": "clarify_development",
+    "focus": "Rückfrage und mehrjährige ReadOnly-Pläne",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "TREND",
+    "expected": "Turn 1 clarify metric and horizon (shipments/revenue/project count, years); turn 2 output C01 plans 2027..2031=[150,160,170,180,190] pieces. Do not answer revenue.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E009",
+    "managers": 10,
+    "language": "FR",
+    "turns": [
+      "Quels sont les cinq projets ayant livré le plus de pièces en 2025 et utilisant le métal rouge ?"
+    ],
+    "contract": "top_material",
+    "focus": "Materialalias, Verknüpfungen, Mengenranking",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Filter projects using M01 before ranking 2025 actual shipped pieces: P03 200, P04 150, P01 120, P05 80, P06 60; exclude tied P07 60 by ascending project code. Do not include steel-only P02 500.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E010",
+    "managers": 10,
+    "language": "EN",
+    "turns": [
+      "Show XYZ’s shipment plan for 2027–2031. Keep existing plans separate from any new forecast."
+    ],
+    "contract": "plan",
+    "focus": "ReadOnly → Project → Customer; kein Plan als Prognose",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "TREND",
+    "expected": "C01 authoritative ReadOnly Plan rows for 2027..2031 sum to [150,160,170,180,190] pieces. Label as existing plan, never new forecast.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E011",
+    "managers": 5,
+    "language": "DE",
+    "turns": [
+      "Finde den Kunden XYZ."
+    ],
+    "contract": "customer",
+    "focus": "Alias und konkurrierende Domänen",
+    "fixture_variant": "base",
+    "core_id": "K01",
+    "snapshot": "RANK",
+    "expected": "Return C01 (XYZ Industrie); XYZ is its unique alias. No supplier/order substitute.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E012",
+    "managers": 5,
+    "language": "FR",
+    "turns": [
+      "Quels projets appartiennent au client XYZ ?"
+    ],
+    "contract": "projects",
+    "focus": "Beziehungswahl",
+    "fixture_variant": "base",
+    "core_id": "K02",
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora and P02 Borealis for C01; distinct customer-owned project rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E013",
+    "managers": 5,
+    "language": "EN",
+    "turns": [
+      "Which material is called the red metal in our terminology?"
+    ],
+    "contract": "material",
+    "focus": "ReadOnly und natürliche Begriffe",
+    "fixture_variant": "base",
+    "core_id": "K03",
+    "snapshot": "RANK",
+    "expected": "M01 Copper; aliases Kupfer, cuivre, red metal, rotes Metall, métal rouge, CU-ETP. Brass/Messing/laiton is M03, never Copper.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E014",
+    "managers": 5,
+    "language": "DE",
+    "turns": [
+      "Wie viele Stück hat Aurora im Kalenderjahr 2025 ausgeliefert?"
+    ],
+    "contract": "shipments",
+    "focus": "Ist-Werte und Einheit",
+    "fixture_variant": "base",
+    "core_id": "K04",
+    "snapshot": "RANK",
+    "expected": "P01 actual gross shipments during [2025-01-01,2026-01-01): 120 pieces; do not use plans, revenue, returns, or 2026 rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E015",
+    "managers": 5,
+    "language": "FR",
+    "turns": [
+      "Quel est le chiffre d’affaires prévu d’Aurora en 2027, en euros hors taxes ?"
+    ],
+    "contract": "revenue",
+    "focus": "Calculation-Auswahl",
+    "fixture_variant": "base",
+    "core_id": "K05",
+    "snapshot": "RANK",
+    "expected": "P01 2027 planned net revenue EUR 12,000 from ProjectCommercial Calculation input project=P01/year=2027; not cash collected or invoices.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E016",
+    "managers": 5,
+    "language": "EN",
+    "turns": [
+      "Which project has the highest planned net revenue in EUR in 2027?"
+    ],
+    "contract": "rank_revenue",
+    "focus": "Calculation und Ranking",
+    "fixture_variant": "base",
+    "core_id": "K06",
+    "snapshot": "RANK",
+    "expected": "P02 EUR 30,000; then P03 24,000; P06 18,000; P01 12,000; P04 10,000; P05 8,000; P07 8,000; P08 5,000. Highest=P02.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E017",
+    "managers": 5,
+    "language": "DE",
+    "turns": [
+      "Welche fünf Projekte haben 2025 die meisten Stück ausgeliefert und verwenden das rote Metall?"
+    ],
+    "contract": "top_material",
+    "focus": "Material → Projekt → Lieferungen",
+    "fixture_variant": "base",
+    "core_id": "K07",
+    "snapshot": "RANK",
+    "expected": "Filter projects using M01 before ranking 2025 actual shipped pieces: P03 200, P04 150, P01 120, P05 80, P06 60; exclude tied P07 60 by ascending project code. Do not include steel-only P02 500.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E018",
+    "managers": 5,
+    "language": "FR",
+    "turns": [
+      "Quel est notre projet le plus important ?",
+      "Classez-les selon le chiffre d’affaires net prévu en euros pour 2027."
+    ],
+    "contract": "clarify_importance",
+    "focus": "Mehrdeutigkeit und Carryover",
+    "fixture_variant": "base",
+    "core_id": "K08",
+    "snapshot": "RANK",
+    "expected": "Turn 1 ask criterion, with no unsupported winner; turn 2 uses revenue criterion and returns P02 EUR 30,000. No repeated clarification once specified.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E019",
+    "managers": 5,
+    "language": "EN",
+    "turns": [
+      "What is the outlook for customer XYZ?",
+      "Use actual shipped pieces in 2023–2025, not revenue."
+    ],
+    "contract": "clarify_actuals",
+    "focus": "Metrik klären und übernehmen",
+    "fixture_variant": "base",
+    "core_id": "K09",
+    "snapshot": "TREND",
+    "expected": "Turn 1 request metric/horizon; turn 2 C01 2023..2025 actuals=[100,120,140] pieces, using specified metric and years.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E020",
+    "managers": 5,
+    "language": "DE",
+    "turns": [
+      "Welche Projekte des Kunden Nova verwenden Kupfer?"
+    ],
+    "contract": "empty",
+    "focus": "Korrekte leere Schnittmenge",
+    "fixture_variant": "base",
+    "core_id": "K10",
+    "snapshot": "RANK",
+    "expected": "Empty set: C03 Nova has only P08 (Steel). Copper projects exist but none owned by C03.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E021",
+    "managers": 5,
+    "language": "FR",
+    "turns": [
+      "Aurora utilise-t-il du cuivre ? Donnez les livraisons réelles de 2025 en pièces si oui."
+    ],
+    "contract": "mixed",
+    "focus": "Database → ReadOnly und Database",
+    "fixture_variant": "base",
+    "core_id": "K11",
+    "snapshot": "RANK",
+    "expected": "Aurora uses Copper M01; actual shipped quantity 2025=120 pieces. Evidence from Project→Material and Shipment→Project.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E022",
+    "managers": 5,
+    "language": "EN",
+    "turns": [
+      "List XYZ’s projects.",
+      "Of those, which uses steel?"
+    ],
+    "contract": "follow_filter",
+    "focus": "Kontext und Einschränkung im Folgeturn",
+    "fixture_variant": "base",
+    "core_id": "K12",
+    "snapshot": "RANK",
+    "expected": "Turn 1 P01,P02; turn 2 P02 only (Steel); exclude non-XYZ steel projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E023",
+    "managers": 10,
+    "language": "DE",
+    "turns": [
+      "Finde den Kunden XYZ."
+    ],
+    "contract": "customer",
+    "focus": "Alias und konkurrierende Domänen",
+    "fixture_variant": "base",
+    "core_id": "K01",
+    "snapshot": "RANK",
+    "expected": "Return C01 (XYZ Industrie); XYZ is its unique alias. No supplier/order substitute.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E024",
+    "managers": 10,
+    "language": "FR",
+    "turns": [
+      "Quels projets appartiennent au client XYZ ?"
+    ],
+    "contract": "projects",
+    "focus": "Beziehungswahl",
+    "fixture_variant": "base",
+    "core_id": "K02",
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora and P02 Borealis for C01; distinct customer-owned project rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E025",
+    "managers": 10,
+    "language": "EN",
+    "turns": [
+      "Which material is called the red metal in our terminology?"
+    ],
+    "contract": "material",
+    "focus": "ReadOnly und natürliche Begriffe",
+    "fixture_variant": "base",
+    "core_id": "K03",
+    "snapshot": "RANK",
+    "expected": "M01 Copper; aliases Kupfer, cuivre, red metal, rotes Metall, métal rouge, CU-ETP. Brass/Messing/laiton is M03, never Copper.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E026",
+    "managers": 10,
+    "language": "DE",
+    "turns": [
+      "Wie viele Stück hat Aurora im Kalenderjahr 2025 ausgeliefert?"
+    ],
+    "contract": "shipments",
+    "focus": "Ist-Werte und Einheit",
+    "fixture_variant": "base",
+    "core_id": "K04",
+    "snapshot": "RANK",
+    "expected": "P01 actual gross shipments during [2025-01-01,2026-01-01): 120 pieces; do not use plans, revenue, returns, or 2026 rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E027",
+    "managers": 10,
+    "language": "FR",
+    "turns": [
+      "Quel est le chiffre d’affaires prévu d’Aurora en 2027, en euros hors taxes ?"
+    ],
+    "contract": "revenue",
+    "focus": "Calculation-Auswahl",
+    "fixture_variant": "base",
+    "core_id": "K05",
+    "snapshot": "RANK",
+    "expected": "P01 2027 planned net revenue EUR 12,000 from ProjectCommercial Calculation input project=P01/year=2027; not cash collected or invoices.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E028",
+    "managers": 10,
+    "language": "EN",
+    "turns": [
+      "Which project has the highest planned net revenue in EUR in 2027?"
+    ],
+    "contract": "rank_revenue",
+    "focus": "Calculation und Ranking",
+    "fixture_variant": "base",
+    "core_id": "K06",
+    "snapshot": "RANK",
+    "expected": "P02 EUR 30,000; then P03 24,000; P06 18,000; P01 12,000; P04 10,000; P05 8,000; P07 8,000; P08 5,000. Highest=P02.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E029",
+    "managers": 10,
+    "language": "DE",
+    "turns": [
+      "Welche fünf Projekte haben 2025 die meisten Stück ausgeliefert und verwenden das rote Metall?"
+    ],
+    "contract": "top_material",
+    "focus": "Material → Projekt → Lieferungen",
+    "fixture_variant": "base",
+    "core_id": "K07",
+    "snapshot": "RANK",
+    "expected": "Filter projects using M01 before ranking 2025 actual shipped pieces: P03 200, P04 150, P01 120, P05 80, P06 60; exclude tied P07 60 by ascending project code. Do not include steel-only P02 500.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E030",
+    "managers": 10,
+    "language": "FR",
+    "turns": [
+      "Quel est notre projet le plus important ?",
+      "Classez-les selon le chiffre d’affaires net prévu en euros pour 2027."
+    ],
+    "contract": "clarify_importance",
+    "focus": "Mehrdeutigkeit und Carryover",
+    "fixture_variant": "base",
+    "core_id": "K08",
+    "snapshot": "RANK",
+    "expected": "Turn 1 ask criterion, with no unsupported winner; turn 2 uses revenue criterion and returns P02 EUR 30,000. No repeated clarification once specified.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E031",
+    "managers": 10,
+    "language": "EN",
+    "turns": [
+      "What is the outlook for customer XYZ?",
+      "Use actual shipped pieces in 2023–2025, not revenue."
+    ],
+    "contract": "clarify_actuals",
+    "focus": "Metrik klären und übernehmen",
+    "fixture_variant": "base",
+    "core_id": "K09",
+    "snapshot": "TREND",
+    "expected": "Turn 1 request metric/horizon; turn 2 C01 2023..2025 actuals=[100,120,140] pieces, using specified metric and years.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E032",
+    "managers": 10,
+    "language": "DE",
+    "turns": [
+      "Welche Projekte des Kunden Nova verwenden Kupfer?"
+    ],
+    "contract": "empty",
+    "focus": "Korrekte leere Schnittmenge",
+    "fixture_variant": "base",
+    "core_id": "K10",
+    "snapshot": "RANK",
+    "expected": "Empty set: C03 Nova has only P08 (Steel). Copper projects exist but none owned by C03.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E033",
+    "managers": 10,
+    "language": "FR",
+    "turns": [
+      "Aurora utilise-t-il du cuivre ? Donnez les livraisons réelles de 2025 en pièces si oui."
+    ],
+    "contract": "mixed",
+    "focus": "Database → ReadOnly und Database",
+    "fixture_variant": "base",
+    "core_id": "K11",
+    "snapshot": "RANK",
+    "expected": "Aurora uses Copper M01; actual shipped quantity 2025=120 pieces. Evidence from Project→Material and Shipment→Project.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E034",
+    "managers": 10,
+    "language": "EN",
+    "turns": [
+      "List XYZ’s projects.",
+      "Of those, which uses steel?"
+    ],
+    "contract": "follow_filter",
+    "focus": "Kontext und Einschränkung im Folgeturn",
+    "fixture_variant": "base",
+    "core_id": "K12",
+    "snapshot": "RANK",
+    "expected": "Turn 1 P01,P02; turn 2 P02 only (Steel); exclude non-XYZ steel projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E035",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Finde den Kunden XYZ."
+    ],
+    "contract": "customer",
+    "focus": "Alias und konkurrierende Domänen",
+    "fixture_variant": "base",
+    "core_id": "K01",
+    "snapshot": "RANK",
+    "expected": "Return C01 (XYZ Industrie); XYZ is its unique alias. No supplier/order substitute.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E036",
+    "managers": 50,
+    "language": "FR",
+    "turns": [
+      "Quels projets appartiennent au client XYZ ?"
+    ],
+    "contract": "projects",
+    "focus": "Beziehungswahl",
+    "fixture_variant": "base",
+    "core_id": "K02",
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora and P02 Borealis for C01; distinct customer-owned project rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E037",
+    "managers": 50,
+    "language": "EN",
+    "turns": [
+      "Which material is called the red metal in our terminology?"
+    ],
+    "contract": "material",
+    "focus": "ReadOnly und natürliche Begriffe",
+    "fixture_variant": "base",
+    "core_id": "K03",
+    "snapshot": "RANK",
+    "expected": "M01 Copper; aliases Kupfer, cuivre, red metal, rotes Metall, métal rouge, CU-ETP. Brass/Messing/laiton is M03, never Copper.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E038",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Wie viele Stück hat Aurora im Kalenderjahr 2025 ausgeliefert?"
+    ],
+    "contract": "shipments",
+    "focus": "Ist-Werte und Einheit",
+    "fixture_variant": "base",
+    "core_id": "K04",
+    "snapshot": "RANK",
+    "expected": "P01 actual gross shipments during [2025-01-01,2026-01-01): 120 pieces; do not use plans, revenue, returns, or 2026 rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E039",
+    "managers": 50,
+    "language": "FR",
+    "turns": [
+      "Quel est le chiffre d’affaires prévu d’Aurora en 2027, en euros hors taxes ?"
+    ],
+    "contract": "revenue",
+    "focus": "Calculation-Auswahl",
+    "fixture_variant": "base",
+    "core_id": "K05",
+    "snapshot": "RANK",
+    "expected": "P01 2027 planned net revenue EUR 12,000 from ProjectCommercial Calculation input project=P01/year=2027; not cash collected or invoices.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E040",
+    "managers": 50,
+    "language": "EN",
+    "turns": [
+      "Which project has the highest planned net revenue in EUR in 2027?"
+    ],
+    "contract": "rank_revenue",
+    "focus": "Calculation und Ranking",
+    "fixture_variant": "base",
+    "core_id": "K06",
+    "snapshot": "RANK",
+    "expected": "P02 EUR 30,000; then P03 24,000; P06 18,000; P01 12,000; P04 10,000; P05 8,000; P07 8,000; P08 5,000. Highest=P02.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E041",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Welche fünf Projekte haben 2025 die meisten Stück ausgeliefert und verwenden das rote Metall?"
+    ],
+    "contract": "top_material",
+    "focus": "Material → Projekt → Lieferungen",
+    "fixture_variant": "base",
+    "core_id": "K07",
+    "snapshot": "RANK",
+    "expected": "Filter projects using M01 before ranking 2025 actual shipped pieces: P03 200, P04 150, P01 120, P05 80, P06 60; exclude tied P07 60 by ascending project code. Do not include steel-only P02 500.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E042",
+    "managers": 50,
+    "language": "FR",
+    "turns": [
+      "Quel est notre projet le plus important ?",
+      "Classez-les selon le chiffre d’affaires net prévu en euros pour 2027."
+    ],
+    "contract": "clarify_importance",
+    "focus": "Mehrdeutigkeit und Carryover",
+    "fixture_variant": "base",
+    "core_id": "K08",
+    "snapshot": "RANK",
+    "expected": "Turn 1 ask criterion, with no unsupported winner; turn 2 uses revenue criterion and returns P02 EUR 30,000. No repeated clarification once specified.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E043",
+    "managers": 50,
+    "language": "EN",
+    "turns": [
+      "What is the outlook for customer XYZ?",
+      "Use actual shipped pieces in 2023–2025, not revenue."
+    ],
+    "contract": "clarify_actuals",
+    "focus": "Metrik klären und übernehmen",
+    "fixture_variant": "base",
+    "core_id": "K09",
+    "snapshot": "TREND",
+    "expected": "Turn 1 request metric/horizon; turn 2 C01 2023..2025 actuals=[100,120,140] pieces, using specified metric and years.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E044",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Welche Projekte des Kunden Nova verwenden Kupfer?"
+    ],
+    "contract": "empty",
+    "focus": "Korrekte leere Schnittmenge",
+    "fixture_variant": "base",
+    "core_id": "K10",
+    "snapshot": "RANK",
+    "expected": "Empty set: C03 Nova has only P08 (Steel). Copper projects exist but none owned by C03.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E045",
+    "managers": 50,
+    "language": "FR",
+    "turns": [
+      "Aurora utilise-t-il du cuivre ? Donnez les livraisons réelles de 2025 en pièces si oui."
+    ],
+    "contract": "mixed",
+    "focus": "Database → ReadOnly und Database",
+    "fixture_variant": "base",
+    "core_id": "K11",
+    "snapshot": "RANK",
+    "expected": "Aurora uses Copper M01; actual shipped quantity 2025=120 pieces. Evidence from Project→Material and Shipment→Project.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E046",
+    "managers": 50,
+    "language": "EN",
+    "turns": [
+      "List XYZ’s projects.",
+      "Of those, which uses steel?"
+    ],
+    "contract": "follow_filter",
+    "focus": "Kontext und Einschränkung im Folgeturn",
+    "fixture_variant": "base",
+    "core_id": "K12",
+    "snapshot": "RANK",
+    "expected": "Turn 1 P01,P02; turn 2 P02 only (Steel); exclude non-XYZ steel projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E047",
+    "managers": 100,
+    "language": "DE",
+    "turns": [
+      "Finde den Kunden XYZ."
+    ],
+    "contract": "customer",
+    "focus": "Alias und konkurrierende Domänen",
+    "fixture_variant": "base",
+    "core_id": "K01",
+    "snapshot": "RANK",
+    "expected": "Return C01 (XYZ Industrie); XYZ is its unique alias. No supplier/order substitute.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E048",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Quels projets appartiennent au client XYZ ?"
+    ],
+    "contract": "projects",
+    "focus": "Beziehungswahl",
+    "fixture_variant": "base",
+    "core_id": "K02",
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora and P02 Borealis for C01; distinct customer-owned project rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E049",
+    "managers": 100,
+    "language": "EN",
+    "turns": [
+      "Which material is called the red metal in our terminology?"
+    ],
+    "contract": "material",
+    "focus": "ReadOnly und natürliche Begriffe",
+    "fixture_variant": "base",
+    "core_id": "K03",
+    "snapshot": "RANK",
+    "expected": "M01 Copper; aliases Kupfer, cuivre, red metal, rotes Metall, métal rouge, CU-ETP. Brass/Messing/laiton is M03, never Copper.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E050",
+    "managers": 100,
+    "language": "DE",
+    "turns": [
+      "Wie viele Stück hat Aurora im Kalenderjahr 2025 ausgeliefert?"
+    ],
+    "contract": "shipments",
+    "focus": "Ist-Werte und Einheit",
+    "fixture_variant": "base",
+    "core_id": "K04",
+    "snapshot": "RANK",
+    "expected": "P01 actual gross shipments during [2025-01-01,2026-01-01): 120 pieces; do not use plans, revenue, returns, or 2026 rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E051",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Quel est le chiffre d’affaires prévu d’Aurora en 2027, en euros hors taxes ?"
+    ],
+    "contract": "revenue",
+    "focus": "Calculation-Auswahl",
+    "fixture_variant": "base",
+    "core_id": "K05",
+    "snapshot": "RANK",
+    "expected": "P01 2027 planned net revenue EUR 12,000 from ProjectCommercial Calculation input project=P01/year=2027; not cash collected or invoices.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E052",
+    "managers": 100,
+    "language": "EN",
+    "turns": [
+      "Which project has the highest planned net revenue in EUR in 2027?"
+    ],
+    "contract": "rank_revenue",
+    "focus": "Calculation und Ranking",
+    "fixture_variant": "base",
+    "core_id": "K06",
+    "snapshot": "RANK",
+    "expected": "P02 EUR 30,000; then P03 24,000; P06 18,000; P01 12,000; P04 10,000; P05 8,000; P07 8,000; P08 5,000. Highest=P02.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E053",
+    "managers": 100,
+    "language": "DE",
+    "turns": [
+      "Welche fünf Projekte haben 2025 die meisten Stück ausgeliefert und verwenden das rote Metall?"
+    ],
+    "contract": "top_material",
+    "focus": "Material → Projekt → Lieferungen",
+    "fixture_variant": "base",
+    "core_id": "K07",
+    "snapshot": "RANK",
+    "expected": "Filter projects using M01 before ranking 2025 actual shipped pieces: P03 200, P04 150, P01 120, P05 80, P06 60; exclude tied P07 60 by ascending project code. Do not include steel-only P02 500.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E054",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Quel est notre projet le plus important ?",
+      "Classez-les selon le chiffre d’affaires net prévu en euros pour 2027."
+    ],
+    "contract": "clarify_importance",
+    "focus": "Mehrdeutigkeit und Carryover",
+    "fixture_variant": "base",
+    "core_id": "K08",
+    "snapshot": "RANK",
+    "expected": "Turn 1 ask criterion, with no unsupported winner; turn 2 uses revenue criterion and returns P02 EUR 30,000. No repeated clarification once specified.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E055",
+    "managers": 100,
+    "language": "EN",
+    "turns": [
+      "What is the outlook for customer XYZ?",
+      "Use actual shipped pieces in 2023–2025, not revenue."
+    ],
+    "contract": "clarify_actuals",
+    "focus": "Metrik klären und übernehmen",
+    "fixture_variant": "base",
+    "core_id": "K09",
+    "snapshot": "TREND",
+    "expected": "Turn 1 request metric/horizon; turn 2 C01 2023..2025 actuals=[100,120,140] pieces, using specified metric and years.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E056",
+    "managers": 100,
+    "language": "DE",
+    "turns": [
+      "Welche Projekte des Kunden Nova verwenden Kupfer?"
+    ],
+    "contract": "empty",
+    "focus": "Korrekte leere Schnittmenge",
+    "fixture_variant": "base",
+    "core_id": "K10",
+    "snapshot": "RANK",
+    "expected": "Empty set: C03 Nova has only P08 (Steel). Copper projects exist but none owned by C03.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E057",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Aurora utilise-t-il du cuivre ? Donnez les livraisons réelles de 2025 en pièces si oui."
+    ],
+    "contract": "mixed",
+    "focus": "Database → ReadOnly und Database",
+    "fixture_variant": "base",
+    "core_id": "K11",
+    "snapshot": "RANK",
+    "expected": "Aurora uses Copper M01; actual shipped quantity 2025=120 pieces. Evidence from Project→Material and Shipment→Project.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E058",
+    "managers": 100,
+    "language": "EN",
+    "turns": [
+      "List XYZ’s projects.",
+      "Of those, which uses steel?"
+    ],
+    "contract": "follow_filter",
+    "focus": "Kontext und Einschränkung im Folgeturn",
+    "fixture_variant": "base",
+    "core_id": "K12",
+    "snapshot": "RANK",
+    "expected": "Turn 1 P01,P02; turn 2 P02 only (Steel); exclude non-XYZ steel projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E059",
+    "managers": 250,
+    "language": "DE",
+    "turns": [
+      "Finde den Kunden XYZ."
+    ],
+    "contract": "customer",
+    "focus": "Alias und konkurrierende Domänen",
+    "fixture_variant": "base",
+    "core_id": "K01",
+    "snapshot": "RANK",
+    "expected": "Return C01 (XYZ Industrie); XYZ is its unique alias. No supplier/order substitute.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E060",
+    "managers": 250,
+    "language": "FR",
+    "turns": [
+      "Quels projets appartiennent au client XYZ ?"
+    ],
+    "contract": "projects",
+    "focus": "Beziehungswahl",
+    "fixture_variant": "base",
+    "core_id": "K02",
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora and P02 Borealis for C01; distinct customer-owned project rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E061",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "Which material is called the red metal in our terminology?"
+    ],
+    "contract": "material",
+    "focus": "ReadOnly und natürliche Begriffe",
+    "fixture_variant": "base",
+    "core_id": "K03",
+    "snapshot": "RANK",
+    "expected": "M01 Copper; aliases Kupfer, cuivre, red metal, rotes Metall, métal rouge, CU-ETP. Brass/Messing/laiton is M03, never Copper.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E062",
+    "managers": 250,
+    "language": "DE",
+    "turns": [
+      "Wie viele Stück hat Aurora im Kalenderjahr 2025 ausgeliefert?"
+    ],
+    "contract": "shipments",
+    "focus": "Ist-Werte und Einheit",
+    "fixture_variant": "base",
+    "core_id": "K04",
+    "snapshot": "RANK",
+    "expected": "P01 actual gross shipments during [2025-01-01,2026-01-01): 120 pieces; do not use plans, revenue, returns, or 2026 rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E063",
+    "managers": 250,
+    "language": "FR",
+    "turns": [
+      "Quel est le chiffre d’affaires prévu d’Aurora en 2027, en euros hors taxes ?"
+    ],
+    "contract": "revenue",
+    "focus": "Calculation-Auswahl",
+    "fixture_variant": "base",
+    "core_id": "K05",
+    "snapshot": "RANK",
+    "expected": "P01 2027 planned net revenue EUR 12,000 from ProjectCommercial Calculation input project=P01/year=2027; not cash collected or invoices.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E064",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "Which project has the highest planned net revenue in EUR in 2027?"
+    ],
+    "contract": "rank_revenue",
+    "focus": "Calculation und Ranking",
+    "fixture_variant": "base",
+    "core_id": "K06",
+    "snapshot": "RANK",
+    "expected": "P02 EUR 30,000; then P03 24,000; P06 18,000; P01 12,000; P04 10,000; P05 8,000; P07 8,000; P08 5,000. Highest=P02.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E065",
+    "managers": 250,
+    "language": "DE",
+    "turns": [
+      "Welche fünf Projekte haben 2025 die meisten Stück ausgeliefert und verwenden das rote Metall?"
+    ],
+    "contract": "top_material",
+    "focus": "Material → Projekt → Lieferungen",
+    "fixture_variant": "base",
+    "core_id": "K07",
+    "snapshot": "RANK",
+    "expected": "Filter projects using M01 before ranking 2025 actual shipped pieces: P03 200, P04 150, P01 120, P05 80, P06 60; exclude tied P07 60 by ascending project code. Do not include steel-only P02 500.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E066",
+    "managers": 250,
+    "language": "FR",
+    "turns": [
+      "Quel est notre projet le plus important ?",
+      "Classez-les selon le chiffre d’affaires net prévu en euros pour 2027."
+    ],
+    "contract": "clarify_importance",
+    "focus": "Mehrdeutigkeit und Carryover",
+    "fixture_variant": "base",
+    "core_id": "K08",
+    "snapshot": "RANK",
+    "expected": "Turn 1 ask criterion, with no unsupported winner; turn 2 uses revenue criterion and returns P02 EUR 30,000. No repeated clarification once specified.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E067",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "What is the outlook for customer XYZ?",
+      "Use actual shipped pieces in 2023–2025, not revenue."
+    ],
+    "contract": "clarify_actuals",
+    "focus": "Metrik klären und übernehmen",
+    "fixture_variant": "base",
+    "core_id": "K09",
+    "snapshot": "TREND",
+    "expected": "Turn 1 request metric/horizon; turn 2 C01 2023..2025 actuals=[100,120,140] pieces, using specified metric and years.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E068",
+    "managers": 250,
+    "language": "DE",
+    "turns": [
+      "Welche Projekte des Kunden Nova verwenden Kupfer?"
+    ],
+    "contract": "empty",
+    "focus": "Korrekte leere Schnittmenge",
+    "fixture_variant": "base",
+    "core_id": "K10",
+    "snapshot": "RANK",
+    "expected": "Empty set: C03 Nova has only P08 (Steel). Copper projects exist but none owned by C03.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E069",
+    "managers": 250,
+    "language": "FR",
+    "turns": [
+      "Aurora utilise-t-il du cuivre ? Donnez les livraisons réelles de 2025 en pièces si oui."
+    ],
+    "contract": "mixed",
+    "focus": "Database → ReadOnly und Database",
+    "fixture_variant": "base",
+    "core_id": "K11",
+    "snapshot": "RANK",
+    "expected": "Aurora uses Copper M01; actual shipped quantity 2025=120 pieces. Evidence from Project→Material and Shipment→Project.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E070",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "List XYZ’s projects.",
+      "Of those, which uses steel?"
+    ],
+    "contract": "follow_filter",
+    "focus": "Kontext und Einschränkung im Folgeturn",
+    "fixture_variant": "base",
+    "core_id": "K12",
+    "snapshot": "RANK",
+    "expected": "Turn 1 P01,P02; turn 2 P02 only (Steel); exclude non-XYZ steel projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E071",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Zeige die Projekte von Atlas.",
+      "Ich meine den französischen Kunden mit der Kennung C04."
+    ],
+    "contract": "ambiguous_customer",
+    "focus": "Gleicher Anzeigename",
+    "fixture_variant": "duplicate_customer",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Turn 1 clarify between C04 and C05 named Atlas; turn 2 C04→P09 only, not C05→P10.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E072",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Quels projets utilisent du laiton, et non du cuivre ?"
+    ],
+    "contract": "brass",
+    "focus": "Ähnlicher Werkstoff ist kein Alias",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "M03 Brass; P11 only. Do not treat brass as copper alias.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E073",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "Show sales projects for XYZ, not purchase orders or support cases."
+    ],
+    "contract": "projects",
+    "focus": "Fachlich ähnliche Distraktoren",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora and P02 Borealis for C01; distinct customer-owned project rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E074",
+    "managers": 100,
+    "language": "DE",
+    "turns": [
+      "Welche Projekte verwenden CU-ETP?"
+    ],
+    "contract": "copper_projects",
+    "focus": "Materialalias statt erfundener Übersetzung",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Exactly P01,P03,P04,P05,P06,P07 sorted by code, retrieving all pages where applicable.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E075",
+    "managers": 250,
+    "language": "FR",
+    "turns": [
+      "Quel projet a le plus grand revenu prévu pour l’année prochaine ?"
+    ],
+    "contract": "rank_revenue",
+    "focus": "Nächstes Jahr bei festem Clock",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P02 EUR 30,000; then P03 24,000; P06 18,000; P01 12,000; P04 10,000; P05 8,000; P07 8,000; P08 5,000. Highest=P02.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E076",
+    "managers": 10,
+    "language": "EN",
+    "turns": [
+      "Rank the top five copper-using projects by actual pieces shipped in 2025, including ties only via the standard project-code tie-break."
+    ],
+    "contract": "top_material",
+    "focus": "Gleichstand an Platz fünf",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Filter projects using M01 before ranking 2025 actual shipped pieces: P03 200, P04 150, P01 120, P05 80, P06 60; exclude tied P07 60 by ascending project code. Do not include steel-only P02 500.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E077",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Zeige Aurora-Lieferungen vom 1. Januar bis 31. Dezember 2025 in Stück."
+    ],
+    "contract": "shipments",
+    "focus": "Grenztage und ausgeschlossene Jahre",
+    "fixture_variant": "date_edges",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P01 actual gross shipments during [2025-01-01,2026-01-01): 120 pieces; do not use plans, revenue, returns, or 2026 rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E078",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Quel est le total livré par Aurora en 2025 ?",
+      "En kilogrammes, pas en pièces."
+    ],
+    "contract": "weight",
+    "focus": "Einheit klären und Gewicht getrennt berechnen",
+    "fixture_variant": "weight",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Turn 1 ask pieces vs kg if unspecified; turn 2 P01 2025 weight=240 kg; 120 pieces is not 120 kg.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E079",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "What was Aurora’s net shipped quantity in 2025 after returns?"
+    ],
+    "contract": "returns",
+    "focus": "Retouren nicht still mit Auslieferungen vermischen",
+    "fixture_variant": "returns",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P01 gross 120 pieces minus return 10 pieces=110 net pieces; distinguish both components.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E080",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Welches Projekt hat 2027 den höchsten geplanten Nettoumsatz in Euro?"
+    ],
+    "contract": "fx_rank",
+    "focus": "Währung normalisieren",
+    "fixture_variant": "fx",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P03 native USD 40,000 × fixed USD/EUR 0.8=EUR 32,000; outranks P02 EUR 30,000. Show rate/date/source.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E081",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Quel projet a le revenu net prévu le plus élevé en 2027 ?"
+    ],
+    "contract": "missing_revenue",
+    "focus": "Fehlend ist nicht null",
+    "fixture_variant": "missing_revenue",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P02 revenue unknown; among known P03 leads EUR 24,000. Do not claim overall winner is known; clearly qualify incomplete coverage.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E082",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "Which projects have zero planned revenue for 2027, and which have no revenue plan?"
+    ],
+    "contract": "zero_missing",
+    "focus": "Null versus fehlend",
+    "fixture_variant": "missing_revenue",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P08 and P11 have explicit zero planned revenue; P02 is missing. Return all legitimate zero-revenue projects and keep missing plans in a separate group.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E083",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Liste alle Kupferprojekte nach Projektcode; lade bei Bedarf weitere Seiten."
+    ],
+    "contract": "copper_projects",
+    "focus": "Vollständigkeit über Seiten",
+    "fixture_variant": "page2",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Exactly P01,P03,P04,P05,P06,P07 sorted by code, retrieving all pages where applicable.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E084",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Quels projets utilisent à la fois du cuivre et de l’acier ?"
+    ],
+    "contract": "both_materials",
+    "focus": "UND statt ODER",
+    "fixture_variant": "both",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P01 only has both M01 and M02 under variant; do not include projects with only one material.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E085",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "Which XYZ projects use copper but have no actual shipments in 2025?"
+    ],
+    "contract": "no_shipments",
+    "focus": "Anti-Verknüpfung und fehlende Ereignisse",
+    "fixture_variant": "no_shipments",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P12 only: C01, Copper, no Shipment rows in 2025. P01 has shipments and must be excluded.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E086",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Welche Projekte beziehen Teile von Lieferant Nord und nutzen Kupfer?"
+    ],
+    "contract": "supplier_path",
+    "focus": "Verzweigte Pfade mit Gegenbeispielen",
+    "fixture_variant": "supplier",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P01 only: approved supplier Nord→Part N1→ProjectPart→P01 and Copper. P02 has Nord but Steel; P03 has Copper but supplier Sud.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E087",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Quels projets utilisent le même matériau qu’Aurora, sans inclure Aurora ?"
+    ],
+    "contract": "shared_material",
+    "focus": "Zwei Äste und Selbstausschluss",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P03,P04,P05,P06,P07; exclude P01 itself and Steel-only projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E088",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "Show approved projects whose owner is XYZ, not projects merely billed to XYZ."
+    ],
+    "contract": "owner_billto",
+    "focus": "Zwei fachlich verschiedene Wege",
+    "fixture_variant": "owner_billto",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P01 only in variant approved=true/owner C01; P02 owner C01 but not approved; P03 billed C01 but owned C02.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E089",
+    "managers": 100,
+    "language": "DE",
+    "turns": [
+      "Welche Projekte sind direkt oder indirekt von Aurora abhängig? Nenne jedes nur einmal."
+    ],
+    "contract": "cycle",
+    "focus": "Zyklus und Deduplizierung",
+    "fixture_variant": "cycle",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Dependency edges P01→P02→P03→P01 plus P02→P04; reachable others exactly P02,P03,P04 once each; no infinite traversal.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E090",
+    "managers": 250,
+    "language": "FR",
+    "turns": [
+      "Quels projets de XYZ utilisent le matériau expérimental Zeta ?"
+    ],
+    "contract": "disconnected",
+    "focus": "Existierende, aber unverbundene Zielzeilen",
+    "fixture_variant": "disconnected",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "M99 Zeta exists and P99 uses it, but P99 owner C02. C01/Zeta result empty; never confuse existence with relation.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E091",
+    "managers": 50,
+    "language": "EN",
+    "turns": [
+      "Show XYZ’s planned shipped pieces for 2027–2031."
+    ],
+    "contract": "plan",
+    "focus": "ReadOnly-Planpfad",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "TREND",
+    "expected": "C01 authoritative ReadOnly Plan rows for 2027..2031 sum to [150,160,170,180,190] pieces. Label as existing plan, never new forecast.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E092",
+    "managers": 100,
+    "language": "DE",
+    "turns": [
+      "Vergleiche für XYZ die Ist-Lieferungen 2023–2025 mit dem Plan 2027–2031; erfinde keine Ist-Werte für 2026."
+    ],
+    "contract": "actual_plan",
+    "focus": "Ist/Plan und unvollständiges Jahr",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "TREND",
+    "expected": "Actual C01 2023..2025 [100,120,140]; 2026 incomplete, omit comparison as full year; plan 2027..2031 [150,160,170,180,190], separately labeled.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E093",
+    "managers": 250,
+    "language": "FR",
+    "turns": [
+      "Prévois les livraisons annuelles de XYZ pour 2027–2031 avec notre référence linéaire, et indique les hypothèses."
+    ],
+    "contract": "forecast",
+    "focus": "Deterministische neue Prognose",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "TREND",
+    "expected": "OLS reference C01 slope 20 pieces/year, base 2025=140 → forecasts 2027..2031 [180,200,220,240,260]. Scenario ±20%: [144..216,160..240,176..264,192..288,208..312]; not statistical confidence.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E094",
+    "managers": 100,
+    "language": "EN",
+    "turns": [
+      "Forecast five years of shipments for Boreal using the agreed linear baseline and show the scenario range."
+    ],
+    "contract": "forecast_boreal",
+    "focus": "Negative Steigung und Clamping",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "TREND",
+    "expected": "C02 2023..2025 actuals [300,280,260], slope −20 → [220,200,180,160,140] for 2027..2031. Apply max(0,value), scenario ±20%; report decline.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E095",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Prognostiziere die Lieferungen von Nova für 2027–2031 anhand der letzten drei vollständigen Jahre."
+    ],
+    "contract": "insufficient",
+    "focus": "Unvollständige Historie",
+    "fixture_variant": "missing_history",
+    "core_id": null,
+    "snapshot": "TREND",
+    "expected": "C03 missing 2024 actuals: no three-point reference forecast; explicitly insufficient history, no zero-imputation.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E096",
+    "managers": 250,
+    "language": "FR",
+    "turns": [
+      "Quels clients contacter en priorité pour combler un déficit du plan par rapport à la référence 2031 ? Donne les preuves."
+    ],
+    "contract": "recommend",
+    "focus": "Empfehlung nach offengelegtem Kriterium",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "TREND",
+    "expected": "2031 positive forecast-minus-plan gaps: C01 260−190=70, C03 90−70=20; contact order C01 then C03. C02 140−240<0 excluded from this opportunity criterion. Explain criterion, evidence and uncertainty, no causal promise.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E097",
+    "managers": 100,
+    "language": "EN",
+    "turns": [
+      "Show XYZ’s revenue forecast for 2027–2031.",
+      "Use shipment quantities only; do not estimate prices."
+    ],
+    "contract": "metric_correction",
+    "focus": "Korrigiertes Ziel ersetzt frühere Metrik",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "TREND",
+    "expected": "After correction output shipment forecast for C01 [180,200,220,240,260] only, no invented prices/revenue.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E098",
+    "managers": 250,
+    "language": "DE",
+    "turns": [
+      "Zeige Aurora 2027 Planumsatz, Ist-Lieferungen 2025 und den verwendeten Werkstoff mit ihren Quellen."
+    ],
+    "contract": "provenance",
+    "focus": "Calculation/Database/ReadOnly gemischt",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P01: 2027 revenue EUR 12,000 Calculation; 2025 actuals 120 pieces Database; Copper M01 ReadOnly. Correct temporal/source labels.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E099",
+    "managers": 250,
+    "language": "FR",
+    "turns": [
+      "Quel est notre projet le plus important ?",
+      "Le plus de pièces réellement livrées en 2025.",
+      "Limite maintenant aux projets utilisant le métal rouge."
+    ],
+    "contract": "three_turn",
+    "focus": "Drei Turns und Kriterium erhalten",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Turn 1 criterion question; turn 2 overall shipment leader P02 500 pieces; turn 3 Copper-filtered leader P03 200 pieces. Preserve year and metric.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E100",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "How will customer XYZ develop over the next years?",
+      "Use shipments in pieces. Show 2027–2031 existing plans and a new forecast from complete 2023–2025 actuals, with assumptions and uncertainty. Then recommend which customers we should approach using positive 2031 forecast-minus-plan gaps, and show the supporting customer evidence."
+    ],
+    "contract": "final",
+    "focus": "Fünfjahresplan, Prognose und belegte Empfehlungen",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "TREND",
+    "expected": "Turn 1 clarify metric/horizon; turn 2 plans C01 [150,160,170,180,190], forecast [180,200,220,240,260], stated OLS/complete actuals/no causal claim/±20% scenario; recommend C01 then C03 using gaps 70 and 20. Cite C01/C02/C03 evidence; separate actual, plan, calculated forecast and action suggestion.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E101",
+    "managers": 5,
+    "language": "DE",
+    "turns": [
+      "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?",
+      "Mit aktuell meine ich nicht gelöschte Datensätze; auch inaktive Werkstoffe gehören dazu."
+    ],
+    "contract": "steel_inventory_scope",
+    "focus": "Natürliche Bestandsfrage, Löschumfang und Carryover",
+    "fixture_variant": "base",
+    "core_id": "K13",
+    "snapshot": "RANK",
+    "expected": "Turn 1 accepts an appropriate clarification about current/deleted scope, or a grounded complete current steel inventory M02, M04, M05 with a stated scope. Do not silently equate aktuell with business active=True. Turn 2 carries the steel family and explicitly non-deleted scope and returns M02 Steel, M04 StainlessSteel and M05 LegacySteel. Material.is_active is this manager’s framework soft-delete flag; its separate business active=False does not mean deleted. M05 is business-inactive but is_active=True; the fixture contains no deleted material rows. Do not fabricate deletion history or an include-deleted chat API.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E102",
+    "managers": 10,
+    "language": "DE",
+    "turns": [
+      "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?",
+      "Mit aktuell meine ich nicht gelöschte Datensätze; auch inaktive Werkstoffe gehören dazu."
+    ],
+    "contract": "steel_inventory_scope",
+    "focus": "Natürliche Bestandsfrage, Löschumfang und Carryover",
+    "fixture_variant": "base",
+    "core_id": "K13",
+    "snapshot": "RANK",
+    "expected": "Turn 1 accepts an appropriate clarification about current/deleted scope, or a grounded complete current steel inventory M02, M04, M05 with a stated scope. Do not silently equate aktuell with business active=True. Turn 2 carries the steel family and explicitly non-deleted scope and returns M02 Steel, M04 StainlessSteel and M05 LegacySteel. Material.is_active is this manager’s framework soft-delete flag; its separate business active=False does not mean deleted. M05 is business-inactive but is_active=True; the fixture contains no deleted material rows. Do not fabricate deletion history or an include-deleted chat API.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E103",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?",
+      "Mit aktuell meine ich nicht gelöschte Datensätze; auch inaktive Werkstoffe gehören dazu."
+    ],
+    "contract": "steel_inventory_scope",
+    "focus": "Natürliche Bestandsfrage, Löschumfang und Carryover",
+    "fixture_variant": "base",
+    "core_id": "K13",
+    "snapshot": "RANK",
+    "expected": "Turn 1 accepts an appropriate clarification about current/deleted scope, or a grounded complete current steel inventory M02, M04, M05 with a stated scope. Do not silently equate aktuell with business active=True. Turn 2 carries the steel family and explicitly non-deleted scope and returns M02 Steel, M04 StainlessSteel and M05 LegacySteel. Material.is_active is this manager’s framework soft-delete flag; its separate business active=False does not mean deleted. M05 is business-inactive but is_active=True; the fixture contains no deleted material rows. Do not fabricate deletion history or an include-deleted chat API.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E104",
+    "managers": 100,
+    "language": "DE",
+    "turns": [
+      "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?",
+      "Mit aktuell meine ich nicht gelöschte Datensätze; auch inaktive Werkstoffe gehören dazu."
+    ],
+    "contract": "steel_inventory_scope",
+    "focus": "Natürliche Bestandsfrage, Löschumfang und Carryover",
+    "fixture_variant": "base",
+    "core_id": "K13",
+    "snapshot": "RANK",
+    "expected": "Turn 1 accepts an appropriate clarification about current/deleted scope, or a grounded complete current steel inventory M02, M04, M05 with a stated scope. Do not silently equate aktuell with business active=True. Turn 2 carries the steel family and explicitly non-deleted scope and returns M02 Steel, M04 StainlessSteel and M05 LegacySteel. Material.is_active is this manager’s framework soft-delete flag; its separate business active=False does not mean deleted. M05 is business-inactive but is_active=True; the fixture contains no deleted material rows. Do not fabricate deletion history or an include-deleted chat API.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E105",
+    "managers": 250,
+    "language": "DE",
+    "turns": [
+      "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?",
+      "Mit aktuell meine ich nicht gelöschte Datensätze; auch inaktive Werkstoffe gehören dazu."
+    ],
+    "contract": "steel_inventory_scope",
+    "focus": "Natürliche Bestandsfrage, Löschumfang und Carryover",
+    "fixture_variant": "base",
+    "core_id": "K13",
+    "snapshot": "RANK",
+    "expected": "Turn 1 accepts an appropriate clarification about current/deleted scope, or a grounded complete current steel inventory M02, M04, M05 with a stated scope. Do not silently equate aktuell with business active=True. Turn 2 carries the steel family and explicitly non-deleted scope and returns M02 Steel, M04 StainlessSteel and M05 LegacySteel. Material.is_active is this manager’s framework soft-delete flag; its separate business active=False does not mean deleted. M05 is business-inactive but is_active=True; the fixture contains no deleted material rows. Do not fabricate deletion history or an include-deleted chat API.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E106",
+    "managers": 5,
+    "language": "FR",
+    "turns": [
+      "Quels clients sont actuellement actifs ?"
+    ],
+    "contract": "active_customers",
+    "focus": "Alltagsfrage: aktive Kunden",
+    "fixture_variant": "base",
+    "core_id": "K14",
+    "snapshot": "RANK",
+    "expected": "Exactly active customers C01 XYZ Industrie and C02 Boreal SA; exclude inactive C03 Nova.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E107",
+    "managers": 10,
+    "language": "FR",
+    "turns": [
+      "Quels clients sont actuellement actifs ?"
+    ],
+    "contract": "active_customers",
+    "focus": "Alltagsfrage: aktive Kunden",
+    "fixture_variant": "base",
+    "core_id": "K14",
+    "snapshot": "RANK",
+    "expected": "Exactly active customers C01 XYZ Industrie and C02 Boreal SA; exclude inactive C03 Nova.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E108",
+    "managers": 50,
+    "language": "FR",
+    "turns": [
+      "Quels clients sont actuellement actifs ?"
+    ],
+    "contract": "active_customers",
+    "focus": "Alltagsfrage: aktive Kunden",
+    "fixture_variant": "base",
+    "core_id": "K14",
+    "snapshot": "RANK",
+    "expected": "Exactly active customers C01 XYZ Industrie and C02 Boreal SA; exclude inactive C03 Nova.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E109",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Quels clients sont actuellement actifs ?"
+    ],
+    "contract": "active_customers",
+    "focus": "Alltagsfrage: aktive Kunden",
+    "fixture_variant": "base",
+    "core_id": "K14",
+    "snapshot": "RANK",
+    "expected": "Exactly active customers C01 XYZ Industrie and C02 Boreal SA; exclude inactive C03 Nova.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E110",
+    "managers": 250,
+    "language": "FR",
+    "turns": [
+      "Quels clients sont actuellement actifs ?"
+    ],
+    "contract": "active_customers",
+    "focus": "Alltagsfrage: aktive Kunden",
+    "fixture_variant": "base",
+    "core_id": "K14",
+    "snapshot": "RANK",
+    "expected": "Exactly active customers C01 XYZ Industrie and C02 Boreal SA; exclude inactive C03 Nova.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E111",
+    "managers": 5,
+    "language": "EN",
+    "turns": [
+      "List the ongoing projects with their codes and names."
+    ],
+    "contract": "ongoing_projects",
+    "focus": "Alltagsfrage: laufende Projekte",
+    "fixture_variant": "base",
+    "core_id": "K15",
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora, P03 Cobalt and P05 Echo, whose status is ongoing; include codes and names. Exclude completed/planned projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E112",
+    "managers": 10,
+    "language": "EN",
+    "turns": [
+      "List the ongoing projects with their codes and names."
+    ],
+    "contract": "ongoing_projects",
+    "focus": "Alltagsfrage: laufende Projekte",
+    "fixture_variant": "base",
+    "core_id": "K15",
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora, P03 Cobalt and P05 Echo, whose status is ongoing; include codes and names. Exclude completed/planned projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E113",
+    "managers": 50,
+    "language": "EN",
+    "turns": [
+      "List the ongoing projects with their codes and names."
+    ],
+    "contract": "ongoing_projects",
+    "focus": "Alltagsfrage: laufende Projekte",
+    "fixture_variant": "base",
+    "core_id": "K15",
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora, P03 Cobalt and P05 Echo, whose status is ongoing; include codes and names. Exclude completed/planned projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E114",
+    "managers": 100,
+    "language": "EN",
+    "turns": [
+      "List the ongoing projects with their codes and names."
+    ],
+    "contract": "ongoing_projects",
+    "focus": "Alltagsfrage: laufende Projekte",
+    "fixture_variant": "base",
+    "core_id": "K15",
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora, P03 Cobalt and P05 Echo, whose status is ongoing; include codes and names. Exclude completed/planned projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E115",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "List the ongoing projects with their codes and names."
+    ],
+    "contract": "ongoing_projects",
+    "focus": "Alltagsfrage: laufende Projekte",
+    "fixture_variant": "base",
+    "core_id": "K15",
+    "snapshot": "RANK",
+    "expected": "Exactly P01 Aurora, P03 Cobalt and P05 Echo, whose status is ongoing; include codes and names. Exclude completed/planned projects.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E116",
+    "managers": 50,
+    "language": "DE",
+    "turns": [
+      "Wie sehen unsere Projektkosten im letzten Jahr aus?"
+    ],
+    "contract": "project_costs_wbs",
+    "focus": "Alltagsfrage: Projektkosten im Vorjahr",
+    "fixture_variant": "project_costs",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Use the glossary convention: last calendar year is 2025, actual net project costs in EUR grouped by WBS. W01 Engineering EUR 3500; W02 ProjectManagement EUR 1200; total EUR 4700. Exclude plans and other years; do not ask a needless clarification.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E117",
+    "managers": 100,
+    "language": "FR",
+    "turns": [
+      "Quels étaient nos coûts de projet l’an dernier, regroupés par élément PSP/WBS ?"
+    ],
+    "contract": "project_costs_wbs",
+    "focus": "Projektkosten nach PSP/WBS",
+    "fixture_variant": "project_costs",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "2025 actual net project costs in EUR: W01 Engineering EUR 3500; W02 ProjectManagement EUR 1200; total EUR 4700. Exclude plans and other years.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E118",
+    "managers": 250,
+    "language": "EN",
+    "turns": [
+      "Show last year’s actual project costs grouped by WBS element."
+    ],
+    "contract": "project_costs_wbs",
+    "focus": "Project costs by WBS",
+    "fixture_variant": "project_costs",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "2025 actual net project costs in EUR: W01 Engineering EUR 3500; W02 ProjectManagement EUR 1200; total EUR 4700. Exclude plans and other years.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E119",
+    "managers": 10,
+    "language": "DE",
+    "turns": [
+      "Welche Werkstoffbezeichnung und Dichte hat CU-ETP?"
+    ],
+    "contract": "material_density",
+    "focus": "Materialalias und Dichte",
+    "fixture_variant": "base",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "CU-ETP uniquely resolves to M01 Copper; density 8.96 g/cm3. Return the material designation and explicitly correct unit.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E120",
+    "managers": 50,
+    "language": "FR",
+    "turns": [
+      "Quels étaient les coûts réels nets d’Aurora en 2025, en euros ?"
+    ],
+    "contract": "project_costs_project",
+    "focus": "Projektkosten eines Projekts",
+    "fixture_variant": "project_costs",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "P01 Aurora actual net project costs in calendar 2025 total EUR 2500. Exclude other projects, plans and other years.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  },
+  {
+    "id": "E121",
+    "managers": 10,
+    "language": "EN",
+    "turns": [
+      "How many pieces did Aurora actually ship last month?"
+    ],
+    "contract": "recent_shipments",
+    "focus": "Relative Monatsgrenzen",
+    "fixture_variant": "recent_shipments",
+    "core_id": null,
+    "snapshot": "RANK",
+    "expected": "Frozen clock 2026-10-03: last complete calendar month is [2026-09-01,2026-10-01). P01 Aurora actual shipments total 30 pieces; exclude August 31 and October 1 rows.",
+    "scoring_dimensions": [
+      "D",
+      "I",
+      "R",
+      "C",
+      "Q",
+      "A"
+    ]
+  }
+]

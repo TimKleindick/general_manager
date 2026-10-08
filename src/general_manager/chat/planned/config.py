@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -13,15 +15,18 @@ from typing import Any, cast
 from django.utils.module_loading import import_string
 
 from general_manager.chat.providers.base import BaseLLMProvider
-from general_manager.chat.settings import ChatConfigurationError, get_chat_settings
+from general_manager.chat.settings import (
+    ChatConfigurationError,
+    ProviderDependencyError,
+    get_chat_settings,
+)
 
 
 REQUIRED_ROLES = (
     "planner",
-    "simple_executor",
-    "complex_executor",
+    "executor",
     "synthesizer",
-    "fallback_executor",
+    "fallback",
 )
 
 _POSITIVE_INTEGER = "{key} must be a positive integer."
@@ -161,17 +166,15 @@ def get_planned_chat_settings() -> PlannedChatSettings:
     raw_planned = settings.get("planned", {})
     if not isinstance(raw_planned, Mapping):
         raise _error(_PLANNED_MAPPING)
-    enabled = raw_planned.get("enabled", False)
+    enabled = raw_planned.get("enabled", True)
     if not isinstance(enabled, bool):
         raise _error(_ENABLED_BOOLEAN)
 
     if not enabled:
-        implicit_profile = _implicit_profile(settings)
-        return PlannedChatSettings(
-            enabled=False,
-            profiles=MappingProxyType({implicit_profile.name: implicit_profile}),
-            roles=MappingProxyType(_required_roles(implicit_profile.name)),
-            catalog_source=_copy_catalog_source(raw_planned.get("catalog")),
+        warnings.warn(
+            "planned.enabled=False is deprecated and no longer disables Planned reads.",
+            DeprecationWarning,
+            stacklevel=2,
         )
 
     profiles, has_explicit_profiles = _normalize_profiles(
@@ -246,9 +249,17 @@ def validate_profile_provider(profile: ProviderProfile) -> BaseLLMProvider:
     if not callable(check_configuration):
         return provider
     try:
-        signature(check_configuration).bind(profile.provider_config)
-    except TypeError:
-        check_configuration()
-    else:
-        check_configuration(profile.provider_config)
+        try:
+            signature(check_configuration).bind(profile.provider_config)
+        except TypeError:
+            check_configuration()
+        else:
+            check_configuration(profile.provider_config)
+    except ImportError as exc:
+        required_extra = getattr(provider, "required_extra", None)
+        if required_extra:
+            raise ProviderDependencyError(
+                type(provider).__name__, str(required_extra)
+            ) from exc
+        raise
     return provider

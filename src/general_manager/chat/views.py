@@ -26,14 +26,13 @@ from general_manager.chat.models import (
     append_chat_message,
     create_pending_confirmation,
 )
-from general_manager.chat.planned.catalog import load_manager_catalog
 from general_manager.chat.planned.config import get_planned_chat_settings
 from general_manager.chat.planned.scheduler import (
     SchedulerCallbacks,
     iter_planned_read_events,
     prepare_planned_turn,
 )
-from general_manager.chat.schema_index import build_schema_index
+from general_manager.chat.schema_index import planner_catalog_summary
 from general_manager.chat.consumer import (
     _has_tool_after_last_user,
     _iter_provider_events,
@@ -83,6 +82,7 @@ class _PreparedMessageRequest:
     user_text: str | None = None
     planned_settings: Any | None = None
     turn_state: TurnState | None = None
+    provider_importer: Callable[[], type[Any]] | None = None
 
 
 def _ensure_session_key(request: HttpRequest) -> str | None:
@@ -179,22 +179,7 @@ async def _build_messages(
 
 def _planned_catalog_summary(settings: Any) -> dict[str, Any]:
     """Build the planner's inert catalog/schema reference data for one turn."""
-    schema_index = build_schema_index()
-    catalog = load_manager_catalog(
-        getattr(settings, "catalog_source", None), schema_index
-    )
-    return {
-        "catalog": {
-            name: {
-                "domain": entry.domain,
-                "aliases": list(entry.aliases),
-                "use_when": entry.use_when,
-                "distinguish_from": list(entry.distinguish_from),
-            }
-            for name, entry in catalog.entries.items()
-        },
-        "schema": schema_index,
-    }
+    return planner_catalog_summary(settings)
 
 
 def _answer_from_events(events: list[dict[str, Any]]) -> str:
@@ -703,16 +688,12 @@ async def _prepare_message_request(
         )
     conversation = await sync_to_async(_conversation_for_request)(request)
     await sync_to_async(append_chat_message)(conversation, role="user", content=text)
-    provider_cls = (
-        provider_importer() if provider_importer is not None else import_provider()
-    )
-    provider = provider_cls()
     planned_settings = get_planned_chat_settings()
     turn_state = TurnState.from_settings(get_chat_settings())
     messages = await _build_messages(
         conversation,
-        provider,
-        allow_summarization=not planned_settings.enabled,
+        None,
+        allow_summarization=False,
         scope=scope,
         turn_state=turn_state,
     )
@@ -724,12 +705,13 @@ async def _prepare_message_request(
     return _PreparedMessageRequest(
         conversation=conversation,
         scope=scope,
-        provider=provider,
+        provider=None,
         messages=messages,
         early_events=None,
         user_text=text,
         planned_settings=planned_settings,
         turn_state=turn_state,
+        provider_importer=provider_importer,
     )
 
 
@@ -738,25 +720,10 @@ async def _iter_prepared_message_events(
     *,
     transport: str,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Select one post-admission transport strategy without changing legacy loops."""
-    if (
-        prepared.provider is None
-        or prepared.messages is None
-        or prepared.conversation is None
-    ):
+    """Plan every new request; retain the existing mutation continuation only."""
+    if prepared.messages is None or prepared.conversation is None:
         return
     planned_settings = prepared.planned_settings or get_planned_chat_settings()
-    if not planned_settings.enabled:
-        async for event in _iter_provider_turn_events(
-            scope=prepared.scope,
-            conversation=prepared.conversation,
-            provider=prepared.provider,
-            messages=prepared.messages,
-            transport=transport,
-            turn_state=prepared.turn_state,
-        ):
-            yield event
-        return
 
     callbacks = SchedulerCallbacks(enforce_rate_limit=enforce_chat_rate_limit)
     planned_turn = await prepare_planned_turn(
@@ -776,11 +743,21 @@ async def _iter_prepared_message_events(
         scope=prepared.scope,
     )
     if planned_turn.mutation_plan is not None:
+        provider = prepared.provider
+        if provider is None:
+            importer = prepared.provider_importer or import_provider
+            provider = importer()()
+        mutation_messages = await _build_messages(
+            prepared.conversation,
+            provider,
+            scope=prepared.scope,
+            turn_state=prepared.turn_state,
+        )
         async for event in _iter_provider_turn_events(
             scope=prepared.scope,
             conversation=prepared.conversation,
-            provider=prepared.provider,
-            messages=prepared.messages,
+            provider=provider,
+            messages=mutation_messages,
             transport=transport,
             turn_state=prepared.turn_state,
         ):

@@ -67,4 +67,4 @@
           - name: find_path
         forbidden_tools: ["mutate"]
         answer_contains: ["no"]
-        answer_excludes: ["next_item.next_item.next_item"]
+        answer_excludes: ["nextItem.nextItem.nextItem"]

@@ -3,140 +3,25 @@
 from __future__ import annotations
 
 from collections import deque
-from functools import lru_cache
 import re
-from typing import Any, TypeAlias, cast
+from typing import Any
 
-from general_manager.api.graphql import GraphQL
-from general_manager.utils.path_mapping import PathMap
+
+from general_manager.chat.graphql_contract import (
+    compact_index,
+    clear_contract_cache,
+    manager_schema,
+)
 
 DEFAULT_SEARCH_LIMIT = 10
-GraphQLFieldSignature: TypeAlias = tuple[tuple[str, int], ...]
-SchemaIndexCacheKey: TypeAlias = tuple[
-    tuple[tuple[str, int, bool], ...],
-    tuple[tuple[str, int, str, GraphQLFieldSignature], ...],
-    tuple[tuple[str, int, GraphQLFieldSignature], ...],
-]
-
-
-def _unwrap_graphene_type(field_type: Any) -> Any:
-    current = field_type
-    while hasattr(current, "of_type"):
-        current = current.of_type
-    return current
-
-
-def _is_exposed_manager(manager_class: type[Any]) -> bool:
-    return bool(getattr(manager_class, "chat_exposed", False))
-
-
-def _type_description(graphene_type: Any) -> str:
-    description = getattr(graphene_type, "__doc__", None) or ""
-    return " ".join(description.strip().split())
-
-
-def _field_signature(graphene_type: Any) -> GraphQLFieldSignature:
-    graphene_meta = getattr(graphene_type, "_meta", None)
-    fields = getattr(graphene_meta, "fields", None)
-    if not isinstance(fields, dict):
-        return ()
-    return tuple(
-        (
-            field_name,
-            id(_unwrap_graphene_type(getattr(field, "type", None))),
-        )
-        for field_name, field in sorted(cast(dict[str, Any], fields).items())
-    )
-
-
-def _get_exposed_manager_names() -> set[str]:
-    return {
-        name
-        for name, manager_class in GraphQL.manager_registry.items()
-        if _is_exposed_manager(manager_class)
-    }
-
-
-def _schema_index_cache_key() -> SchemaIndexCacheKey:
-    return (
-        tuple(
-            (name, id(manager_class), _is_exposed_manager(manager_class))
-            for name, manager_class in sorted(GraphQL.manager_registry.items())
-        ),
-        tuple(
-            (
-                name,
-                id(graphql_type),
-                _type_description(graphql_type),
-                _field_signature(graphql_type),
-            )
-            for name, graphql_type in sorted(GraphQL.graphql_type_registry.items())
-        ),
-        tuple(
-            (name, id(filter_type), _field_signature(filter_type))
-            for name, filter_type in sorted(
-                GraphQL.graphql_filter_type_registry.items()
-            )
-        ),
-    )
 
 
 def clear_schema_index_cache() -> None:
-    """Clear the cached schema index."""
-    _build_schema_index_cached.cache_clear()
-
-
-@lru_cache(maxsize=8)
-def _build_schema_index_cached(
-    _cache_key: SchemaIndexCacheKey,
-) -> dict[str, dict[str, Any]]:
-    """Build a compact index of chat-exposed managers from the GraphQL registry."""
-    del _cache_key
-    index: dict[str, dict[str, Any]] = {}
-    exposed_names = _get_exposed_manager_names()
-    for manager_name in sorted(exposed_names):
-        graphene_type = GraphQL.graphql_type_registry.get(manager_name)
-        if graphene_type is None:
-            continue
-        graphene_meta = cast(Any, graphene_type)._meta
-        description = _type_description(graphene_type)
-        fields: list[str] = []
-        relations: list[dict[str, str]] = []
-        for field_name, field in sorted(
-            cast(dict[str, Any], graphene_meta.fields).items()
-        ):
-            unwrapped = _unwrap_graphene_type(field.type)
-            target_name = next(
-                (
-                    candidate_name
-                    for candidate_name, candidate_type in GraphQL.graphql_type_registry.items()
-                    if candidate_type is unwrapped and candidate_name in exposed_names
-                ),
-                None,
-            )
-            if target_name is not None:
-                relations.append({"name": field_name, "target": target_name})
-            else:
-                fields.append(field_name)
-        filter_type = GraphQL.graphql_filter_type_registry.get(manager_name)
-        filters = (
-            sorted(cast(dict[str, Any], cast(Any, filter_type)._meta.fields).keys())
-            if filter_type is not None
-            else []
-        )
-        index[manager_name] = {
-            "manager": manager_name,
-            "description": description,
-            "fields": fields,
-            "relations": relations,
-            "filters": filters,
-        }
-    return index
+    clear_contract_cache()
 
 
 def build_schema_index() -> dict[str, dict[str, Any]]:
-    """Build or reuse the compact index of chat-exposed managers."""
-    return _build_schema_index_cached(_schema_index_cache_key())
+    return compact_index()
 
 
 def _tokenize_search_text(value: str) -> list[str]:
@@ -211,21 +96,13 @@ def search_manager_summaries(
 
 def get_manager_schema_summary(manager_name: str) -> dict[str, Any] | None:
     """Return the indexed schema summary for one exposed manager."""
-    return build_schema_index().get(manager_name)
+    return manager_schema(manager_name)
 
 
 def find_exposed_path(from_manager: str, to_manager: str) -> list[str] | None:
-    """Return a PathMap traversal between exposed managers only."""
-    exposed_names = _get_exposed_manager_names()
-    if from_manager not in exposed_names or to_manager not in exposed_names:
+    index = build_schema_index()
+    if from_manager not in index or to_manager not in index:
         return None
-    tracer = PathMap.mapping.get((from_manager, to_manager))
-    if tracer is None:
-        tracer = PathMap(from_manager).to(to_manager)
-    if tracer is not None:
-        path = getattr(tracer, "path", None)
-        if path:
-            return list(path)
     return _find_relational_path(from_manager, to_manager)
 
 
@@ -247,29 +124,34 @@ def _find_relational_path(from_manager: str, to_manager: str) -> list[str] | Non
             target = relation["target"]
             if target in visited:
                 continue
-            next_path = [*path, relation["name"]]
+            next_path = [*path, *relation["path"]]
             if target == to_manager:
                 return next_path
             visited.add(target)
             queue.append((target, next_path))
 
-        for candidate_name, candidate_summary in index.items():
-            if candidate_name in visited:
-                continue
-            reverse_relation = next(
-                (
-                    relation["name"]
-                    for relation in candidate_summary["relations"]
-                    if relation["target"] == current
-                ),
-                None,
-            )
-            if reverse_relation is None:
-                continue
-            next_path = [*path, reverse_relation]
-            if candidate_name == to_manager:
-                return next_path
-            visited.add(candidate_name)
-            queue.append((candidate_name, next_path))
-
     return None
+
+
+def planner_catalog_summary(settings: Any) -> dict[str, Any]:
+    """One compact transport-independent discovery view; detail is tool-loaded."""
+    from general_manager.chat.planned.catalog import load_manager_catalog
+
+    index = build_schema_index()
+    catalog = load_manager_catalog(getattr(settings, "catalog_source", None), index)
+    return {
+        "contract_version": 2,
+        "catalog": {
+            name: {
+                "domain": entry.domain,
+                "aliases": list(entry.aliases),
+                "use_when": entry.use_when,
+                "distinguish_from": list(entry.distinguish_from),
+            }
+            for name, entry in catalog.entries.items()
+        },
+        "schema": {
+            name: {key: summary[key] for key in ("type", "roots")}
+            for name, summary in index.items()
+        },
+    }

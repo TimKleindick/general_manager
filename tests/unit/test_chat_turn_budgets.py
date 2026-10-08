@@ -36,6 +36,7 @@ from general_manager.chat.providers.base import (
 from general_manager.chat.turns import TurnState
 from general_manager.chat.views import _run_provider_turn
 from tests import test_urls
+from tests.unit.test_chat_consumer import _receive_prevalidated_mutation
 
 
 class _Session:
@@ -293,7 +294,9 @@ class ChatTurnBudgetConsumerTests(TransactionTestCase):
                     return_value=None,
                 ),
             ):
-                await consumer.receive_json({"type": "message", "text": "latest"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "latest"}
+                )
 
             assert send.await_args_list[-1].args[0] == {
                 "type": "done",
@@ -342,7 +345,9 @@ class ChatTurnBudgetConsumerTests(TransactionTestCase):
                     return_value=None,
                 ),
             ):
-                await consumer.receive_json({"type": "message", "text": "latest"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "latest"}
+                )
 
             assert send.await_args_list[-1].args[0] == {
                 "type": "error",
@@ -531,7 +536,9 @@ class ChatTurnBudgetConsumerTests(TransactionTestCase):
                     side_effect=[None, None, None],
                 ) as enforce_limit,
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
 
             send.assert_awaited_once_with(
                 {
@@ -770,6 +777,17 @@ class ChatTurnBudgetConsumerTests(TransactionTestCase):
 )
 class ChatTurnBudgetHttpTests(TransactionTestCase):
     def setUp(self) -> None:
+        # Budget/confirmation assertions target the retained write workflow.
+        planner = patch(
+            "general_manager.chat.views.prepare_planned_turn",
+            new=AsyncMock(return_value=SimpleNamespace(mutation_plan=object())),
+        )
+        catalog = patch(
+            "general_manager.chat.views._planned_catalog_summary", return_value={}
+        )
+        for mocked in (planner, catalog):
+            mocked.start()
+            self.addCleanup(mocked.stop)
         cache.clear()
         test_urls.urlpatterns[:] = []
         ensure_chat_http_routes()

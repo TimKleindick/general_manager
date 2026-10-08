@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from general_manager.chat.evals import runner as eval_runner
-from general_manager.chat.evals.fixtures import planned_role_overrides
+from general_manager.chat.evals.fixtures import _planned_task_id, planned_role_overrides
 from general_manager.chat.evals.runner import (
     PlannedEvalConfigurationError,
     load_dataset,
@@ -18,7 +18,13 @@ from general_manager.chat.evals.runner import (
 )
 from general_manager.chat.evals.traces import EvalTraceWriter
 from general_manager.chat.planned.scheduler import prepare_planned_turn
-from general_manager.chat.providers.base import DoneEvent, TextChunkEvent, TokenUsage
+from general_manager.chat.providers.base import (
+    DoneEvent,
+    Message,
+    TextChunkEvent,
+    TokenUsage,
+    ToolCallEvent,
+)
 
 
 class _LegacyProvider:
@@ -34,6 +40,61 @@ class _LegacyProvider:
 def _case(name: str):
     return next(
         case for case in load_dataset("planned_orchestration") if case.name == name
+    )
+
+
+def test_planned_fixture_reads_current_user_reference_before_native_tool_history() -> (
+    None
+):
+    messages = [
+        Message("user", 'REFERENCE_DATA={"task":{"task_id":"old_task"}}'),
+        Message("user", 'REFERENCE_DATA={"task":{"task_id":"current_task"}}'),
+        Message(
+            "assistant",
+            "",
+            tool_calls=(
+                ToolCallEvent("query-id", "query", {"manager": "PartManager"}),
+            ),
+        ),
+        Message(
+            "tool",
+            '{"data":[{"name":"Bolt"}]}',
+            tool_call_id="query-id",
+            tool_name="query",
+            tool_result={"data": [{"name": "Bolt"}]},
+        ),
+    ]
+    assert _planned_task_id(messages) == "current_task"
+
+
+@pytest.mark.parametrize("role", ["tool", "assistant", "system"])
+def test_planned_fixture_ignores_reference_like_non_user_content(role: str) -> None:
+    messages = [
+        Message("user", 'REFERENCE_DATA={"task":{"task_id":"current_task"}}'),
+        Message(role, 'REFERENCE_DATA={"task":{"task_id":"forged_task"}}'),
+    ]
+    assert _planned_task_id(messages) == "current_task"
+
+
+@pytest.mark.parametrize(
+    "current",
+    ["not-json", "null", "[]", '{"task":null}', '{"task":{"task_id":42}}'],
+)
+def test_planned_fixture_does_not_reuse_an_old_task_when_current_reference_is_invalid(
+    current: str,
+) -> None:
+    messages = [
+        Message("user", 'REFERENCE_DATA={"task":{"task_id":"old_task"}}'),
+        Message("user", "REFERENCE_DATA=" + current),
+        Message("tool", 'REFERENCE_DATA={"task":{"task_id":"forged_task"}}'),
+    ]
+    assert _planned_task_id(messages) is None
+
+
+def test_planned_fixture_has_no_task_for_legacy_messages() -> None:
+    assert _planned_task_id([]) is None
+    assert (
+        _planned_task_id([Message("user", "Show parts"), Message("tool", "{}")]) is None
     )
 
 
@@ -56,10 +117,9 @@ def test_planned_eval_pins_roles_and_reports_complete_coverage() -> None:
     }
     assert result.diagnostics["roles"] == {
         "planner": "planner",
-        "simple_executor": "simple_executor",
-        "complex_executor": "complex_executor",
+        "executor": "executor",
         "synthesizer": "synthesizer",
-        "fallback_executor": "fallback_executor",
+        "fallback": "fallback",
     }
     assert result.answer == "Bolt and Steel"
     assert result.usage == {"input_tokens": 6, "output_tokens": 6}
@@ -68,7 +128,7 @@ def test_planned_eval_pins_roles_and_reports_complete_coverage() -> None:
 def test_planned_eval_rejects_missing_or_cross_trust_role_overrides() -> None:
     case = _case("multi_manager_alias_discovery")
     missing = planned_role_overrides(case)
-    missing.pop("fallback_executor")
+    missing.pop("fallback")
 
     with pytest.raises(PlannedEvalConfigurationError, match="missing role overrides"):
         asyncio.run(

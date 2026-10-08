@@ -46,10 +46,9 @@ class CheckedConfiguredProvider:
 def _complete_roles(profile: str) -> dict[str, str]:
     return {
         "planner": profile,
-        "simple_executor": profile,
-        "complex_executor": profile,
+        "executor": profile,
         "synthesizer": profile,
-        "fallback_executor": profile,
+        "fallback": profile,
     }
 
 
@@ -79,8 +78,10 @@ class PlannedChatSettingsTests(SimpleTestCase):
             }
         }
     )
-    def test_disabled_planned_mode_does_not_validate_planned_settings(self) -> None:
-        assert get_planned_chat_settings().enabled is False
+    def test_deprecated_false_switch_still_validates_planned_settings(self) -> None:
+        with pytest.warns(DeprecationWarning, match="planned.enabled"):
+            with pytest.raises(ChatConfigurationError, match="provider profile"):
+                get_planned_chat_settings()
 
     @override_settings(GENERAL_MANAGER={"CHAT": {"planned": None}})
     def test_planned_settings_reject_explicit_none(self) -> None:
@@ -257,7 +258,7 @@ class PlannedChatSettingsTests(SimpleTestCase):
                     "enabled": True,
                     "roles": {
                         **_complete_roles("remote"),
-                        "fallback_executor": "local",
+                        "fallback": "local",
                     },
                 },
             }
