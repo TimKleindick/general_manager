@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.81.3 (2026-10-09)
+
+### Bug Fixes
+
+- Preserve workflow input before async dispatch
+  ([`be5aa22`](https://github.com/TimKleindick/general_manager/commit/be5aa227c5c64d8a566e00359fa1865d21493219))
+
+### Documentation
+
+- Clarify refresh timing and upload publication errors
+  ([`184ff97`](https://github.com/TimKleindick/general_manager/commit/184ff97e5c1b4c35c6956621e5d5619d663d9437))
+
+- Correct eligibility signature and upload failure reporting
+  ([`6eba9c9`](https://github.com/TimKleindick/general_manager/commit/6eba9c981346f1ff3c53b24be8f613d3d07c1c0d))
+
+- Document bulk creation and upload guarantees
+  ([`13f14f8`](https://github.com/TimKleindick/general_manager/commit/13f14f8d95503cd0f348a7ad5a99649afce163e9))
+
+### Testing
+
+- Describe workflow transaction regressions
+  ([`73e952e`](https://github.com/TimKleindick/general_manager/commit/73e952e46db6f245e87a36dbe54112d9ca53a137))
+
+
 ## v0.81.2 (2026-10-04)
 
 ### Bug Fixes
