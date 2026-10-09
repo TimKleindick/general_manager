@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.82.0 (2026-10-09)
+
+### Bug Fixes
+
+- **graphql**: Map ORM identities consistently to ID
+  ([`5790045`](https://github.com/TimKleindick/general_manager/commit/579004579f44a8d181cc76af29dae6451349aa88))
+
+- **graphql**: Preserve native business identifier filters
+  ([`4b43294`](https://github.com/TimKleindick/general_manager/commit/4b43294546723346e6bef1064ac5d1254ae9bab9))
+
+
 ## v0.81.4 (2026-10-09)
 
 ### Bug Fixes
