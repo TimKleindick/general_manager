@@ -178,13 +178,13 @@ def data_change(
         transaction_scope: DataChangeTransactionScope | None = None
         transaction_outcome = "rolled_back"
         begin_dependency_data_change()
-        context = current_calculation_run_context()
-        if context is not None:
-            context.clear_orm_bucket_results()
-            context.clear_bucket_indexes()
-            context.clear_bucket_projections()
-            context.clear_trusted_orm_managers()
         try:
+            context = current_calculation_run_context()
+            if context is not None:
+                context.clear_orm_bucket_results()
+                context.clear_bucket_indexes()
+                context.clear_bucket_projections()
+                context.clear_trusted_orm_managers()
             transaction_context: AbstractContextManager[None]
             if not is_orm_backed:
                 transaction_context = nullcontext()

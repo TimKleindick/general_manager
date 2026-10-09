@@ -25,6 +25,7 @@ from general_manager.cache.cache_decorator import _SENTINEL
 from general_manager.cache.dependency_index import (
     DATA_CHANGE_COUNT_KEY,
     DATA_CHANGE_LOCK_KEY,
+    DATA_CHANGE_RECOVERY_KEY,
     DEPENDENCY_GENERATION_KEY,
     INDEX_KEY,
     LOCK_KEY,
@@ -49,6 +50,7 @@ _original_get_app: Callable[[str], AppConfig | None] = (
 _DEPENDENCY_COORDINATION_KEYS = {
     DATA_CHANGE_COUNT_KEY,
     DATA_CHANGE_LOCK_KEY,
+    DATA_CHANGE_RECOVERY_KEY,
     DEPENDENCY_GENERATION_KEY,
     INDEX_KEY,
     LOCK_KEY,

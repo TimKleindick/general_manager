@@ -533,6 +533,61 @@ class CachingTestCase(GeneralManagerTransactionTestCase):
             completion_at=timezone.make_aware(datetime(2024, 1, 20, 12, 0)),
         )
 
+    def test_partial_begin_retry_restores_real_mutation_and_cache_lifecycle(self):
+        """A failed barrier start never mutates ORM data; retry can cache again."""
+        from django.core.cache import caches
+        from general_manager.cache import dependency_index as index
+        from general_manager.cache.signals import (
+            data_change_transaction_started,
+            data_change_transaction_finished,
+        )
+
+        backend = caches["default"]
+        commercials = self.TestCommercials(project=self.project1)
+        prop = self.TestCommercials.Interface.get_graph_ql_properties()["budget_left"]
+        cache_key = make_cache_key(prop._get_cached_fget(), (commercials,), {})
+        self.assertEqual(commercials.budget_left, Measurement(800, "EUR"))
+        original_set = backend.set
+        failure = ConnectionError("injected barrier flag failure")
+        failed = False
+        lifecycle = []
+
+        def observe(sender, **kwargs):
+            lifecycle.append(kwargs)
+
+        def fail_once(key, value, timeout=None, version=None):
+            nonlocal failed
+            if key == index.DATA_CHANGE_LOCK_KEY and not failed:
+                failed = True
+                raise failure
+            return original_set(key, value, timeout, version)
+
+        data_change_transaction_started.connect(observe, weak=False)
+        data_change_transaction_finished.connect(observe, weak=False)
+        try:
+            with patch.object(backend, "set", side_effect=fail_once):
+                with self.assertRaises(ConnectionError) as caught:
+                    self.project1.update(
+                        actual_costs=Measurement(300, "EUR"), ignore_permission=True
+                    )
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(lifecycle, [])
+            self.project1._interface._instance.refresh_from_db()
+            self.assertEqual(self.project1.actual_costs, Measurement(200, "EUR"))
+            self.project1 = self.project1.update(
+                actual_costs=Measurement(300, "EUR"), ignore_permission=True
+            )
+        finally:
+            data_change_transaction_started.disconnect(observe)
+            data_change_transaction_finished.disconnect(observe)
+        self.assertEqual(len(lifecycle), 2)
+        self.assertEqual(lifecycle[-1]["outcome"], "committed")
+        self.assertFalse(index.is_dependency_data_change_active())
+        self.assertEqual(backend.get(index.DATA_CHANGE_COUNT_KEY), 0)
+        commercials = self.TestCommercials(project=self.project1)
+        self.assertEqual(commercials.budget_left, Measurement(700, "EUR"))
+        self.assertIsNotNone(backend.get(cache_key))
+
     def test_dependency_invalidation_enqueues_graphql_rewarm_cache_key(self):
         """Dependency invalidation enqueues the warmed GraphQL cache key."""
         commercials = self.TestCommercials(project=self.project1)
