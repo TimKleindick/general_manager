@@ -204,6 +204,9 @@ code values remain strings.
    `NOT_PROVIDED` no longer appears as a schema default, so a declaration such
    as `$budget: MeasurementScalar` must become `$budget: MeasurementScalar!`
    when the generated create argument is required, even if a value is supplied.
+6. If an older schema exposed a business field named `id` as an `ID` filter,
+   change equality and membership variables to its native scalar, such as
+   `Int` and `[Int]`. The existing filter operators remain available.
 
 The [identifier filter concept](../concepts/graphql/filters_pagination.md#identifier-filters)
 and [query patterns](../examples/graphql_queries.md#reuse-identifier-variables)

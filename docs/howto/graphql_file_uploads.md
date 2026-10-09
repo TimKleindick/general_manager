@@ -285,7 +285,7 @@ async function uploadAvatar(profileId, file) {
       updateProfile(id: $id, avatar: $token) {
         Profile { avatar { status downloadUrl expiresAt } }
       }
-    }`, {id: Number(profileId), token: begun.token})).updateProfile.Profile;
+    }`, {id: String(profileId), token: begun.token})).updateProfile.Profile;
 }
 ```
 

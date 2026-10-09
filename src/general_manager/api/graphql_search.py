@@ -526,6 +526,8 @@ def get_filter_options(
       filter generation can handle it separately.
     - Scalar identifiers marked in metadata: base, ``exact`` and ``in`` use
       ``ID``/``[ID]``; range variants retain the native scalar mapper.
+    - Other scalar fields named ``id`` retain their legacy ``exact``, ``in``
+      and range operators, using their native scalar types.
     - ``Measurement``: base attribute plus ``gt/gte/lt/lte`` using
       ``MeasurementScalar``.
     - numeric, date, and datetime types: base attribute plus
@@ -572,11 +574,34 @@ def get_filter_options(
 
     if manager_type is not None:
         yield attribute_name, None
-    elif attr_info and attr_info.get("is_identifier"):
-        yield attribute_name, graphene.ID()
-        yield f"{attribute_name}__exact", graphene.ID()
-        yield f"{attribute_name}__in", graphene.List(graphene.ID)
-        native_info = {k: v for k, v in attr_info.items() if k != "is_identifier"}
+    elif (attr_info and attr_info.get("is_identifier")) or (
+        attribute_name == "id" and not safe_issubclass(normalized_type, Measurement)
+    ):
+        # The legacy id filter operators also belong to business fields. Only
+        # explicit identity metadata selects ID; the name preserves operators.
+        is_identifier = bool(attr_info and attr_info.get("is_identifier"))
+        native_info = {
+            k: v for k, v in (attr_info or {}).items() if k != "is_identifier"
+        }
+        for option in (attribute_name, f"{attribute_name}__exact"):
+            yield (
+                option,
+                graphene.ID()
+                if is_identifier
+                else map_field_to_graphene_read(
+                    normalized_type, attribute_name, native_info
+                ),
+            )
+        graphql_scalar = native_info.get("graphql_scalar")
+        membership_type = (
+            graphene.ID
+            if is_identifier
+            else map_field_to_graphene_base_type(
+                normalized_type,
+                graphql_scalar if isinstance(graphql_scalar, str) else None,
+            )
+        )
+        yield f"{attribute_name}__in", graphene.List(membership_type)
         for option in ("gt", "gte", "lt", "lte"):
             yield (
                 f"{attribute_name}__{option}",
@@ -598,6 +623,8 @@ def get_filter_options(
         yield attribute_name, MeasurementScalar()
         for option in number_options:
             yield f"{attribute_name}__{option}", MeasurementScalar()
+        if attribute_name == "id":
+            yield f"{attribute_name}__in", graphene.List(MeasurementScalar)
     else:
         yield (
             attribute_name,

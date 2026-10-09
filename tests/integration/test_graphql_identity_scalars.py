@@ -308,6 +308,7 @@ class GraphQLIdentityScalarIntegrationTests(GeneralManagerTransactionTestCase):
         cls.UuidRecord = IdentityUuidRecord
         cls.CodeRecord = IdentityCodeRecord
         cls.IntegerRecord = IdentityIntegerRecord
+        cls.BigIntegerRecord = IdentityBigIntegerRecord
         cls.BusinessIdRecord = IdentityBusinessIdRecord
         cls.DefaultRelation = IdentityDefaultRelation
         cls.StringRecord = IdentityStringRecord
@@ -744,7 +745,9 @@ class GraphQLIdentityScalarIntegrationTests(GeneralManagerTransactionTestCase):
         self,
     ) -> None:
         for manager, suffix, pk in (
-            (self.IntegerRecord, "IdentityIntegerRecord", 2_147_483_648),
+            # Preserve each database field's native integer range.
+            (self.IntegerRecord, "IdentityIntegerRecord", 2_147_483_647),
+            (self.BigIntegerRecord, "IdentityBigIntegerRecord", 2_147_483_648),
             (self.StringRecord, "IdentityStringRecord", "STRING-PK"),
             (self.UuidRecord, "IdentityUuidRecord", uuid4()),
         ):
@@ -1023,6 +1026,9 @@ class GraphQLIdentityScalarIntegrationTests(GeneralManagerTransactionTestCase):
         self.BusinessIdRecord.Interface._model.objects.create(
             code="BUSINESS", id=23, name="Selected"
         )
+        self.BusinessIdRecord.Interface._model.objects.create(
+            code="OTHER", id=24, name="Excluded"
+        )
         schema = self._schema().graphql_schema
         fields = schema.get_type("IdentityBusinessIdRecordType").fields
         self.assertEqual(str(fields["id"].type), "Int")
@@ -1030,23 +1036,26 @@ class GraphQLIdentityScalarIntegrationTests(GeneralManagerTransactionTestCase):
         filters = self._filter_fields("identityBusinessIdRecordList")
         self.assertEqual(str(filters["id"].type), "Int")
         self.assertEqual(str(filters["id_Exact"].type), "Int")
+        self.assertEqual(str(filters["id_In"].type), "[Int]")
         values = {"id": "23", "id__exact": "23", "id__in": ["23"]}
         self.assertEqual(
             normalize_filter_input(self.BusinessIdRecord, values)["filter"], values
         )
         response = self.query(
             """
-            query($pk: ID!, $number: Int!) {
+            query($pk: ID!, $number: Int!, $numbers: [Int]) {
               detail: identityBusinessIdRecord(id: $pk) { code id name }
               filtered: identityBusinessIdRecordList(filter: {id_Exact: $number}) { items { code id name } }
+              inside: identityBusinessIdRecordList(filter: {id_In: $numbers}) { items { code id name } }
             }
             """,
-            variables={"pk": "BUSINESS", "number": 23},
+            variables={"pk": "BUSINESS", "number": 23, "numbers": [23]},
         )
         self.assertResponseNoErrors(response)
         expected = {"code": "BUSINESS", "id": 23, "name": "Selected"}
         self.assertEqual(response.json()["data"]["detail"], expected)
         self.assertEqual(response.json()["data"]["filtered"]["items"], [expected])
+        self.assertEqual(response.json()["data"]["inside"]["items"], [expected])
 
     def test_malformed_uuid_and_overlong_string_primary_keys_fail_without_writes(
         self,
