@@ -163,6 +163,9 @@ class TransactionCacheCoherenceTests(GeneralManagerTransactionTestCase):
 
     def test_one_writer_commit_cannot_release_another_writers_barrier(self):
         self.require_concurrent_database()
+        # Use separate existing rows so INSERT locks cannot serialize the writers.
+        first_row = self.Row.create(name="b", amount=0, ignore_permission=True)
+        second_row = self.Row.create(name="c", amount=0, ignore_permission=True)
         writer_started = Event()
         allow_commit = Event()
 
@@ -170,7 +173,7 @@ class TransactionCacheCoherenceTests(GeneralManagerTransactionTestCase):
             caches._connections.default = self.cache_backend
             try:
                 with transaction.atomic():
-                    self.Row.create(name="b", amount=1250, ignore_permission=True)
+                    first_row.update(amount=1250, ignore_permission=True)
                     writer_started.set()
                     # Stay pending through the second write and both bounded
                     # reader waits, even when a CI runner is slow.
@@ -185,7 +188,7 @@ class TransactionCacheCoherenceTests(GeneralManagerTransactionTestCase):
             try:
                 self.assertTrue(writer_started.wait(10))
                 with transaction.atomic():
-                    self.Row.create(name="c", amount=1250, ignore_permission=True)
+                    second_row.update(amount=1250, ignore_permission=True)
                     self.assertEqual(
                         pool.submit(self.read_on_separate_connection).result(10), 1250
                     )
