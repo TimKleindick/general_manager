@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.82.1 (2026-10-09)
+
+### Bug Fixes
+
+- **cache**: Retain native barriers until transaction completion
+  ([`78226e6`](https://github.com/TimKleindick/general_manager/commit/78226e6464e3eea95db7b3c3cae757d5ed3032b1))
+
+- **cache**: Settle released owners before run-cache cleanup
+  ([`ba7feee`](https://github.com/TimKleindick/general_manager/commit/ba7feee61b4268f4c78c0877d8748d8123476c50))
+
+### Documentation
+
+- **cache**: Qualify cleanup state after transport failures
+  ([`1b97fed`](https://github.com/TimKleindick/general_manager/commit/1b97fed92509cdc4e9f14a6b76ca1015ea360baa))
+
+### Testing
+
+- **cache**: Avoid insert contention between transaction writers
+  ([`5b794a5`](https://github.com/TimKleindick/general_manager/commit/5b794a5bb6369029c310a80b96cade4a98aeb53f))
+
+- **cache**: Keep concurrent writer pending through assertions
+  ([`b391660`](https://github.com/TimKleindick/general_manager/commit/b3916607c1f7a22344607eb0f281437e26f41c75))
+
+
 ## v0.82.0 (2026-10-09)
 
 ### Bug Fixes
