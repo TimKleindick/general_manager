@@ -2692,9 +2692,23 @@ def test_evidence_deadline_cancels_async_provider_and_keeps_resolved_evidence() 
     assert result.reasons["task_2"] == "deadline_exceeded"
 
 
-def test_closing_public_iterator_after_tool_call_cancels_in_flight_work() -> None:
+@pytest.mark.parametrize("startup_delay", [0.0, 0.3])
+def test_closing_public_iterator_after_tool_call_cancels_in_flight_work(
+    monkeypatch: pytest.MonkeyPatch, startup_delay: float
+) -> None:
     """Removing generator-close cleanup leaks provider and tool work after disconnect."""
 
+    original_complete = _DeadlineProbeProvider.complete
+
+    async def delayed_complete(
+        self: _DeadlineProbeProvider, messages: list[object], tools: list[object]
+    ) -> AsyncIterator[ToolCallEvent | TextChunkEvent | DoneEvent]:
+        if startup_delay:
+            await asyncio.sleep(startup_delay)
+        async for event in original_complete(self, messages, tools):
+            yield event
+
+    monkeypatch.setattr(_DeadlineProbeProvider, "complete", delayed_complete)
     _DeadlineProbeProvider.entered = asyncio.Event()
     _DeadlineProbeProvider.release = asyncio.Event()
     _DeadlineProbeProvider.allow_resolve = asyncio.Event()
@@ -2708,11 +2722,13 @@ def test_closing_public_iterator_after_tool_call_cancels_in_flight_work() -> Non
     )
 
     async def run() -> None:
+        tool_entered = asyncio.Event()
         tool_cancelled = asyncio.Event()
 
         async def run_sync(
             _fn: Any, _args: tuple[Any, ...], _kwargs: dict[str, Any]
         ) -> Any:
+            tool_entered.set()
             try:
                 await asyncio.Future()
             except asyncio.CancelledError:
@@ -2731,13 +2747,18 @@ def test_closing_public_iterator_after_tool_call_cancels_in_flight_work() -> Non
                 ),
             ),
         )
-        event = await asyncio.wait_for(iterator.__anext__(), timeout=0.2)
+        # Startup is synchronization, not a latency contract or evidence deadline.
+        event = await asyncio.wait_for(iterator.__anext__(), timeout=5.0)
         assert event["type"] == "tool_call"
         entered = _DeadlineProbeProvider.entered
         assert entered is not None
-        await asyncio.wait_for(entered.wait(), timeout=0.2)
-        await iterator.aclose()
-        await iterator.aclose()
+        await asyncio.wait_for(
+            asyncio.gather(entered.wait(), tool_entered.wait()), timeout=5.0
+        )
+        assert not tool_cancelled.is_set()
+        assert _DeadlineProbeProvider.cancelled is False
+        await asyncio.wait_for(iterator.aclose(), timeout=5.0)
+        await asyncio.wait_for(iterator.aclose(), timeout=5.0)
 
         assert tool_cancelled.is_set()
         assert _DeadlineProbeProvider.cancelled is True
