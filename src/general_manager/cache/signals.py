@@ -123,6 +123,11 @@ def data_change(
             is_dependency_data_change_active,
         )
         from general_manager.cache.run_context import current_calculation_run_context
+        from general_manager.cache.transaction_barrier import (
+            collect_transaction_rewarm_keys,
+            flush_transaction_rewarm_keys,
+            hold_dependency_transaction_barrier,
+        )
         from general_manager.interface.orm_interface import OrmInterfaceBase
         from general_manager.manager.bulk_create import (
             CreateManyUnsupportedError,
@@ -179,6 +184,8 @@ def data_change(
         transaction_outcome = "rolled_back"
         begin_dependency_data_change()
         try:
+            if is_orm_backed:
+                hold_dependency_transaction_barrier(database_alias)
             context = current_calculation_run_context()
             if context is not None:
                 context.clear_orm_bucket_results()
@@ -294,6 +301,8 @@ def data_change(
                         sender=sender,
                         **lifecycle_kwargs,
                     )
+                if is_orm_backed:
+                    collect_transaction_rewarm_keys(database_alias, completed=True)
             if transaction_scope is not None and transaction_scope.is_outermost:
                 transaction_outcome = "committed"
             completed = True
@@ -333,8 +342,15 @@ def data_change(
                     raise
             finally:
                 try:
+                    collected = is_orm_backed and collect_transaction_rewarm_keys(
+                        database_alias, completed=completed
+                    )
                     if not is_dependency_data_change_active():
-                        cache_keys = drain_invalidated_cache_keys_for_graphql_rewarm()
+                        if not collected:
+                            cache_keys = (
+                                drain_invalidated_cache_keys_for_graphql_rewarm()
+                            )
+                        flush_transaction_rewarm_keys()
                 except Exception:
                     if primary_exc is not None:
                         logger.exception(
@@ -355,9 +371,10 @@ def data_change(
 
     @wraps(decorator_source)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        from general_manager.cache.dependency_index import dependency_rewarm_scope
         from general_manager.manager.bulk_create import create_many_signal_scope
 
-        with create_many_signal_scope():
+        with create_many_signal_scope(), dependency_rewarm_scope():
             return perform_change(*args, **kwargs)
 
     return wrapper

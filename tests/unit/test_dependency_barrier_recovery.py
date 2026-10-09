@@ -578,3 +578,87 @@ def test_applied_commit_delete_and_read_failure_restores_snapshot(barrier_cache)
     assert barrier_cache.get(index.DATA_CHANGE_COUNT_KEY) == 0
     assert not index.is_dependency_data_change_active()
     publish_current_value()
+
+
+def test_end_fences_computations_started_inside_barrier(barrier_cache):
+    started = index.begin_dependency_data_change()
+    index.end_dependency_data_change()
+    assert index.get_dependency_generation() > started
+    with pytest.raises(CachePublishAborted):
+        publish_dependency_cache_entry(
+            cache_key="old-transaction-result",
+            result=1250,
+            dependencies=(),
+            cache_backend=barrier_cache,
+            timeout=60,
+            started_generation=started,
+        )
+
+
+@pytest.mark.parametrize(
+    "failed_key", [index.DATA_CHANGE_COUNT_KEY, index.DATA_CHANGE_RECOVERY_KEY]
+)
+@pytest.mark.parametrize("applied", [False, True])
+def test_owned_end_retry_preserves_another_writer(barrier_cache, failed_key, applied):
+    index.begin_dependency_data_change(owner="writer-a")
+    index.begin_dependency_data_change(owner="writer-b")
+    original_set = barrier_cache.set
+    failed = False
+    failure = ConnectionError("owned end failure")
+
+    def fail_once(key, value, timeout=None, version=None):
+        nonlocal failed
+        if key == failed_key and not failed:
+            failed = True
+            if applied:
+                original_set(key, value, timeout, version)
+            raise failure
+        return original_set(key, value, timeout, version)
+
+    with patch.object(barrier_cache, "set", side_effect=fail_once):
+        with pytest.raises(ConnectionError):
+            index.end_dependency_data_change(owner="writer-a")
+    index.end_dependency_data_change(owner="writer-a")
+    assert barrier_cache.get(index.DATA_CHANGE_COUNT_KEY) == 1
+    assert index.is_dependency_data_change_active()
+    index.end_dependency_data_change(owner="writer-b")
+    assert not index.is_dependency_data_change_active()
+    publish_current_value()
+
+
+def test_committed_rewarm_queue_is_claimed_after_the_last_writer(barrier_cache):
+    index.begin_dependency_data_change(owner="writer-a")
+    index.begin_dependency_data_change(owner="writer-b")
+    index.record_committed_graphql_rewarm_keys(("recipe-a",))
+    index.end_dependency_data_change(owner="writer-a")
+    assert index.drain_committed_graphql_rewarm_keys() == ()
+    index.record_committed_graphql_rewarm_keys(("recipe-b",))
+    index.end_dependency_data_change(owner="writer-b")
+    assert index.drain_committed_graphql_rewarm_keys() == ("recipe-a", "recipe-b")
+    assert index.drain_committed_graphql_rewarm_keys() == ()
+
+
+@pytest.mark.parametrize("applied", [False, True])
+def test_failed_owned_begin_restores_existing_owner(barrier_cache, applied):
+    index.begin_dependency_data_change(owner="existing-writer")
+    original_set = barrier_cache.set
+    failure = ConnectionError("owned begin metadata failure")
+    failed = False
+
+    def fail_once(key, value, timeout=None, version=None):
+        nonlocal failed
+        if key == index.DATA_CHANGE_OWNERS_KEY and not failed:
+            failed = True
+            if applied:
+                original_set(key, value, timeout, version)
+            raise failure
+        return original_set(key, value, timeout, version)
+
+    with patch.object(barrier_cache, "set", side_effect=fail_once):
+        with pytest.raises(ConnectionError):
+            index.begin_dependency_data_change(owner="failed-writer")
+    index.end_dependency_data_change(owner="failed-writer")
+    assert barrier_cache.get(index.DATA_CHANGE_COUNT_KEY) == 1
+    assert index.is_dependency_data_change_active()
+    index.end_dependency_data_change(owner="existing-writer")
+    assert not index.is_dependency_data_change_active()

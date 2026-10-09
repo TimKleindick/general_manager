@@ -220,13 +220,13 @@ class TestDependencyGenerationAndBarrier(TestCase):
         self.assertFalse(is_dependency_data_change_active())
         self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 0)
 
-    def test_end_data_change_releases_barrier_without_changing_generation(self):
+    def test_end_data_change_releases_barrier_and_fences_inflight_reads(self):
         begin_dependency_data_change()
 
         end_dependency_data_change()
 
         self.assertFalse(is_dependency_data_change_active())
-        self.assertEqual(get_dependency_generation(), 1)
+        self.assertEqual(get_dependency_generation(), 2)
 
     def test_create_data_change_owns_generation_and_barrier_lifecycle(self):
         class Example:
@@ -238,7 +238,7 @@ class TestDependencyGenerationAndBarrier(TestCase):
         result = Example.create()
 
         self.assertIsNotNone(result)
-        self.assertEqual(get_dependency_generation(), 1)
+        self.assertEqual(get_dependency_generation(), 2)
         self.assertFalse(is_dependency_data_change_active())
         self.assertEqual(cache.get(DATA_CHANGE_COUNT_KEY), 0)
 

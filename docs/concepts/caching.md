@@ -43,11 +43,40 @@ child also leaves surviving parents' original dependency snapshots intact.
 
 CRUD methods (`create`, `update`, `delete`) emit invalidation signals. The dependency index compares the recorded dependencies against the before/after state of the changed manager and removes only the affected cache keys.
 During each `@data_change` mutation, GeneralManager opens a dependency-cache
-publish barrier before the mutation and closes it afterwards. Nested mutations
-keep the barrier active until the outermost mutation exits. Invalidated GraphQL
-warm-up cache keys collected by signal handlers are drained and enqueued only
-after that outermost barrier is closed, so warm-up work never starts while a
-data change is still active.
+publish barrier before the mutation and advances the generation again before
+closing it. This rejects a calculation that reads old committed rows during a
+write but only finishes publishing after the write completes.
+
+For native ORM writes inside an outer database transaction, including both
+`create_many()` paths, GeneralManager retains an additional owned barrier on
+the writing connection until the actual commit, rollback, or connection close.
+Savepoint release and rollback leave this barrier active until the outer
+transaction completes. Other connections may continue reading committed data,
+but dependency-cache publication remains paused. Autocommit mutations require
+no caller-managed cleanup, adapter, or commit-refresh helper.
+
+The connection's commit and rollback methods complete cache cleanup before
+commit callbacks run. A cache error after successful SQL commit does not turn
+the committed write into a failed database commit or discard its callbacks;
+cleanup retries when autocommit is restored. Rollback and actual connection
+close discard pending warm-up work. An in-memory SQLite `close()` that leaves the database connection
+open also leaves its transaction barrier active. Completion clears run-local
+ORM results and dependency-cache state. Cache transport failures retain a
+recoverable journal and owner identity, so retrying cleanup cannot release a
+different writer's barrier. A later native write or connection completion retries
+pending cleanup. Process termination cannot run connection cleanup.
+Completion restores the original commit, rollback, and savepoint methods.
+The completion setter and close hook remain until autocommit is restored or
+the connection actually closes, then all connection hooks are removed.
+
+Invalidated GraphQL warm-up keys use savepoint-aware commit callbacks for
+eligibility. Rolled-back savepoints and failed mutations do not enqueue their
+work. Committed keys wait in the shared cache until the final publication
+barrier closes, so another connection or worker can dispatch them safely.
+Dispatch waits for autocommit restoration so eager warm-up cannot open a new
+SQL transaction while Django is completing the previous one. Work retained
+through a connection close can also be dispatched by the next safe writer.
+These optional callbacks own no barrier; discarding them cannot leak one.
 
 ## ORM transaction lifecycle consumers
 
