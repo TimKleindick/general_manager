@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.81.4 (2026-10-09)
+
+### Bug Fixes
+
+- Recover partial dependency cache barrier starts
+  ([`0c7656c`](https://github.com/TimKleindick/general_manager/commit/0c7656cad0cede65ff21c3259c3897bbbb94fb87))
+
+
 ## v0.81.3 (2026-10-09)
 
 ### Bug Fixes
