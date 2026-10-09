@@ -7,7 +7,8 @@ import random
 from threading import Event, Thread
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime
 from time import perf_counter
@@ -73,6 +74,9 @@ _pending_graphql_rewarm_cache_keys: ContextVar[frozenset[str]] = ContextVar(
     "general_manager_pending_graphql_rewarm_cache_keys",
     default=frozenset(),
 )
+_dependency_rewarm_scope_depth: ContextVar[int] = ContextVar(
+    "general_manager_dependency_rewarm_scope_depth", default=0
+)
 
 
 class DependencyLockTimeoutError(TimeoutError):
@@ -118,6 +122,8 @@ DEPENDENCY_GENERATION_KEY = "dependency_index_generation"
 DATA_CHANGE_LOCK_KEY = "dependency_index_data_change_lock"
 DATA_CHANGE_COUNT_KEY = "dependency_index_data_change_count"
 DATA_CHANGE_RECOVERY_KEY = "dependency_index_data_change_recovery"
+DATA_CHANGE_OWNERS_KEY = "dependency_index_data_change_owners"
+COMMITTED_GRAPHQL_REWARM_KEY = "dependency_index_committed_graphql_rewarm"
 LOCK_TIMEOUT = 5  # Lock TTL in seconds
 UNDEFINED = object()  # Sentinel for undefined values
 ACTIONS: tuple[Literal["filter"], Literal["exclude"]] = ("filter", "exclude")
@@ -241,6 +247,15 @@ def _set_dependency_data_change_count(count: int) -> int:
     return count
 
 
+def _get_dependency_data_change_owners() -> frozenset[str]:
+    owners = cache.get(DATA_CHANGE_OWNERS_KEY, frozenset())
+    if not isinstance(owners, frozenset) or not all(
+        isinstance(owner, str) for owner in owners
+    ):
+        raise DependencyBarrierStateError("journal")
+    return owners
+
+
 def _discard_active_context_dependency_cache_state() -> None:
     from general_manager.cache.run_context import current_calculation_run_context
 
@@ -304,10 +319,21 @@ def _clear_data_change_recovery(
 
 
 def _prepare_data_change_recovery(
-    token: DependencyLockToken, count: int, flag: object
+    token: DependencyLockToken,
+    count: int,
+    flag: object,
+    owners: frozenset[str],
+    generation: int | None = None,
 ) -> dict[str, object]:
     _require_data_change_lock_owner(token)
-    recovery: dict[str, object] = {"owner": token, "count": count, "flag": flag}
+    recovery: dict[str, object] = {
+        "owner": token,
+        "count": count,
+        "flag": flag,
+        "owners": owners,
+    }
+    if generation is not None:
+        recovery["generation"] = generation
     cache.set(DATA_CHANGE_RECOVERY_KEY, recovery, None)
     _verify_data_change_cache_value(DATA_CHANGE_RECOVERY_KEY, recovery)
     return recovery
@@ -321,6 +347,24 @@ def _recover_data_change_barrier(token: DependencyLockToken) -> None:
     # previous snapshot never overwrites a later operation's active barrier.
     if not isinstance(recovery, dict) or not isinstance(recovery.get("count"), int):
         raise DependencyBarrierStateError("journal")
+    generation = recovery.get("generation")
+    if generation is not None:
+        if not isinstance(generation, int):
+            raise DependencyBarrierStateError("journal")
+        _require_data_change_lock_owner(token)
+        generation = max(get_dependency_generation(), generation)
+        _set_dependency_generation(generation)
+        _verify_data_change_cache_value(DEPENDENCY_GENERATION_KEY, generation)
+    # Older journals have no owner set. Retain compatibility with #519 recovery.
+    if "owners" in recovery:
+        owners = recovery["owners"]
+        if not isinstance(owners, frozenset) or not all(
+            isinstance(owner, str) for owner in owners
+        ):
+            raise DependencyBarrierStateError("journal")
+        _require_data_change_lock_owner(token)
+        cache.set(DATA_CHANGE_OWNERS_KEY, owners, None)
+        _verify_data_change_cache_value(DATA_CHANGE_OWNERS_KEY, owners)
     _require_data_change_lock_owner(token)
     count = recovery["count"]
     _set_dependency_data_change_count(count)
@@ -359,7 +403,7 @@ def _release_data_change_lock(token: DependencyLockToken) -> None:
         logger.exception("dependency data-change mutex release failed")
 
 
-def begin_dependency_data_change() -> int:
+def begin_dependency_data_change(*, owner: str | None = None) -> int:
     """Open a publish barrier, preserving a recoverable pre-begin snapshot.
 
     Failed starts restore only their own count/flag under the mutex. If cleanup
@@ -375,8 +419,11 @@ def begin_dependency_data_change() -> int:
         _recover_data_change_barrier(lock_token)
         count = _get_dependency_data_change_count()
         flag = cache.get(DATA_CHANGE_LOCK_KEY)
-        recovery = {"owner": lock_token, "count": count, "flag": flag}
-        _prepare_data_change_recovery(lock_token, count, flag)
+        owners = _get_dependency_data_change_owners()
+        if owner is not None and owner in owners:
+            return get_dependency_generation()
+        recovery = {"owner": lock_token, "count": count, "flag": flag, "owners": owners}
+        _prepare_data_change_recovery(lock_token, count, flag, owners)
         _require_data_change_lock_owner(lock_token)
         generation = _set_dependency_generation(get_dependency_generation() + 1)
         _verify_data_change_cache_value(DEPENDENCY_GENERATION_KEY, generation)
@@ -386,6 +433,10 @@ def begin_dependency_data_change() -> int:
         _require_data_change_lock_owner(lock_token)
         cache.set(DATA_CHANGE_LOCK_KEY, "1", None)
         _verify_data_change_cache_value(DATA_CHANGE_LOCK_KEY, "1")
+        if owner is not None:
+            _require_data_change_lock_owner(lock_token)
+            cache.set(DATA_CHANGE_OWNERS_KEY, owners | {owner}, None)
+            _verify_data_change_cache_value(DATA_CHANGE_OWNERS_KEY, owners | {owner})
         _discard_active_context_dependency_cache_state()
         _clear_data_change_recovery(lock_token, recovery)
     except Exception:
@@ -400,18 +451,35 @@ def begin_dependency_data_change() -> int:
     return generation
 
 
-def end_dependency_data_change() -> None:
-    """Close one barrier, journaling its completed operation for forward recovery."""
+def end_dependency_data_change(*, owner: str | None = None) -> None:
+    """Fence in-flight calculations and close one barrier with forward recovery.
+
+    Owned ends are idempotent, including when cache writes applied then raised.
+    A retry completes the journal before checking ownership, so it cannot
+    decrement another transaction's barrier.
+    """
     if isinstance(caches["default"], DummyCache):
         return
     lock_token = acquire_lock_with_retry("end_dependency_data_change")
     recovery: dict[str, object] | None = None
     try:
         _recover_data_change_barrier(lock_token)
+        owners = _get_dependency_data_change_owners()
+        if owner is not None and owner not in owners:
+            return
+        if owner is not None:
+            owners = owners - {owner}
         count = max(_get_dependency_data_change_count() - 1, 0)
         flag = "1" if count else None
-        recovery = {"owner": lock_token, "count": count, "flag": flag}
-        _prepare_data_change_recovery(lock_token, count, flag)
+        generation = get_dependency_generation() + 1
+        recovery = {
+            "owner": lock_token,
+            "count": count,
+            "flag": flag,
+            "owners": owners,
+            "generation": generation,
+        }
+        _prepare_data_change_recovery(lock_token, count, flag, owners, generation)
         _recover_data_change_barrier(lock_token)
     except Exception:
         if recovery is not None:
@@ -447,6 +515,50 @@ def drain_invalidated_cache_keys_for_graphql_rewarm() -> tuple[str, ...]:
     cache_keys = tuple(sorted(_pending_graphql_rewarm_cache_keys.get()))
     _pending_graphql_rewarm_cache_keys.set(frozenset())
     return cache_keys
+
+
+def record_committed_graphql_rewarm_keys(cache_keys: Iterable[str]) -> None:
+    """Share committed work with the process that closes the final barrier."""
+    keys = frozenset(cache_keys)
+    if not keys:
+        return
+    token = acquire_lock_with_retry("record_committed_graphql_rewarm_keys")
+    try:
+        existing = cache.get(COMMITTED_GRAPHQL_REWARM_KEY, frozenset())
+        cache.set(COMMITTED_GRAPHQL_REWARM_KEY, existing | keys, None)
+    finally:
+        release_lock(token)
+
+
+def drain_committed_graphql_rewarm_keys() -> tuple[str, ...]:
+    """Claim committed keys only when no writer is pausing publication."""
+    if not cache.get(COMMITTED_GRAPHQL_REWARM_KEY):
+        return ()
+    token = acquire_lock_with_retry("drain_committed_graphql_rewarm_keys")
+    try:
+        if is_dependency_data_change_active():
+            return ()
+        keys = tuple(sorted(cache.get(COMMITTED_GRAPHQL_REWARM_KEY, frozenset())))
+        cache.delete(COMMITTED_GRAPHQL_REWARM_KEY)
+        return keys
+    finally:
+        release_lock(token)
+
+
+@contextmanager
+def dependency_rewarm_scope() -> Iterator[None]:
+    """Isolate a mutation's keys from enclosing writes on other connections."""
+    depth = _dependency_rewarm_scope_depth.get()
+    scope_token = _dependency_rewarm_scope_depth.set(depth + 1)
+    token = _pending_graphql_rewarm_cache_keys.set(frozenset()) if depth else None
+    try:
+        yield
+    finally:
+        if token is not None:
+            remaining = _pending_graphql_rewarm_cache_keys.get()
+            _pending_graphql_rewarm_cache_keys.reset(token)
+            record_invalidated_cache_keys_for_graphql_rewarm(remaining)
+        _dependency_rewarm_scope_depth.reset(scope_token)
 
 
 def acquire_lock_with_retry(operation: str) -> DependencyLockToken:

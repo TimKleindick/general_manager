@@ -920,7 +920,7 @@ class ExcelDependencyCacheInvalidationTests(TempPathMixin, SimpleTestCase):
 
             Product.sync_excel()
 
-            self.assertEqual(get_dependency_generation(), generation + 1)
+            self.assertEqual(get_dependency_generation(), generation + 2)
             self.assertTrue(is_dependency_data_change_active())
         finally:
             while is_dependency_data_change_active():

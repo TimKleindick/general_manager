@@ -1,7 +1,7 @@
 """Tests for data-change signal dispatch and dependency-cache cleanup."""
 
 from django.db import DEFAULT_DB_ALIAS
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.dispatch import Signal
 from contextlib import contextmanager
 from typing import ClassVar
@@ -193,7 +193,7 @@ class ClassMethodWrappedDummy:
         return ClassMethodWrappedDummy()
 
 
-class DataChangeSignalTests(TestCase):
+class DataChangeSignalTests(TransactionTestCase):
     """Verify data-change signal dispatch and cleanup behavior."""
 
     def setUp(self):

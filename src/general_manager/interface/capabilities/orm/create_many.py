@@ -286,12 +286,17 @@ class OrmCreateManyCapability(BaseCapability):
                             if use_bulk_sql:
                                 from general_manager.cache.dependency_index import (
                                     begin_dependency_data_change,
+                                    dependency_rewarm_scope,
                                     drain_invalidated_cache_keys_for_graphql_rewarm,
                                     end_dependency_data_change,
                                     is_dependency_data_change_active,
                                 )
                                 from general_manager.cache.run_context import (
                                     current_calculation_run_context,
+                                )
+                                from general_manager.cache.transaction_barrier import (
+                                    collect_transaction_rewarm_keys,
+                                    hold_dependency_transaction_barrier,
                                 )
                                 from general_manager.cache.batch_refresh import (
                                     flush_batch_refresh_callbacks,
@@ -302,9 +307,15 @@ class OrmCreateManyCapability(BaseCapability):
 
                                 run_context = current_calculation_run_context()
                                 bulk_succeeded = False
-                                with create_many_signal_scope():
+                                with (
+                                    create_many_signal_scope(),
+                                    dependency_rewarm_scope(),
+                                ):
                                     begin_dependency_data_change()
                                     try:
+                                        hold_dependency_transaction_barrier(
+                                            database_alias
+                                        )
                                         if run_context is not None:
                                             run_context.clear_orm_bucket_results()
                                             run_context.clear_bucket_indexes()
@@ -347,9 +358,13 @@ class OrmCreateManyCapability(BaseCapability):
                                             run_context.clear_bucket_projections()
                                             run_context.clear_trusted_orm_managers()
                                         end_dependency_data_change()
+                                        collected = collect_transaction_rewarm_keys(
+                                            database_alias, completed=bulk_succeeded
+                                        )
                                         cache_keys = (
                                             drain_invalidated_cache_keys_for_graphql_rewarm()
-                                            if not is_dependency_data_change_active()
+                                            if not collected
+                                            and not is_dependency_data_change_active()
                                             else ()
                                         )
                                         if bulk_succeeded and cache_keys:
