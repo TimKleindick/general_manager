@@ -55,13 +55,22 @@ class _TransactionBarrier:
         # transport failure followed an applied decrement.
         try:
             end_dependency_data_change(owner=self.owner)
-        finally:
-            _clear_transaction_run_cache()
+        except BaseException:
+            try:
+                _clear_transaction_run_cache()
+            except BaseException:
+                logger.exception("Transaction run-cache cleanup failed.")
+            raise
+        # Ownership reflects the shared barrier, independently of fallible
+        # run-local cleanup. A released owner must not block the next write.
         self.owner = None
         self.release_pending = False
         self.completion_committed = None
-        if self.restore_hooks is not None:
-            self.restore_hooks(False)
+        try:
+            _clear_transaction_run_cache()
+        finally:
+            if self.restore_hooks is not None:
+                self.restore_hooks(False)
 
 
 def _install_completion_hooks(connection: BaseDatabaseWrapper) -> _TransactionBarrier:
