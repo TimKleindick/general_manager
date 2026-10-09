@@ -128,6 +128,11 @@ and cannot represent UUID or string keys. Native business scalars and range
 variables retain their existing types. See the [migration steps and input
 configuration](../howto/expose_via_graphql.md#filter-by-identifier).
 
+For a business field named `id` that older schemas incorrectly classified as
+an identifier, use its native scalar for equality and membership variables,
+such as `Int` and `[Int]`. Its existing `exact`, `in`, and range filter operators
+remain available; the field name alone does not select `ID`.
+
 Check required create arguments as well: removing `NOT_PROVIDED` from schema
 defaults means a required field without a real default requires a non-null
 variable declaration, such as `$budget: MeasurementScalar!`, even when the

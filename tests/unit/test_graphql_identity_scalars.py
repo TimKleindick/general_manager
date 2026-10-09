@@ -10,7 +10,7 @@ from django.db import models
 from django.test.utils import isolate_apps
 from graphql import GraphQLInputObjectType, Undefined, get_named_type
 
-from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql import BigIntScalar, GraphQL
 from general_manager.api.graphql_identifiers import build_identification_arguments
 from general_manager.api.graphql_mutations import create_write_fields
 from general_manager.api.graphql_search import get_filter_options
@@ -22,6 +22,7 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.api.mutation import _build_manager_argument_field
+from general_manager.measurement.measurement import Measurement
 
 
 @pytest.mark.parametrize(
@@ -87,6 +88,76 @@ def test_ordinary_django_integer_with_id_like_name_retains_int_metadata() -> Non
     )
     assert isinstance(options["external_id__exact"], graphene.Int)
     assert descriptors["amount"].metadata["graphql_scalar"] == "bigint"
+
+
+@pytest.mark.parametrize(
+    ("native_field", "python_type", "graphene_type"),
+    [
+        (models.IntegerField(), int, graphene.Int),
+        (models.BigIntegerField(), int, BigIntScalar),
+        (models.UUIDField(), UUID, graphene.String),
+    ],
+    ids=["int", "bigint-override", "uuid"],
+)
+def test_native_business_id_preserves_exact_in_and_range_filter_operators(
+    native_field: models.Field, python_type: type, graphene_type: type
+) -> None:
+    with isolate_apps():
+        model = type(
+            "NativeBusinessIdMetadataRecord",
+            (models.Model,),
+            {
+                "__module__": "general_manager.models",
+                "code": models.CharField(primary_key=True, max_length=32),
+                "id": native_field,
+                "Meta": type("Meta", (), {"app_label": "general_manager"}),
+            },
+        )
+        metadata = build_field_descriptors(SimpleNamespace(_model=model))["id"].metadata
+
+    assert not metadata.get("is_identifier")
+    if graphene_type is BigIntScalar:
+        assert metadata["graphql_scalar"] == "bigint"
+    options = dict(
+        get_filter_options(
+            python_type, "id", GraphQL._map_field_to_graphene_filter_input, metadata
+        )
+    )
+    assert isinstance(options["id"], graphene_type)
+    assert isinstance(options["id__exact"], graphene_type)
+    assert options["id__in"].of_type is graphene_type
+    for operator in ("gt", "gte", "lt", "lte"):
+        assert isinstance(options[f"id__{operator}"], graphene_type)
+
+
+def test_native_measurement_id_filters_build_valid_scalar_input_schema() -> None:
+    metadata = {
+        "type": Measurement,
+        "is_required": False,
+        "is_editable": False,
+        "is_derived": False,
+        "default": None,
+    }
+    options = dict(
+        get_filter_options(
+            Measurement, "id", GraphQL._map_field_to_graphene_filter_input, metadata
+        )
+    )
+    filter_type = type(
+        "NativeMeasurementIdFilter", (graphene.InputObjectType,), options
+    )
+
+    class Query(graphene.ObjectType):
+        value = graphene.String(filter=graphene.Argument(filter_type))
+
+    schema = graphene.Schema(query=Query)
+    fields = get_named_type(
+        schema.graphql_schema.query_type.fields["value"].args["filter"].type
+    ).fields
+    assert str(fields["id"].type) == "MeasurementScalar"
+    assert str(fields["id_In"].type) == "[MeasurementScalar]"
+    for operator in ("Exact", "Gt", "Gte", "Lt", "Lte"):
+        assert str(fields[f"id_{operator}"].type) == "MeasurementScalar"
 
 
 def test_string_primary_key_preserves_native_pattern_filter_operators() -> None:
