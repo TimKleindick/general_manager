@@ -808,6 +808,39 @@ mutations still drain pending rewarm keys after the outermost barrier closes,
 but enqueueing runs only for completed mutations. GraphQL warm-up enqueue errors
 are logged and suppressed.
 
+A failed barrier start restores the count and publication flag that existed
+before that start, including any other active mutations. The dependency generation
+is never rolled back after it advances: computations from an older generation
+remain fenced.
+Recovery is journaled in the coordination cache before its state writes. If rollback
+also fails, publication stays blocked and the next fresh mutation's begin/end
+finishes that recovery under the dependency mutex before changing the count.
+Journaled ends recover forward, so a recoverable cleanup error does not retain
+a finished mutation's count. Cleanup errors after a completed mutation do not undo that
+mutation; subsequent recovery does not repeat it. Callers retry a failed start
+through the normal framework API;
+they must not issue unmatched ends or edit internal cache keys.
+
+Errors from state writes and run-context cleanup propagate with the original
+exception; secondary rollback and mutex-release errors are logged. A journal-delete
+error after a verified applied delete is logged and treated as a successful start,
+so the caller still owns a balanced lifecycle. A silently dropped write is rejected
+by reading back the stored value; `set()` returning `None` is normal on Django
+backends and is not itself an error. Django's `DummyCache` continues to disable
+coordination without blocking mutations.
+
+This recovery requires a shared, reliably readable coordination cache and all
+mutation workers using the same protocol. Configure Redis coordination reads to
+use the primary, rather than lagging read replicas. LocMem recovery is confined to
+one process; file-cache tests do not imply atomic cross-process lock acquisition.
+Ownership checks prevent writes after an observed mutex takeover, while Django's
+generic API still provides no atomic check-and-write guarantee across lease expiry.
+Cache eviction/flush, process termination, simultaneous journal-finalization,
+readback and rollback outages, and persistent failure to record an end recovery
+target are outside this exception-recovery guarantee. End recovery requires
+acquiring the mutex and recording its target; an acquisition failure before that
+point has no journal to recover.
+
 ### ORM data-change transaction lifecycle
 
 ORM-backed `@data_change` mutations expose one transaction lifecycle envelope

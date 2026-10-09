@@ -14,6 +14,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Tuple, Type, cast
 
 from django.core.cache import cache, caches
+from django.core.cache.backends.dummy import DummyCache
 from django.db import DEFAULT_DB_ALIAS
 from django.dispatch import receiver
 
@@ -116,6 +117,7 @@ LOCK_KEY = "dependency_index_lock"  # Cache key used for the dependency lock
 DEPENDENCY_GENERATION_KEY = "dependency_index_generation"
 DATA_CHANGE_LOCK_KEY = "dependency_index_data_change_lock"
 DATA_CHANGE_COUNT_KEY = "dependency_index_data_change_count"
+DATA_CHANGE_RECOVERY_KEY = "dependency_index_data_change_recovery"
 LOCK_TIMEOUT = 5  # Lock TTL in seconds
 UNDEFINED = object()  # Sentinel for undefined values
 ACTIONS: tuple[Literal["filter"], Literal["exclude"]] = ("filter", "exclude")
@@ -247,49 +249,187 @@ def _discard_active_context_dependency_cache_state() -> None:
         context.discard_dependency_cache_state()
 
 
-def begin_dependency_data_change() -> int:
-    """
-    Mark a data change as active and bump the dependency generation.
+class DependencyBarrierStateError(RuntimeError):
+    """Raised when a cache barrier write or mutex ownership cannot be verified."""
 
-    The generation bump happens before the underlying mutation, so computations
-    that started before the mutation cannot publish dependency-scoped values.
-    """
-    lock_token = acquire_lock_with_retry("begin_dependency_data_change")
+    def __init__(self, reason: Literal["ownership", "write", "journal"]) -> None:
+        detail = {
+            "ownership": "mutex ownership lost",
+            "write": "cache write failed",
+            "journal": "invalid recovery journal",
+        }[reason]
+        super().__init__(
+            f"Dependency data-change state could not be verified: {detail}."
+        )
+
+
+def _require_data_change_lock_owner(token: DependencyLockToken) -> None:
+    if cache.get(LOCK_KEY) != token:
+        raise DependencyBarrierStateError("ownership")
+
+
+def _verify_data_change_cache_value(key: str, value: object) -> None:
+    # Django backends return None, True or False from set(); read the stored
+    # value rather than mistaking a valid None return for a failed write.
+    if cache.get(key) != value:
+        raise DependencyBarrierStateError("write")
+
+
+def _clear_data_change_recovery(
+    token: DependencyLockToken, recovery: dict[str, object]
+) -> None:
+    _require_data_change_lock_owner(token)
+    _verify_data_change_cache_value(DATA_CHANGE_RECOVERY_KEY, recovery)
+    _require_data_change_lock_owner(token)
+    # django-types currently annotates delete() as None, whereas Django
+    # documents and implements a boolean acknowledgement.
+    cache_delete = cast(Callable[[str], bool], cache.delete)
     try:
-        generation = _set_dependency_generation(get_dependency_generation() + 1)
-        _set_dependency_data_change_count(_get_dependency_data_change_count() + 1)
-        cache.set(DATA_CHANGE_LOCK_KEY, "1", None)
-    finally:
-        release_lock(lock_token)
-    try:
-        _discard_active_context_dependency_cache_state()
-    except Exception:
+        deleted = cache_delete(DATA_CHANGE_RECOVERY_KEY)
+    except Exception as primary:
+        # A transport error can follow an applied delete. A verified commit
+        # must still return success so the caller owns and eventually ends it.
         try:
-            end_dependency_data_change()
-        except Exception:
-            logger.exception("dependency data-change cleanup rollback failed")
+            remaining = cache.get(DATA_CHANGE_RECOVERY_KEY)
+        except Exception as readback_error:
+            raise primary from readback_error
+        if remaining is not None:
+            raise
+        logger.exception("dependency data-change recovery deletion acknowledged late")
+    else:
+        # Django delete() acknowledges removal with True. Do not turn an
+        # acknowledged commit into a failed begin via another fallible read.
+        if not deleted:
+            _verify_data_change_cache_value(DATA_CHANGE_RECOVERY_KEY, None)
+
+
+def _prepare_data_change_recovery(
+    token: DependencyLockToken, count: int, flag: object
+) -> dict[str, object]:
+    _require_data_change_lock_owner(token)
+    recovery: dict[str, object] = {"owner": token, "count": count, "flag": flag}
+    cache.set(DATA_CHANGE_RECOVERY_KEY, recovery, None)
+    _verify_data_change_cache_value(DATA_CHANGE_RECOVERY_KEY, recovery)
+    return recovery
+
+
+def _recover_data_change_barrier(token: DependencyLockToken) -> None:
+    recovery = cache.get(DATA_CHANGE_RECOVERY_KEY)
+    if recovery is None:
+        return
+    # Every count change first completes this journal under the mutex. Thus a
+    # previous snapshot never overwrites a later operation's active barrier.
+    if not isinstance(recovery, dict) or not isinstance(recovery.get("count"), int):
+        raise DependencyBarrierStateError("journal")
+    _require_data_change_lock_owner(token)
+    count = recovery["count"]
+    _set_dependency_data_change_count(count)
+    _verify_data_change_cache_value(DATA_CHANGE_COUNT_KEY, count)
+    _require_data_change_lock_owner(token)
+    flag = recovery.get("flag")
+    if flag is None:
+        cache.delete(DATA_CHANGE_LOCK_KEY)
+    else:
+        cache.set(DATA_CHANGE_LOCK_KEY, flag, None)
+    _verify_data_change_cache_value(DATA_CHANGE_LOCK_KEY, flag)
+    _clear_data_change_recovery(token, recovery)
+
+
+def _retry_data_change_recovery(
+    token: DependencyLockToken, recovery: dict[str, object]
+) -> None:
+    """Retain the locally known target if journal preparation/finalization failed."""
+    _require_data_change_lock_owner(token)
+    stored = cache.get(DATA_CHANGE_RECOVERY_KEY)
+    if stored is None:
+        _require_data_change_lock_owner(token)
+        cache.set(DATA_CHANGE_RECOVERY_KEY, recovery, None)
+        _verify_data_change_cache_value(DATA_CHANGE_RECOVERY_KEY, recovery)
+    elif stored != recovery:
+        raise DependencyBarrierStateError("journal")
+    _recover_data_change_barrier(token)
+
+
+def _release_data_change_lock(token: DependencyLockToken) -> None:
+    try:
+        release_lock(token)
+    except Exception:
+        # An already committed begin must not become an unowned failed begin;
+        # a failed begin must retain its original exception. The mutex has a TTL.
+        logger.exception("dependency data-change mutex release failed")
+
+
+def begin_dependency_data_change() -> int:
+    """Open a publish barrier, preserving a recoverable pre-begin snapshot.
+
+    Failed starts restore only their own count/flag under the mutex. If cleanup
+    fails, a later begin/end completes the stored recovery before changing any
+    count. The generation is never rolled back, so stale computations stay fenced.
+    """
+    if isinstance(caches["default"], DummyCache):
+        _discard_active_context_dependency_cache_state()
+        return 0
+    lock_token = acquire_lock_with_retry("begin_dependency_data_change")
+    recovery: dict[str, object] | None = None
+    try:
+        _recover_data_change_barrier(lock_token)
+        count = _get_dependency_data_change_count()
+        flag = cache.get(DATA_CHANGE_LOCK_KEY)
+        recovery = {"owner": lock_token, "count": count, "flag": flag}
+        _prepare_data_change_recovery(lock_token, count, flag)
+        _require_data_change_lock_owner(lock_token)
+        generation = _set_dependency_generation(get_dependency_generation() + 1)
+        _verify_data_change_cache_value(DEPENDENCY_GENERATION_KEY, generation)
+        _require_data_change_lock_owner(lock_token)
+        _set_dependency_data_change_count(count + 1)
+        _verify_data_change_cache_value(DATA_CHANGE_COUNT_KEY, count + 1)
+        _require_data_change_lock_owner(lock_token)
+        cache.set(DATA_CHANGE_LOCK_KEY, "1", None)
+        _verify_data_change_cache_value(DATA_CHANGE_LOCK_KEY, "1")
+        _discard_active_context_dependency_cache_state()
+        _clear_data_change_recovery(lock_token, recovery)
+    except Exception:
+        if recovery is not None:
+            try:
+                _retry_data_change_recovery(lock_token, recovery)
+            except Exception:
+                logger.exception("dependency data-change cleanup rollback failed")
         raise
+    finally:
+        _release_data_change_lock(lock_token)
     return generation
 
 
 def end_dependency_data_change() -> None:
-    """Release the publish barrier for a completed data change."""
+    """Close one barrier, journaling its completed operation for forward recovery."""
+    if isinstance(caches["default"], DummyCache):
+        return
     lock_token = acquire_lock_with_retry("end_dependency_data_change")
+    recovery: dict[str, object] | None = None
     try:
-        count = _set_dependency_data_change_count(
-            max(_get_dependency_data_change_count() - 1, 0)
-        )
-        if count == 0:
-            cache.delete(DATA_CHANGE_LOCK_KEY)
-        else:
-            cache.set(DATA_CHANGE_LOCK_KEY, "1", None)
+        _recover_data_change_barrier(lock_token)
+        count = max(_get_dependency_data_change_count() - 1, 0)
+        flag = "1" if count else None
+        recovery = {"owner": lock_token, "count": count, "flag": flag}
+        _prepare_data_change_recovery(lock_token, count, flag)
+        _recover_data_change_barrier(lock_token)
+    except Exception:
+        if recovery is not None:
+            try:
+                _retry_data_change_recovery(lock_token, recovery)
+            except Exception:
+                logger.exception("dependency data-change end recovery failed")
+        raise
     finally:
-        release_lock(lock_token)
+        _release_data_change_lock(lock_token)
 
 
 def is_dependency_data_change_active() -> bool:
-    """Return whether dependency-scoped cache publishing should pause."""
-    return cache.get(DATA_CHANGE_LOCK_KEY) is not None
+    """Pause publishing while a mutation or incomplete recovery is present."""
+    return (
+        cache.get(DATA_CHANGE_RECOVERY_KEY) is not None
+        or cache.get(DATA_CHANGE_LOCK_KEY) is not None
+    )
 
 
 def record_invalidated_cache_keys_for_graphql_rewarm(
