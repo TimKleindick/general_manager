@@ -216,6 +216,53 @@ class TransactionCacheCleanupTests(GeneralManagerTransactionTestCase):
         connections[self.database_alias].set_autocommit(True)
         self.assert_settled(15)
 
+    def test_failed_release_preserves_primary_when_run_cleanup_also_fails(self):
+        original_end = dependency_index.end_dependency_data_change
+        for index, cleanup in enumerate(
+            (
+                ConnectionError("run cleanup unavailable"),
+                SystemExit("run cleanup stopped"),
+            )
+        ):
+            with self.subTest(cleanup=type(cleanup).__name__):
+                primary = KeyboardInterrupt("barrier release interrupted")
+                retry_failure = ConnectionError("barrier retry unavailable")
+                interrupted = False
+
+                def fail_owned_end(
+                    *, owner=None, primary=primary, retry_failure=retry_failure
+                ):
+                    nonlocal interrupted
+                    if owner is not None:
+                        if not interrupted:
+                            interrupted = True
+                            raise primary
+                        raise retry_failure
+                    return original_end()
+
+                with (
+                    patch.object(
+                        dependency_index,
+                        "end_dependency_data_change",
+                        side_effect=fail_owned_end,
+                    ),
+                    patch(
+                        "general_manager.cache.transaction_barrier._clear_transaction_run_cache",
+                        side_effect=cleanup,
+                    ),
+                ):
+                    with self.assertRaises(KeyboardInterrupt) as raised:
+                        with transaction.atomic(using=self.database_alias):
+                            self.Row.create(
+                                name=f"committed-{index}",
+                                amount=5,
+                                ignore_permission=True,
+                            )
+                self.assertIs(raised.exception, primary)
+                self.assertTrue(is_dependency_data_change_active())
+                connections[self.database_alias].set_autocommit(True)
+                self.assert_settled(15 + index * 5)
+
     def test_unavailable_cleanup_after_commit_preserves_committed_rows_for_retry(self):
         original_end = dependency_index.end_dependency_data_change
         failure = ConnectionError("commit cleanup unavailable")
@@ -397,6 +444,27 @@ class TransactionCacheCleanupTests(GeneralManagerTransactionTestCase):
                 self.assertFalse(is_dependency_data_change_active())
                 self.assertEqual(sum(row.amount for row in self.Row.all()), 10)
             connections[self.database_alias].set_autocommit(True)
+
+    def test_released_owner_cleanup_failure_does_not_block_next_native_write(self):
+        failure = ConnectionError("run-local cleanup unavailable")
+        with patch(
+            "general_manager.cache.transaction_barrier._clear_transaction_run_cache",
+            side_effect=failure,
+        ):
+            with self.assertRaises(_ExpectedRollback):
+                with transaction.atomic(using=self.database_alias):
+                    self.Row.create(
+                        name="rolled-back", amount=5, ignore_permission=True
+                    )
+                    raise _ExpectedRollback
+            self.assertFalse(is_dependency_data_change_active())
+            self.assertNotIn(
+                "_general_manager_dependency_barrier",
+                vars(connections[self.database_alias]),
+            )
+            self.Row.create(name="next-write", amount=5, ignore_permission=True)
+        self.assert_settled(15)
+        self.assertEqual(self.history_count(), 2)
 
     def test_rollback_cleanup_failure_preserves_primary_during_autocommit_retry(self):
         primary = _ExpectedRollback("primary mutation failure")

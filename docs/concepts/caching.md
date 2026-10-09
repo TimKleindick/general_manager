@@ -55,6 +55,14 @@ transaction completes. Other connections may continue reading committed data,
 but dependency-cache publication remains paused. Autocommit mutations require
 no caller-managed cleanup, adapter, or commit-refresh helper.
 
+With a shared cache backend, the barrier and committed warm-up queue span all
+connections and worker processes using that cache. `ATOMIC_REQUESTS`, long
+jobs, and Django `TestCase`/`setUpTestData` transaction wrappers can therefore
+pause publication across those workers. Keep write transactions short and
+monitor transaction duration, active-owner count, and queued warm-up keys.
+The queue has no expiry; sustained overlapping writes can postpone dispatch
+and grow its backlog.
+
 The connection's commit and rollback methods complete cache cleanup before
 commit callbacks run. A cache error after successful SQL commit does not turn
 the committed write into a failed database commit or discard its callbacks;
