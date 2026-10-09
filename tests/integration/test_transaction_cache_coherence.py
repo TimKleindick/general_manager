@@ -172,8 +172,11 @@ class TransactionCacheCoherenceTests(GeneralManagerTransactionTestCase):
                 with transaction.atomic():
                     self.Row.create(name="b", amount=1250, ignore_permission=True)
                     writer_started.set()
-                    if not allow_commit.wait(10):
-                        raise TimeoutError
+                    # Stay pending through the second write and both bounded
+                    # reader waits, even when a CI runner is slow.
+                    if not allow_commit.wait(60):
+                        message = "Concurrent writer was not released"
+                        raise TimeoutError(message)
             finally:
                 connections.close_all()
 
@@ -192,7 +195,8 @@ class TransactionCacheCoherenceTests(GeneralManagerTransactionTestCase):
                 )
             finally:
                 allow_commit.set()
-            pending.result(10)
+                # Surface worker failures even if a main-thread assertion fails.
+                pending.result(10)
             self.assertFalse(is_dependency_data_change_active())
             self.assertEqual(
                 pool.submit(self.read_on_separate_connection).result(10), 3750
