@@ -69,8 +69,9 @@ the committed write into a failed database commit or discard its callbacks;
 cleanup retries when autocommit is restored. If that retry also fails and no
 earlier exception is unwinding, its cache error can propagate from the outer
 `atomic()` block or autocommit mutation after SQL has committed. Callers must
-not interpret this exception as proof of rollback. The barrier remains active
-until a later native write or connection completion retries cleanup.
+not interpret this exception as proof of rollback. If cleanup has not taken
+effect in the shared cache, the barrier remains active. The connection retains
+pending owner cleanup for a later native write or connection completion to retry.
 Rollback and actual connection close discard pending warm-up work.
 An in-memory SQLite `close()` that leaves the database connection
 open also leaves its transaction barrier active. Completion clears run-local
