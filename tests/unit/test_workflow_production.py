@@ -50,7 +50,10 @@ NON_CALLABLE_HANDLER = object()
     GENERAL_MANAGER={"WORKFLOW_MODE": "production", "WORKFLOW_ASYNC": True}
 )
 class WorkflowProductionEngineTransactionTests(TransactionTestCase):
+    """Verify async input snapshots and publication across real transactions."""
+
     def test_async_start_captures_input_before_outer_commit(self) -> None:
+        """Caller mutations before commit must not change the handler's input."""
         engine = CeleryWorkflowEngine()
         workflow = WorkflowDefinition(
             workflow_id="wf-input-snapshot", metadata={"handler_path": "builtins.dict"}
@@ -84,6 +87,7 @@ class WorkflowProductionEngineTransactionTests(TransactionTestCase):
         assert task_payload == expected
 
     def test_async_starts_capture_separate_inputs_from_same_mapping(self) -> None:
+        """Each start must retain the values present in a reused caller mapping."""
         engine = CeleryWorkflowEngine()
         workflow = WorkflowDefinition(
             workflow_id="wf-separate-inputs", metadata={"handler_path": "builtins.dict"}
@@ -111,6 +115,7 @@ class WorkflowProductionEngineTransactionTests(TransactionTestCase):
         assert second_stored.input_data == second_stored.output_data == {"value": 2}
 
     def test_async_start_does_not_publish_after_outer_rollback(self) -> None:
+        """An outer rollback must discard both the execution and publication."""
         engine = CeleryWorkflowEngine()
         workflow = WorkflowDefinition(
             workflow_id="wf-input-rollback", metadata={"handler_path": "builtins.dict"}
@@ -133,6 +138,7 @@ class WorkflowProductionEngineTransactionTests(TransactionTestCase):
         ).exists()
 
     def test_async_start_drops_dispatch_for_rolled_back_savepoint(self) -> None:
+        """Savepoint rollback must discard only that savepoint's publication."""
         engine = CeleryWorkflowEngine()
         workflow = WorkflowDefinition(
             workflow_id="wf-savepoint-input", metadata={"handler_path": "builtins.dict"}
