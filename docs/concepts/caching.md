@@ -66,8 +66,13 @@ and grow its backlog.
 The connection's commit and rollback methods complete cache cleanup before
 commit callbacks run. A cache error after successful SQL commit does not turn
 the committed write into a failed database commit or discard its callbacks;
-cleanup retries when autocommit is restored. Rollback and actual connection
-close discard pending warm-up work. An in-memory SQLite `close()` that leaves the database connection
+cleanup retries when autocommit is restored. If that retry also fails and no
+earlier exception is unwinding, its cache error can propagate from the outer
+`atomic()` block or autocommit mutation after SQL has committed. Callers must
+not interpret this exception as proof of rollback. The barrier remains active
+until a later native write or connection completion retries cleanup.
+Rollback and actual connection close discard pending warm-up work.
+An in-memory SQLite `close()` that leaves the database connection
 open also leaves its transaction barrier active. Completion clears run-local
 ORM results and dependency-cache state. Cache transport failures retain a
 recoverable journal and owner identity, so retrying cleanup cannot release a
