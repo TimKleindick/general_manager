@@ -590,6 +590,8 @@ def test_build_field_descriptors_resolves_string_relation_targets() -> None:
     owner_manager = type("OwnerManager", (), {})
     OwnerModel._general_manager_class = owner_manager  # type: ignore[attr-defined]
     owner_field = Mock(spec=models.Field)
+    owner_field.primary_key = False
+    owner_field.target_field = OwnerModel._meta.pk
     owner_field.name = "owner"
     owner_field.related_model = "accounts.OwnerModel"
     owner_field.null = False
@@ -670,6 +672,8 @@ def test_build_field_descriptors_resolves_same_app_string_relation_targets() -> 
     owner_manager = type("OwnerManager", (), {})
     BillingOwnerModel._general_manager_class = owner_manager  # type: ignore[attr-defined]
     owner_field = Mock(spec=models.Field)
+    owner_field.primary_key = False
+    owner_field.target_field = BillingOwnerModel._meta.pk
     owner_field.name = "owner"
     owner_field.related_model = "BillingOwnerModel"
     owner_field.null = False

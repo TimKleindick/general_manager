@@ -38,6 +38,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils.module_loading import import_string
 
+from general_manager.api.graphql_identifiers import build_identification_arguments
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.cache.dependency_index import (
@@ -1355,7 +1356,8 @@ class GraphQL:
         plus generated relation filter/exclude inputs when available. Explicit
         sibling ``*_groups`` fields provide grouped results. Other types map through the scalar base
         mapper and may use `field_info["graphql_scalar"]` for supported scalar
-        overrides such as `"bigint"`.
+        overrides such as `"bigint"`. Scalar attributes marked ``is_identifier``
+        map to ``ID`` without altering their Python metadata type.
 
         Parameters:
             field_type (type): Python type declared on the interface.
@@ -1410,6 +1412,8 @@ class GraphQL:
                 return graphene.Field(StoredFile)
             if orm_field_kind == "image":
                 return graphene.Field(StoredImage)
+            if field_info and field_info.get("is_identifier"):
+                return graphene.ID()
             scalar_type = cast(type, field_type)
             return GraphQL._map_field_to_graphene_base_type(
                 scalar_type,
@@ -1646,7 +1650,10 @@ class GraphQL:
         """
         Build the GraphQL arguments required to uniquely identify an instance of the given manager class.
 
-        For each input field defined on the manager's Interface: use "<name>_id" for fields that reference another GeneralManager, use "id" when present, and map other fields to their corresponding Graphene base type. Each argument's nullability mirrors `input_field.required`.
+        ORM constructor identifiers and explicit scalar identity metadata use
+        ``ID``. Manager references use ``<name>_id`` with ``ID`` or structured
+        composite input types. Named business inputs retain their native scalars;
+        nullability mirrors ``input_field.required``.
 
         Parameters:
             generalManagerClass: GeneralManager subclass whose Interface.input_fields are used to derive identification arguments.
@@ -1654,29 +1661,7 @@ class GraphQL:
         Returns:
             dict[str, object]: Mapping of argument name to a Graphene Argument suitable for identifying a single manager instance.
         """
-        identification_fields: GraphQLFieldMap = {}
-        for (
-            input_field_name,
-            input_field,
-        ) in generalManagerClass.Interface.input_fields.items():
-            if resolve_general_manager_type(
-                input_field.type,
-                cls.manager_registry,
-            ):
-                key = f"{input_field_name}_id"
-                identification_fields[key] = graphene.Argument(
-                    graphene.ID, required=input_field.required
-                )
-            elif input_field_name == "id":
-                identification_fields[input_field_name] = graphene.Argument(
-                    graphene.ID, required=input_field.required
-                )
-            else:
-                base_type = cls._map_field_to_graphene_base_type(input_field.type)
-                identification_fields[input_field_name] = graphene.Argument(
-                    base_type, required=input_field.required
-                )
-        return identification_fields
+        return build_identification_arguments(generalManagerClass)
 
     @classmethod
     def _add_queries_to_schema(

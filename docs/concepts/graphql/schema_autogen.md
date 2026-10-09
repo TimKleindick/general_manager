@@ -18,6 +18,42 @@ Single-valued manager relations are exposed as object fields. Relation fields
 whose Python-side name ends with `_list` are exposed as paginated list fields
 with filtering, grouping, sorting, and pagination arguments.
 
+### Identity fields
+
+ORM primary keys and raw scalar foreign-key references map to GraphQL `ID`,
+including integer, UUID, and string keys. For example, an actual primary key
+named `code` becomes `code: ID`, and the raw foreign-key alias `owner_id`
+becomes `ownerId: ID`. ID outputs serialize as JSON strings. Manager relations
+still expose their object or paginated object fields; mutation reference lists
+use `[ID]`, and references to composite managers use structured inputs.
+Within a structured reference, an ORM constructor PK still uses `ID`; additional
+business inputs retain their native scalars. Optional calculation/request
+business inputs named `id` retain their declared nullability in generated CRUD
+arguments.
+Structured write references use the referenced manager's constructor for
+validation. For a `to_field` relation they resolve the actual target-field value;
+scalar `to_field` inputs continue to accept that raw referenced value.
+
+The ORM descriptor records `is_identifier`, `is_primary_key`, and
+`is_auto_primary_key` metadata from the Django fields. Native Python types and
+scalar hints remain in that metadata. Names alone do not identify a field:
+ordinary fields such as `external_id`, and calculation/request composite
+business inputs named `id`, retain their native GraphQL scalars.
+
+Equality, exact, and membership filters for identity fields use `ID`, `ID`,
+and `[ID]`, respectively. Range comparisons retain their native scalar,
+including any `graphql_scalar="bigint"` hint. Server-side conversion preserves
+the Python and database identifier types. A UUID or string ORM PK still needs
+the corresponding explicit constructor `Input(UUID)` or `Input(str)`
+configuration; changing its GraphQL scalar does not configure that input.
+
+This scalar change requires clients to update affected `Int`/`String` variable
+declarations to `ID`, their lists to `[ID]`, and regenerate schema-derived
+types. Keep returned IDs as strings in equality checks, application state, and
+cache keys instead of converting them to numbers. See the [identifier
+guide](../../howto/expose_via_graphql.md#filter-by-identifier) for configuration
+and migration steps.
+
 ## Output-only value types
 
 Use the package-root `GraphQLType` when a response needs a nested object shape
@@ -150,15 +186,28 @@ Generated create and update mutations expose writable, non-derived interface
 attributes and skip raw direct-relation ID aliases when the canonical relation
 field is already present. Raw many-relation ID-list aliases such as
 `member_id_list` are skipped when the canonical `member_list` relation exists.
-Create mutations omit manager constructor input fields such as `id`; update and
-delete mutations always require `id` so the resolver can locate the existing
-manager instance. Update mutations make every generated write field optional,
-filter out omitted Graphene `NOT_PROVIDED` values, and forward an explicit
-history comment as the manager `history_comment`. Create fields retain their
-interface/model defaults, so omitting a value on create lets the model default
-apply. Update fields deliberately have no GraphQL argument default: omitting a
-field, including a nullable variable that was not supplied, removes it from the
-manager payload and preserves the stored value even when the model field has a
+ORM create mutations omit auto-increment primary keys and accept editable
+manual primary keys as `ID`, including fields named `id`. A manual PK is
+required when it has no default and optional when the model supplies one.
+ORM update and delete mutations require a stable `id: ID!` target argument,
+even when the actual PK has another name. Writable fields cannot overwrite
+that target argument, and primary keys are excluded from update payload fields.
+Calculation/request composite target inputs preserve their business scalars;
+actual manager references retain their scalar or structured input shape.
+
+Update mutations make every generated write field optional, filter out omitted
+Graphene `NOT_PROVIDED` values, and forward an explicit history comment as the
+manager `history_comment`. Create fields retain literal interface/model
+defaults. The `NOT_PROVIDED` sentinel and callable defaults do not appear as
+GraphQL defaults, and schema construction never evaluates those callables.
+The ORM evaluates a callable model default at write time when the create field
+is omitted. `NOT_PROVIDED` means there is no default and preserves the field's
+requiredness. This does not relax model or input validation. Required create
+fields without real defaults need non-null variable declarations; removing the `NOT_PROVIDED`
+schema default can make an old nullable declaration invalid even when a value
+is supplied. Update fields deliberately have no GraphQL argument default:
+omitting a field, including a nullable variable that was not supplied, removes
+it from the manager payload and preserves the stored value even when the model field has a
 default. An explicit `null` is different: it is forwarded as `None` and clears a
 nullable field or fails validation when the field does not accept null. With
 Graphene's default camel-casing, clients send `historyComment`; Python-side
@@ -200,7 +249,9 @@ This keeps GraphQL mutations compatible with Graphene field naming while preserv
 Schema generation should remain resilient when interface metadata includes edge-case field types:
 
 - Measurement fields continue to map to `MeasurementScalar` / `MeasurementType`
-- Large integer ORM fields may opt into `BigIntScalar` through `graphql_scalar="bigint"`
+- Native large integer fields and identity range filters may use `BigIntScalar`
+  through `graphql_scalar="bigint"`; identity outputs and equality filters use
+  `ID` while preserving that hint in metadata.
 - Non-relational field types that do not map cleanly to a specific GraphQL scalar fall back to string-like handling instead of aborting schema construction
 
 The intended behavior is that startup and schema registration remain reviewable and predictable even when a manager exposes less common field metadata.

@@ -118,7 +118,7 @@ async function uploadAvatar(profileId, file) {
   }
 
   return graphql(`
-    mutation Finish($id: Int!, $token: UploadToken!) {
+    mutation Finish($id: ID!, $token: UploadToken!) {
       updateProfile(id: $id, avatar: $token) {
         Profile { avatar { name status downloadUrl expiresAt } }
       }

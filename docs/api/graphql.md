@@ -86,6 +86,53 @@ bootstrap plumbing rather than the application-facing registration API: define
 `GraphQLType` subclasses and import their module before startup schema
 construction.
 
+## Identifier scalar contract
+
+Generated ORM primary-key fields and raw foreign-key reference fields use
+GraphQL `ID`, whether their stored values are integers, UUIDs, or strings. A
+primary key named `code` therefore appears as `code: ID`; a scalar foreign-key
+alias such as `owner_id` appears as `ownerId: ID`. Returned ID values serialize
+as JSON strings, including integer-backed IDs. Single manager relations remain
+object fields, and collection relations retain their paginated object shape.
+Scalar reference lists, such as mutation inputs for related managers, use
+`[ID]`; references to managers with composite inputs use structured inputs.
+
+For `to_field` relations, the raw reference ID carries the referenced field's
+value, while the related object's ID carries its primary key. A structured
+manager reference supplies the constructor PK and business inputs; the write
+stores the relation's actual target-field value.
+
+Identity comes from interface metadata derived from actual Django fields, not
+from a field's name. ORM descriptors mark scalar identities with
+`is_identifier`, primary keys with `is_primary_key`, and auto-increment keys
+with `is_auto_primary_key`. These flags preserve the native Python `type` and
+scalar hints such as `graphql_scalar="bigint"`. An ordinary integer field
+named `external_id`, or a calculation/request composite business input named
+`id`, keeps its native GraphQL scalar.
+
+Equality and exact filters for a scalar identity use `ID`; membership filters
+use `[ID]`. This also applies to non-`id` primary-key names and raw foreign-key
+aliases. Ordered comparisons retain the native scalar and its hints. Python
+manager identifications and database values keep their configured types;
+GraphQL conversion does not change storage or replace interface input
+configuration. UUID and string ORM keys still require an explicit constructor
+input such as `input_fields = {"id": Input(UUID)}` or
+`input_fields = {"id": Input(str)}`.
+
+When migrating clients, change affected variable declarations from `Int` or
+`String` to `ID`, and their list equivalents to `[ID]`, preserving nullability.
+Regenerate schema-derived client types and update equality checks, application
+state, and normalized cache keys to use the returned strings consistently.
+Keep IDs as opaque strings; numeric coercion can lose large integer precision
+and cannot represent UUID or string keys. Native business scalars and range
+variables retain their existing types. See the [migration steps and input
+configuration](../howto/expose_via_graphql.md#filter-by-identifier).
+
+Check required create arguments as well: removing `NOT_PROVIDED` from schema
+defaults means a required field without a real default requires a non-null
+variable declaration, such as `$budget: MeasurementScalar!`, even when the
+variables object always supplies a value.
+
 ## Generated CRUD mutation contract
 
 `GraphQL.create_graphql_mutation(generalManagerClass: type[GeneralManager]) -> None`
@@ -96,8 +143,9 @@ metadata. The method returns `None`; a manager without an `Interface` produces
 no registry changes, and a mutation factory returning `None` skips only that
 operation.
 
-The generated update field has the following schematic shape, with one optional
-argument for each editable, non-derived interface field:
+For an ORM manager, the generated update field has the following schematic
+shape, with one optional argument for each editable, non-derived field other
+than the primary key:
 
 ```text
 update<ManagerName>(
@@ -108,11 +156,25 @@ update<ManagerName>(
 ```
 
 The payload contains `success: Boolean` and the nullable manager-named field
-containing the updated object. `id` is required so the existing manager can be
-located; all generated write fields are optional for partial updates. Create
-fields retain their interface/model defaults, but update fields use no GraphQL
-argument defaults. Therefore, an omitted update argument—including a nullable
-variable that is declared but absent from the variables object—is not included
+containing the updated object. ORM update and delete mutations keep the target
+argument `id: ID!`, including when the underlying PK has another name. Writable
+fields cannot replace that target argument, and primary keys are excluded from
+update payload fields. All generated write fields are optional for partial
+updates. Managers with composite constructor inputs retain their declared
+business scalar types and structured manager references as target arguments.
+
+ORM create mutations omit auto-increment primary keys. Editable manual primary
+keys, including a field named `id`, are accepted as `ID`: they are required
+when there is no default and optional when the model supplies one. Create
+fields retain literal interface/model defaults. `NOT_PROVIDED` and callable
+defaults are omitted from the GraphQL schema; callables are not evaluated
+during schema construction and apply through the ORM when a write omits the
+field. Model and input validation still apply, including requiredness and
+validation of explicit `null`.
+
+Update fields use no GraphQL argument defaults. Therefore, an omitted update
+argument—including a nullable variable that is declared but absent from the
+variables object—is not included
 in the manager payload and preserves the stored value, even when the model
 field has a default. An explicitly supplied `null` is included as `None` and
 must be valid for the field; a concrete value, including the model-default
@@ -720,9 +782,13 @@ becomes positive filters, `none` becomes excludes, and nested excludes under
 `none` invert back into positive filters. Generated relation filter input types
 are cached only in the caller-owned registry under a name containing the manager
 class and remaining relation depth; rebuild them with a fresh registry when
-metadata or depth changes. Equality-style `id`, `id__exact`, and
-list/tuple-shaped `id__in` filters are cast with the manager interface's `id`
-input field when one is available; other iterable shapes are returned unchanged.
+metadata or depth changes. Equality-style identity filters (`<field>`,
+`<field>__exact`, and list/tuple-shaped `<field>__in`) normalize string-valued
+IDs to native values before backend filtering. Actual ORM primary keys use the
+configured constructor `id` input, even when the PK field has another name;
+raw foreign-key aliases use their referenced Django target field. Native
+business inputs and range comparisons retain their own types. Other iterable
+shapes are returned unchanged.
 Subscription identifiers and signal payloads are object-valued manager
 identification mappings and are copied before channel dispatch.
 

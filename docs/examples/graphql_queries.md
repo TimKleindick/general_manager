@@ -1,5 +1,37 @@
 # GraphQL Query Patterns
 
+## Reuse identifier variables
+
+Use `ID` for actual ORM primary keys and scalar foreign-key references, and
+`[ID]` for membership filters. The same ID variable works for a detail query
+and an equality filter:
+
+```graphql
+query ProjectIdentity($id: ID!, $ids: [ID]) {
+  project(id: $id) { id name }
+  exact: projectList(filter: {id_Exact: $id}) {
+    items { id name }
+  }
+  selected: projectList(filter: {id_In: $ids}) {
+    items { id name }
+  }
+}
+```
+
+```json
+{"id": "42", "ids": ["42", "43"]}
+```
+
+Returned IDs are strings, including integer-backed keys. Keep those strings
+in comparisons, application state, and cache keys; avoid numeric coercion.
+When migrating from `Int`/`String` declarations, update identity variables to
+`ID`, their lists to `[ID]`, and regenerate client types. Range variables and
+ordinary business inputs keep their native types, including a composite
+calculation/request input named `id`. Manager references retain object outputs
+and scalar or structured input shapes. See the
+[identifier guide](../howto/expose_via_graphql.md#filter-by-identifier)
+for explicit UUID/string input configuration and the full migration steps.
+
 ## Paginated listings
 
 ```graphql
@@ -90,7 +122,7 @@ permissions, arguments, and compatibility details.
 ## Nested buckets
 
 ```graphql
-query ProjectWithDerivatives($id: Int!) {
+query ProjectWithDerivatives($id: ID!) {
   project(id: $id) {
     name
     derivativeList(filter: { maturity_date__gte: "2024-01-01" }) {
@@ -141,9 +173,10 @@ the [API reference](../api/graphql.md#relation-annotation-compatibility).
 
 ## Update only the fields you supply
 
-Generated update mutations require an ID but make editable fields optional.
-Omit a field when the stored value should stay unchanged, even if the model
-declares a default for that field:
+Generated ORM update and delete mutations require a stable `id: ID!` target.
+Primary keys are excluded from update payload fields; other editable fields
+are optional. Omit a field when the stored value should stay unchanged, even if
+the model declares a default for that field:
 
 ```graphql
 mutation RenameProject($id: ID!) {
@@ -172,6 +205,31 @@ concrete `score` value is written as supplied. Create mutations continue to
 apply model defaults when their fields are omitted. See the [GraphQL how-to](../howto/expose_via_graphql.md#partially-update-a-generated-manager),
 the [mutation concept](../concepts/graphql/schema_autogen.md#mutations), and
 the [API reference](../api/graphql.md#generated-crud-mutation-contract).
+
+## Create with a manual primary key
+
+For a manager with an editable integer PK field named `id` and no default,
+declare the create variable as `ID!`:
+
+```graphql
+mutation CreateManualRecord($id: ID!, $name: String!) {
+  createManualRecord(id: $id, name: $name) {
+    success
+  }
+}
+```
+
+```json
+{"id": "42", "name": "Manual record"}
+```
+
+Auto-increment PKs are omitted from create arguments. A manual PK with a model
+default is optional. Literal defaults remain in the schema; `NOT_PROVIDED`
+and callable defaults are omitted, and the ORM applies callable defaults when
+the create write omits the field. Schema construction does not evaluate them,
+and input/model validation still applies. Required fields without real
+defaults need non-null variable declarations, such as `$name: String!` above.
+See the [manual-PK guide](../howto/expose_via_graphql.md#create-a-manager-with-a-manual-primary-key).
 
 ## Sort by a compound relation key
 
@@ -306,7 +364,7 @@ query ProjectCommercials($projectId: ID!) {
 ```
 
 ```json
-{"projectId": 42}
+{"projectId": "42"}
 ```
 
 The generated filter is directly usable with a normal GraphQL request. The
@@ -317,6 +375,11 @@ and [API reference](../api/graphql.md#manager-typed-calculation-input-filters) f
 the declaration and compatibility rules.
 
 ## Custom mutation with Measurement input
+
+Custom scalar arguments keep their declared Python annotation. For a resolver
+whose argument is annotated `id: int`, use `Int`; the argument name alone does
+not make it an ID. Annotate a manager reference to generate an ID or structured
+composite input instead.
 
 ```graphql
 mutation UpdateInventory($id: Int!, $price: MeasurementScalar!) {
@@ -334,7 +397,7 @@ mutation UpdateInventory($id: Int!, $price: MeasurementScalar!) {
 ## Aggregation via GraphQL property
 
 ```graphql
-query ProjectSummary($id: Int!) {
+query ProjectSummary($id: ID!) {
   project(id: $id) {
     name
     totalCapex

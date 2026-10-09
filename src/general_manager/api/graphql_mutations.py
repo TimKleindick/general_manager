@@ -11,7 +11,7 @@ module can be imported by ``graphql.py`` without creating a circular dependency.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Mapping, Protocol, cast
 
 import graphene
 from graphql import GraphQLError, Undefined
@@ -34,6 +34,11 @@ from general_manager.api.graphql_errors import (
     MissingManagerIdentifierError,
     handle_graph_ql_error,
     map_field_to_graphene_base_type,
+)
+from general_manager.api.graphql_identifiers import (
+    build_identification_arguments,
+    is_orm_identifier_input,
+    pop_identification,
 )
 
 if TYPE_CHECKING:
@@ -161,7 +166,9 @@ def _normalize_mutation_kwargs_for_manager(
 
     GraphQL-facing relation inputs may arrive as ``field``/``field_list`` while
     ORM mutation capabilities expect ``field_id``/``field_id_list`` for manager
-    relations. Unknown keys and already-normalized keys are preserved.
+    relations. Structured references pass through their manager constructor so
+    all declared inputs are validated. Scalar reference values stay unchanged.
+    Unknown keys and already-normalized keys are preserved.
     """
     interface_cls = getattr(general_manager_class, "Interface", None)
     if interface_cls is None:
@@ -171,33 +178,59 @@ def _normalize_mutation_kwargs_for_manager(
     normalized = dict(kwargs)
     manager_registry = get_graphql_manager_registry()
 
+    def normalize_reference(
+        manager_type: type[GeneralManager], value: object, relation_name: str
+    ) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        reference = manager_type(**dict(value))
+        model = getattr(interface_cls, "_model", None)
+        if isinstance(model, type) and issubclass(model, models.Model):
+            try:
+                model_field = model._meta.get_field(relation_name)
+            except FieldDoesNotExist:
+                return reference
+            target_field = getattr(model_field, "target_field", None)
+            if isinstance(model_field, models.ManyToManyField):
+                related_model = model_field.remote_field.model
+                target_field = related_model._meta.get_field(
+                    model_field.m2m_reverse_target_field_name()
+                )
+            if target_field is not None and not target_field.primary_key:
+                return cast(object, getattr(reference, target_field.attname))
+        return reference
+
     for key in list(kwargs.keys()):
         if key.endswith("_list") and not key.endswith("_id_list"):
             base_key = key.removesuffix("_list")
             type_info = attribute_types.get(key)
             relation_type = type_info["type"] if type_info is not None else None
-            if (
-                resolve_general_manager_type(
-                    relation_type,
-                    manager_registry,
-                )
-                is not None
-            ):
-                normalized.setdefault(f"{base_key}_id_list", normalized[key])
+            manager_type = resolve_general_manager_type(relation_type, manager_registry)
+            if manager_type is not None:
+                target_key = f"{base_key}_id_list"
+                if target_key not in normalized:
+                    value = normalized[key]
+                    normalized[target_key] = (
+                        [
+                            normalize_reference(manager_type, item, base_key)
+                            for item in value
+                        ]
+                        if isinstance(value, (list, tuple))
+                        else normalize_reference(manager_type, value, base_key)
+                    )
                 normalized.pop(key, None)
                 continue
 
         if not key.endswith("_id"):
             type_info = attribute_types.get(key)
             relation_type = type_info["type"] if type_info is not None else None
-            if (
-                resolve_general_manager_type(
-                    relation_type,
-                    manager_registry,
-                )
-                is not None
-            ):
-                normalized.setdefault(f"{key}_id", normalized[key])
+            manager_type = resolve_general_manager_type(relation_type, manager_registry)
+            if manager_type is not None:
+                target_key = f"{key}_id"
+                if target_key not in normalized:
+                    normalized[target_key] = normalize_reference(
+                        manager_type, normalized[key], key
+                    )
                 normalized.pop(key, None)
 
     return normalized
@@ -291,8 +324,8 @@ def create_write_fields(
     is the ``*_list`` metadata entry whose type is a ``GeneralManager`` subclass.
 
     Non-editable attributes are still returned with ``editable=False``. Create
-    and update builders filter on that flag; delete keeps only constructor input
-    fields plus its explicit metadata arguments. ``_EditableGrapheneField`` is an
+    and update builders filter on that flag; delete uses the shared constructor
+    argument builder plus explicit metadata arguments. ``_EditableGrapheneField`` is an
     internal structural contract used by this module to annotate the dynamic flag
     attached to otherwise untyped Graphene field instances.
 
@@ -302,7 +335,9 @@ def create_write_fields(
     helper produces an ID field or a list of ID fields for names ending with
     ``"_list"``. Later mutation resolvers normalize those canonical inputs to
     ``"owner_id"`` and ``"member_id_list"`` before calling the ORM mutation
-    layer. Always includes an optional ``history_comment`` string field.
+    layer. Scalar identity metadata maps to ``ID`` as well. Sentinel and callable
+    defaults are omitted from the schema; runtime defaults and validation stay
+    with the interface/ORM. Always includes an optional ``history_comment``.
 
     Parameters:
         interface_cls: Interface providing attribute metadata used to build
@@ -337,21 +372,42 @@ def create_write_fields(
         # GraphQL injects argument defaults before the resolver sees the payload.
         # Partial updates must preserve omission, including defaults of None.
         default = info["default"] if require_fields else Undefined
+        if default is NOT_PROVIDED or callable(default):
+            default = Undefined
+        manager_type = resolve_general_manager_type(typ, manager_registry)
 
         fld: object
         if info.get("orm_field_kind") in {"file", "image"}:
             fld = UploadToken(required=req, default_value=default)
-        elif (
-            resolve_general_manager_type(
-                typ,
-                manager_registry,
+        elif info.get("is_identifier"):
+            fld = graphene.ID(required=req, default_value=default)
+        elif manager_type is not None:
+            from general_manager.api.mutation import (
+                _build_manager_argument_field,
+                _get_or_create_manager_input_type,
+                _uses_single_id_input,
             )
-            is not None
-        ):
+
             if name.endswith("_list"):
-                fld = graphene.List(graphene.ID, required=req, default_value=default)
+                reference_type = (
+                    graphene.ID
+                    if _uses_single_id_input(manager_type)
+                    else _get_or_create_manager_input_type(manager_type)
+                )
+                fld = graphene.List(reference_type, required=req, default_value=default)
             else:
+                fld = _build_manager_argument_field(
+                    manager_type, required=req, default_value=default
+                )
+        elif isinstance(typ, type) and issubclass(typ, models.Model):
+            if info.get("relation_kind") == "collection":
+                fld = graphene.List(graphene.ID, required=req, default_value=default)
+            elif info.get("relation_kind") == "direct":
                 fld = graphene.ID(required=req, default_value=default)
+            else:
+                fld = map_field_to_graphene_base_type(typ)(
+                    required=req, default_value=default
+                )
         else:
             base_cls = map_field_to_graphene_base_type(
                 typ,
@@ -399,6 +455,11 @@ def generate_create_mutation_class(
     if not interface_cls:
         return None
     write_fields = create_write_fields(interface_cls)
+    attribute_types: Mapping[str, Mapping[str, object]] = (
+        interface_cls.get_attribute_types()
+    )
+    model = getattr(interface_cls, "_model", None)
+    has_model = isinstance(model, type) and issubclass(model, models.Model)
     file_field_names = tuple(
         name
         for name in _file_token_field_names(interface_cls, write_fields)
@@ -456,8 +517,14 @@ def generate_create_mutation_class(
                 {
                     field_name: field
                     for field_name, field in write_fields.items()
-                    if field_name not in generalManagerClass.Interface.input_fields
-                    and field.editable
+                    if field.editable
+                    and not attribute_types.get(field_name, {}).get(
+                        "is_auto_primary_key"
+                    )
+                    and (
+                        has_model
+                        or field_name not in generalManagerClass.Interface.input_fields
+                    )
                 },
             ),
             "mutate": create_mutation,
@@ -493,6 +560,16 @@ def generate_update_mutation_class(
     if not interface_cls:
         return None
     write_fields = create_write_fields(interface_cls, require_fields=False)
+    attribute_types: Mapping[str, Mapping[str, object]] = (
+        interface_cls.get_attribute_types()
+    )
+    identification_arguments = build_identification_arguments(
+        generalManagerClass, for_mutation=True
+    )
+    requires_id = is_orm_identifier_input(generalManagerClass, "id")
+    if not identification_arguments:
+        identification_arguments = {"id": graphene.Argument(graphene.ID, required=True)}
+        requires_id = True
     file_field_names = _file_token_field_names(interface_cls, write_fields)
 
     def update_mutation(
@@ -500,8 +577,9 @@ def generate_update_mutation_class(
         info: GraphQLResolveInfo,
         **kwargs: object,
     ) -> MutationPayload:
-        manager_id = kwargs.pop("id", None)
-        if manager_id is None:
+        identification = pop_identification(identification_arguments, kwargs)
+        manager_id = identification.get("id")
+        if requires_id and manager_id is None:
             raise handle_graph_ql_error(MissingManagerIdentifierError())
         try:
             kwargs = {
@@ -520,7 +598,7 @@ def generate_update_mutation_class(
             kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
             history_comment = _pop_history_comment(kwargs)
             update = cast(
-                _ManagerUpdateMethod, generalManagerClass(id=manager_id).update
+                _ManagerUpdateMethod, generalManagerClass(**identification).update
             )
             update_kwargs = {"creator_id": info.context.user.id, **kwargs}
             if isinstance(history_comment, _UnsetHistoryComment):
@@ -549,12 +627,15 @@ def generate_update_mutation_class(
                 "Arguments",
                 (),
                 {
-                    "id": graphene.ID(required=True),
                     **{
                         field_name: field
                         for field_name, field in write_fields.items()
                         if field.editable
+                        and not attribute_types.get(field_name, {}).get(
+                            "is_primary_key"
+                        )
                     },
+                    **identification_arguments,
                 },
             ),
             "mutate": update_mutation,
@@ -570,10 +651,9 @@ def generate_delete_mutation_class(
     Generate a Graphene Mutation class that deletes instances of the given manager.
 
     The generated mutation is named ``Delete<ManagerName>``. It always requires
-    an ``id`` argument and exposes optional ``history_comment`` metadata for the
-    manager delete call. Additional constructor input fields may appear for
-    backward compatibility, but only ``id`` and ``history_comment`` are consumed
-    by the generated resolver.
+    an ``id: ID!`` argument for ORM managers and exposes optional
+    ``history_comment`` metadata. Non-ORM managers retain their named constructor
+    arguments, all of which are consumed to locate the target instance.
 
     Parameters:
         generalManagerClass: The GeneralManager subclass to expose a delete
@@ -591,18 +671,26 @@ def generate_delete_mutation_class(
     if not interface_cls:
         return None
 
+    identification_arguments = build_identification_arguments(
+        generalManagerClass, for_mutation=True
+    )
+    requires_id = is_orm_identifier_input(generalManagerClass, "id")
+    if not identification_arguments:
+        identification_arguments = {"id": graphene.Argument(graphene.ID, required=True)}
+        requires_id = True
+
     def delete_mutation(
         self: object,
         info: GraphQLResolveInfo,
         **kwargs: object,
     ) -> MutationPayload:
-        manager_id = kwargs.pop("id", None)
-        if manager_id is None:
+        identification = pop_identification(identification_arguments, kwargs)
+        if requires_id and identification.get("id") is None:
             raise handle_graph_ql_error(MissingManagerIdentifierError())
         history_comment = _pop_history_comment(kwargs)
         try:
             delete = cast(
-                _ManagerDeleteMethod, generalManagerClass(id=manager_id).delete
+                _ManagerDeleteMethod, generalManagerClass(**identification).delete
             )
             if isinstance(history_comment, _UnsetHistoryComment):
                 delete(creator_id=info.context.user.id)
@@ -632,16 +720,8 @@ def generate_delete_mutation_class(
                 "Arguments",
                 (),
                 {
-                    # Always include id so the resolver can locate the instance.
-                    "id": graphene.ID(required=True),
                     "history_comment": graphene.String(),
-                    **{
-                        field_name: field
-                        for field_name, field in create_write_fields(
-                            interface_cls
-                        ).items()
-                        if field_name in generalManagerClass.Interface.input_fields
-                    },
+                    **identification_arguments,
                 },
             ),
             "mutate": delete_mutation,

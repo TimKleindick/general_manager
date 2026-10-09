@@ -51,7 +51,7 @@ class DefaultCreateMutationTest(GeneralManagerTransactionTestCase):
         self.user = User.objects.create_user(username="tester", password=password)
         self.client.force_login(self.user)
         self.create_mutation = """
-        mutation CreateProject($name: String!, $number: Int, $budget: MeasurementScalar) {
+        mutation CreateProject($name: String!, $number: Int, $budget: MeasurementScalar!) {
             createTestProject(name: $name, number: $number, budget: $budget) {
                 TestProject {
                     name
@@ -211,7 +211,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         Prepares GraphQL mutation strings for creating TestProject and TestProject2 instances in test cases.
         """
         self.create_mutation = """
-        mutation CreateProject($name: String!, $number: Int, $budget: MeasurementScalar) {
+        mutation CreateProject($name: String!, $number: Int, $budget: MeasurementScalar!) {
             createTestProject(name: $name, number: $number, budget: $budget) {
                 TestProject {
                     name
@@ -227,7 +227,7 @@ class DefaultCreateMutationTestWithoutLogin(GeneralManagerTransactionTestCase):
         """
 
         self.create_mutation2 = """
-        mutation CreateProject($name: String!, $number: Int, $budget: MeasurementScalar) {
+        mutation CreateProject($name: String!, $number: Int, $budget: MeasurementScalar!) {
             createTestProject2(name: $name, number: $number, budget: $budget) {
                 TestProject2 {
                     name
@@ -348,7 +348,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         )
 
         self.update_mutation = """
-        mutation UpdateProject($id: Int!, $name: String, $budget: MeasurementScalar) {
+        mutation UpdateProject($id: ID!, $name: String, $budget: MeasurementScalar) {
             updateTestProject(id: $id, name: $name, budget: $budget) {
                 TestProject {
                     name
@@ -363,7 +363,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
         }
         """
         self.update_mutation_without_budget = """
-            mutation UpdateProject($id: Int!, $name: String) {
+            mutation UpdateProject($id: ID!, $name: String) {
                 updateTestProject(id: $id, name: $name) {
                     TestProject {
                         name
@@ -385,7 +385,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
             }
             """
         self.update_mutation_without_name = """
-            mutation UpdateProject($id: Int!, $budget: MeasurementScalar) {
+            mutation UpdateProject($id: ID!, $budget: MeasurementScalar) {
                 updateTestProject(id: $id, budget: $budget) {
                     TestProject {
                         name
@@ -432,7 +432,7 @@ class DefaultUpdateMutationTest(GeneralManagerTransactionTestCase):
 
     def test_update_accepts_explicit_null_and_default_values(self):
         mutation = """
-            mutation($id: Int!, $score: Int) {
+            mutation($id: ID!, $score: Int) {
                 updateTestProject(id: $id, score: $score) { success }
             }
         """
@@ -596,7 +596,7 @@ class DefaultDeleteMutationTest(GeneralManagerTransactionTestCase):
         )
 
         self.delete_mutation = """
-        mutation DeleteProject($id: Int!) {
+        mutation DeleteProject($id: ID!) {
             deleteTestProject(id: $id) {
                 TestProject {
                     name

@@ -94,7 +94,7 @@ class TestGraphQLMutationRelationAliases(GeneralManagerTransactionTestCase):
         asset_id = int(create_data["TestAsset"]["id"])
 
         update_mutation = """
-        mutation UpdateAsset($id: Int!, $name: String!, $Plant: ID!, $tagsList: [ID]) {
+        mutation UpdateAsset($id: ID!, $name: String!, $Plant: ID!, $tagsList: [ID]) {
             updateTestAsset(id: $id, name: $name, Plant: $Plant, tagsList: $tagsList) {
                 success
                 TestAsset { id name }

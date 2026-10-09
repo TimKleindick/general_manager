@@ -374,7 +374,7 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self.assertEqual(returned_ids["emptySort"], returned_ids["omittedSort"])
         self.assertCountEqual(
             returned_ids["omittedSort"],
-            [project.id for project in projects],
+            [str(project.id) for project in projects],
         )
 
     def test_sort_list_rejects_null_elements(self):
