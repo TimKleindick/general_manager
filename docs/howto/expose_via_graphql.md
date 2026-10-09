@@ -139,9 +139,75 @@ mutations, and subscriptions.
 
 ## Filter by identifier
 
-Identifier equality filters (`id`, `id_Exact`, and `id_In`) use the GraphQL
-`ID` scalar, matching detail-query arguments. Ordered comparisons such as
-`id_Gt` retain the identifier's underlying numeric scalar when available.
+Actual ORM primary keys and raw scalar foreign-key references use GraphQL
+`ID`, and their outputs serialize as strings. Identifier equality and exact
+filters (`id` and `id_Exact`) use `ID`; membership (`id_In`) uses `[ID]`.
+This also applies to PKs with other names, such as `code`, and foreign-key
+aliases such as `ownerId`. Single manager relations remain object fields and
+collection relations remain paginated object fields.
+
+Identity is derived from actual field metadata. An ordinary field named
+`external_id` or a calculation/request composite business input named `id`
+keeps its native scalar. Actual manager reference inputs use scalar IDs or
+structured inputs when the referenced manager has composite constructor
+inputs. Ordered comparisons such as `id_Gt` retain the native scalar and its
+hints, including `BigIntScalar` where configured.
+
+### Configure UUID and string primary keys
+
+The GraphQL scalar does not change the Python/database type or configure the
+manager constructor. Keep an explicit `Input(UUID)` or `Input(str)` for ORM
+keys that do not use the default integer input:
+
+```python
+from uuid import UUID, uuid4
+
+from django.db import models
+
+from general_manager import GeneralManager
+from general_manager.interface import DatabaseInterface
+from general_manager.manager import Input
+
+
+class UuidRecord(GeneralManager):
+    class Interface(DatabaseInterface):
+        input_fields = {"id": Input(UUID)}
+        id = models.UUIDField(primary_key=True, default=uuid4)
+        name = models.CharField(max_length=100)
+
+
+class CodeRecord(GeneralManager):
+    class Interface(DatabaseInterface):
+        input_fields = {"id": Input(str)}
+        code = models.CharField(max_length=32, primary_key=True)
+        name = models.CharField(max_length=100)
+```
+
+`CodeRecord` exposes `code: ID` and `code`/`code_Exact`/`code_In` filters.
+Its detail query still accepts the constructor argument `id: ID!`, which
+addresses that model's `code` PK. UUID values remain `UUID` objects in Python;
+code values remain strings.
+
+### Migrate existing clients
+
+1. Change affected variable declarations from `Int` or `String` to `ID`, and
+   their list equivalents to `[ID]`, keeping the intended nullability.
+   Range variables and composite business inputs retain their native types.
+2. Regenerate schema-derived client types after updating the schema.
+3. Update equality comparisons, selected-item state, and normalized cache keys
+   to use returned ID strings consistently. An integer-backed ID now returns
+   `"42"`, so comparing it with the number `42` will no longer match.
+4. Keep IDs as opaque strings. Avoid `Number`, `parseInt`, or other numeric
+   coercion; large integers may lose precision, and UUID/string keys cannot be
+   represented as numbers.
+5. Check create-operation variables for required fields without real defaults.
+   `NOT_PROVIDED` no longer appears as a schema default, so a declaration such
+   as `$budget: MeasurementScalar` must become `$budget: MeasurementScalar!`
+   when the generated create argument is required, even if a value is supplied.
+
+The [identifier filter concept](../concepts/graphql/filters_pagination.md#identifier-filters)
+and [query patterns](../examples/graphql_queries.md#reuse-identifier-variables)
+show requests using the updated declarations.
 
 ## Filter calculation managers by manager input
 
@@ -192,14 +258,16 @@ GraphQL input coercion with the same validation errors raised by
 `Measurement.from_string()`.
 
 ```graphql
-mutation UpdateInventory($id: Int!, $price: MeasurementScalar!) {
+mutation UpdateInventory($id: ID!, $price: MeasurementScalar!) {
   updateInventory(id: $id, price: $price) {
     success
   }
 }
 ```
 
-Fields marked with `graphql_scalar="bigint"` use `BigIntScalar`. The scalar
+Native fields marked with `graphql_scalar="bigint"` use `BigIntScalar`, as do
+range comparisons on identities with that hint. Identity outputs and equality
+filters use `ID` while retaining the native hint in metadata. `BigIntScalar`
 returns large integers as strings to avoid precision loss in JavaScript clients
 and accepts string or integer inputs. Boolean values are rejected explicitly, and
 other non-coercible values fail with a scalar coercion error. Float and `Decimal`
@@ -211,12 +279,37 @@ schema generation unwraps optional fields and builds list fields before calling
 that mapper; direct calls with annotations such as `Optional[int]`, `list[int]`,
 or `Annotated[int, ...]` fall back to `String`.
 
+## Create a manager with a manual primary key
+
+Generated ORM create mutations omit auto-increment keys. Editable manual PKs
+are accepted as `ID`, including a PK field named `id`. A PK without a default
+is required; a model default makes it optional. For the `CodeRecord` above:
+
+```graphql
+mutation CreateCodeRecord($code: ID!, $name: String!) {
+  createCodeRecord(code: $code, name: $name) {
+    success
+  }
+}
+```
+
+```json
+{"code": "CAT-042", "name": "Catalog entry"}
+```
+
+Create arguments retain literal model defaults. The `NOT_PROVIDED` sentinel
+and callable defaults are absent from the schema; schema construction never
+calls them. Omitting `id` when creating `UuidRecord` lets the ORM apply `uuid4`
+at write time. Requiredness, model validation, and validation of explicit
+`null` remain enforced.
+
 ## Partially update a generated manager
 
-When an interface supports `update`, GeneralManager generates an
-`update<ManagerName>` mutation. The mutation always requires `id`, while each
-editable field is optional. This makes it safe to change one field without
-re-sending the rest of the object:
+When an ORM interface supports `update`, GeneralManager generates an
+`update<ManagerName>` mutation. The target argument remains `id: ID!`; writable
+fields cannot overwrite it, and primary keys are excluded from update payload
+fields. Each other editable field is optional. This makes it safe to change one
+field without re-sending the rest of the object:
 
 ```graphql
 mutation RenameProject($id: ID!) {

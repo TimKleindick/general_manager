@@ -1926,7 +1926,10 @@ class GraphQLSearchHelperCoverageTests(SimpleTestCase):
             @classmethod
             def get_attribute_types(cls):
                 """Return simple leaf attributes for nested relation filters."""
-                return {"id": {"type": int}, "status": {"type": str}}
+                return {
+                    "id": {"type": int, "is_identifier": True},
+                    "status": {"type": str},
+                }
 
         class LeafManager(GeneralManager):
             Interface = LeafInterface

@@ -2877,7 +2877,7 @@ def test_build_field_descriptors_translates_graphql_compatible_field_types():
 
 
 def test_build_field_descriptors_does_not_mark_auto_pk_as_bigint_graphql_scalar():
-    """Auto-increment primary keys keep the legacy GraphQL Int contract."""
+    """Auto PKs retain native int metadata while GraphQL uses identity metadata."""
 
     class AutoPkModel(models.Model):
         id = models.BigAutoField(primary_key=True)
@@ -2893,3 +2893,4 @@ def test_build_field_descriptors_does_not_mark_auto_pk_as_bigint_graphql_scalar(
 
     assert descriptors["id"].metadata["type"] is int
     assert "graphql_scalar" not in descriptors["id"].metadata
+    assert descriptors["id"].metadata["is_identifier"] is True

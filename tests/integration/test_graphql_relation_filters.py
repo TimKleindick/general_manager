@@ -350,14 +350,14 @@ class GraphQLRelationFilterIntegrationTests(GeneralManagerTransactionTestCase):
         }
         """
 
-        response = self.query(query, variables={"id": self.primary.id})
+        response = self.query(query, variables={"id": str(self.primary.id)})
 
         self.assertResponseNoErrors(response)
         payload = response.json()["data"]
-        self.assertEqual(payload["changeRequest"]["id"], self.primary.id)
+        self.assertEqual(payload["changeRequest"]["id"], str(self.primary.id))
         self.assertEqual(
             [item["id"] for item in payload["changeRequestFeasibilityList"]["items"]],
-            [self.high_feasibility.id],
+            [str(self.high_feasibility.id)],
         )
 
     def test_id_filter_variants_use_identifier_and_numeric_scalars(self):

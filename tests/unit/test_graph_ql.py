@@ -3303,7 +3303,7 @@ class GraphQLTests(TestCase):
 
                 @staticmethod
                 def get_attribute_types():
-                    return {"id": {"type": int}}
+                    return {"id": {"type": int, "is_identifier": True}}
 
         normalized = GraphQL._normalize_filter_input(
             IdentifierManager,
@@ -3322,7 +3322,7 @@ class GraphQLTests(TestCase):
 
                 @staticmethod
                 def get_attribute_types():
-                    return {"id": {"type": int}}
+                    return {"id": {"type": int, "is_identifier": True}}
 
         normalized = GraphQL._normalize_filter_input(
             IdentifierManager,
@@ -4569,7 +4569,7 @@ class TestGrapQlMutation(TestCase):
                 self.field1 = kwargs.get("field1")
 
             class Interface(InterfaceBase):
-                input_fields: ClassVar[dict] = {"id": None}
+                input_fields: ClassVar[dict] = {"id": Input(int)}
 
                 @classmethod
                 def get_attribute_types(cls):
@@ -4635,7 +4635,7 @@ class TestGrapQlMutation(TestCase):
                 pass
 
             class Interface(InterfaceBase):
-                input_fields: ClassVar[dict] = {"id": None}
+                input_fields: ClassVar[dict] = {"id": Input(int)}
 
                 @classmethod
                 def get_attribute_types(cls):

@@ -59,6 +59,45 @@ normalizers receive the parsed object mapping for the current `filter` or
 `exclude` input and must return both `filter` and `exclude` mappings; missing
 keys propagate the resulting Python `KeyError`.
 
+## Identifier filters
+
+Actual ORM primary keys and raw foreign-key aliases use `ID` for equality and
+exact filters, and `[ID]` for membership. With default camel-casing, an `id`
+field exposes `id`, `id_Exact`, and `id_In`; a PK named `code` exposes `code`,
+`code_Exact`, and `code_In`; a raw `owner_id` reference exposes `ownerId`,
+`ownerId_Exact`, and `ownerId_In`. The names come from field metadata, so
+ordinary fields with ID-like names and calculation/request composite business
+inputs keep their native scalar filters.
+
+```graphql
+query ProjectsById($id: ID!, $ids: [ID]) {
+  exact: projectList(filter: {id_Exact: $id}) {
+    items { id name }
+  }
+  selected: projectList(filter: {id_In: $ids}) {
+    items { id name }
+  }
+}
+```
+
+```json
+{"id": "42", "ids": ["42", "43"]}
+```
+
+ID outputs are strings, and the server converts equality filter values back
+to the configured Python/ORM type before querying. Raw foreign keys use their
+referenced target field for conversion, including relations configured with
+`to_field`. Ordered comparisons such as `id_Gt` retain the native scalar:
+an integer PK uses `Int`, and a field with the native `bigint` hint uses
+`BigIntScalar`. Those range variables do not change to `ID`.
+String-key pattern filters also retain their native `String` arguments.
+
+Object relation filters retain their nested shape, and collection relation
+filters retain `any` and `none`. When updating clients, change affected scalar
+variables from `Int`/`String` to `ID` and lists to `[ID]`, regenerate client
+types, and keep IDs as strings in comparisons, state, and cache keys. See the
+[identifier guide](../../howto/expose_via_graphql.md#filter-by-identifier).
+
 ## Pagination model
 
 Pagination is page-based. Responses include a `pageInfo` object with:

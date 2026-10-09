@@ -506,7 +506,7 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
 
         omitted = self.query(
             """
-            mutation Rename($id: Int!) {
+            mutation Rename($id: ID!) {
               updateUploadProfile(id: $id, title: "Renamed") {
                 success
                 UploadProfile { id title document { name status } }
@@ -521,7 +521,7 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
 
         cleared = self.query(
             """
-            mutation Clear($id: Int!) {
+            mutation Clear($id: ID!) {
               updateUploadProfile(id: $id, document: null) {
                 success
                 UploadProfile { id document { name } }
@@ -591,7 +591,7 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
         )
         wrong_operation = self.query(
             """
-            mutation WrongOperation($id: Int!, $avatar: UploadToken!) {
+            mutation WrongOperation($id: ID!, $avatar: UploadToken!) {
               updateUploadProfile(id: $id, avatar: $avatar) { success }
             }
             """,
@@ -618,7 +618,7 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
         self._transfer(update_bound, _PNG)
         wrong_target = self.query(
             """
-            mutation WrongTarget($id: Int!, $avatar: UploadToken!) {
+            mutation WrongTarget($id: ID!, $avatar: UploadToken!) {
               updateUploadProfile(id: $id, avatar: $avatar) { success }
             }
             """,
@@ -719,7 +719,7 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
         ):
             updated = self.query(
                 """
-                mutation Replace($id: Int!, $avatar: UploadToken!) {
+                mutation Replace($id: ID!, $avatar: UploadToken!) {
                   updateUploadProfile(id: $id, avatar: $avatar) {
                     success
                     UploadProfile { id avatar { name status downloadUrl } }

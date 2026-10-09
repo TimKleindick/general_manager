@@ -20,6 +20,7 @@ import graphene
 from graphql import GraphQLError, GraphQLResolveInfo
 
 from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql_identifiers import map_identification_scalar
 from general_manager.api.graphql_output import create_output_field_resolver
 from general_manager.manager.general_manager import GeneralManager
 
@@ -189,7 +190,9 @@ def _get_or_create_manager_input_type(
                 )
             continue
 
-        fields[input_name] = GraphQL._map_field_to_graphene_base_type(field_type)(
+        fields[input_name] = map_identification_scalar(
+            manager_class, input_name, field_type
+        )(
             required=required,
         )
 

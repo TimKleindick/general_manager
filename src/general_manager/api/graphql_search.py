@@ -21,6 +21,8 @@ from typing import (
 
 import graphene
 from graphql import GraphQLError
+from django.core.exceptions import FieldDoesNotExist
+from django.db import models
 
 from general_manager.conf import get_setting
 from general_manager.api.graphql_ordering import (
@@ -522,8 +524,8 @@ def get_filter_options(
     Emitted variants are:
     - GeneralManager relations: the base attribute with ``None`` so relation
       filter generation can handle it separately.
-    - ``id``: ``id``, ``id__exact``, ``id__in``, plus range variants
-      ``id__gt/gte/lt/lte`` using the normal mapper.
+    - Scalar identifiers marked in metadata: base, ``exact`` and ``in`` use
+      ``ID``/``[ID]``; range variants retain the native scalar mapper.
     - ``Measurement``: base attribute plus ``gt/gte/lt/lte`` using
       ``MeasurementScalar``.
     - numeric, date, and datetime types: base attribute plus
@@ -570,19 +572,28 @@ def get_filter_options(
 
     if manager_type is not None:
         yield attribute_name, None
-    elif attribute_name == "id":
+    elif attr_info and attr_info.get("is_identifier"):
         yield attribute_name, graphene.ID()
         yield f"{attribute_name}__exact", graphene.ID()
         yield f"{attribute_name}__in", graphene.List(graphene.ID)
+        native_info = {k: v for k, v in attr_info.items() if k != "is_identifier"}
         for option in ("gt", "gte", "lt", "lte"):
             yield (
                 f"{attribute_name}__{option}",
                 map_field_to_graphene_read(
                     normalized_type,
                     attribute_name,
-                    attr_info,
+                    native_info,
                 ),
             )
+        if safe_issubclass(normalized_type, str):
+            for option in ("icontains", "contains", "startswith", "endswith"):
+                yield (
+                    f"{attribute_name}__{option}",
+                    map_field_to_graphene_read(
+                        normalized_type, attribute_name, native_info
+                    ),
+                )
     elif safe_issubclass(normalized_type, Measurement):
         yield attribute_name, MeasurementScalar()
         for option in number_options:
@@ -833,31 +844,55 @@ def normalize_id_filter_value(
     value: object,
 ) -> object:
     """
-    Cast equality-style ID filter values to the manager's identifier type.
+    Convert equality filters marked as scalar identities to their native types.
 
-    Only ``id``, ``id__exact``, and list/tuple-valued ``id__in`` lookups are
-    cast. When the interface does not expose an ``id`` input, or ``id__in`` is
-    not list/tuple-shaped, the original value is returned unchanged. Other
-    iterables are not cast specially.
+    Actual ORM primary keys use the declared constructor input, independent of
+    the model column name. Raw relation references use the target field's
+    ``to_python`` conversion, including ``to_field`` references. Ordered lookups
+    and non-list/tuple ``in`` values pass through unchanged. Conversion preserves
+    existing filter semantics; constructor and write validation remain separate.
 
     Raises:
-        Exceptions from the interface input field's ``cast()`` method propagate
-        unchanged.
+        Exceptions from ``Input.cast()`` or ORM field conversion propagate.
     """
-    if lookup not in {"id", "id__exact", "id__in"}:
+    parts = lookup.split("__")
+    attribute_name = parts[0]
+    operator = parts[1] if len(parts) == 2 else "exact"
+    if len(parts) > 2 or operator not in {"exact", "in"}:
         return value
 
     interface = getattr(field_type, "Interface", None)
+    if interface is None:
+        return value
+    metadata = interface.get_attribute_types().get(attribute_name, {})
+    if not metadata.get("is_identifier"):
+        return value
     input_fields = getattr(interface, "input_fields", {})
-    id_input = input_fields.get("id") if isinstance(input_fields, dict) else None
-    if id_input is None:
+    input_field = input_fields.get(attribute_name)
+    model = getattr(interface, "_model", None)
+    converter: Callable[[object], object] | None = None
+    if isinstance(model, type) and issubclass(model, models.Model):
+        try:
+            model_field = model._meta.get_field(attribute_name)
+        except FieldDoesNotExist:
+            return value
+        if model_field.primary_key:
+            # ORM constructors expose the actual PK under their public id input,
+            # even when the model column has another name.
+            input_field = input_fields.get("id")
+        if input_field is None:
+            target_field = getattr(model_field, "target_field", model_field)
+            converter = target_field.to_python
+    if input_field is not None:
+        converter = input_field.cast
+    if converter is None:
         return value
 
-    if lookup == "id__in":
+    if operator == "in":
         if not isinstance(value, (list, tuple)):
             return value
-        return [id_input.cast(item) for item in value]
-    return id_input.cast(value)
+        return [converter(item) for item in value]
+    return converter(value)
 
 
 def normalize_filter_input(

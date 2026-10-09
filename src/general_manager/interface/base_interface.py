@@ -148,6 +148,9 @@ class AttributeTypedDict(TypedDict):
 
     type: type
     graphql_scalar: NotRequired[str]
+    is_identifier: NotRequired[bool]
+    is_primary_key: NotRequired[bool]
+    is_auto_primary_key: NotRequired[bool]
     relation_kind: NotRequired[str]
     filter_lookup: NotRequired[str]
     orm_field_kind: NotRequired[Literal["file", "image"]]

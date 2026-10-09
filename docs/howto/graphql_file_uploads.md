@@ -208,7 +208,7 @@ Python attributes containing underscores remain snake_case here).
 Consume the token with variables, never by interpolating it into query text:
 
 ```graphql
-mutation UpdateAvatar($id: Int!, $upload: UploadToken!) {
+mutation UpdateAvatar($id: ID!, $upload: UploadToken!) {
   updateProfile(id: $id, avatar: $upload) {
     success
     Profile {
@@ -281,7 +281,7 @@ async function uploadAvatar(profileId, file) {
   if (!transferred.ok) throw await transferred.json();
 
   return (await graphql(`
-    mutation Consume($id: Int!, $token: UploadToken!) {
+    mutation Consume($id: ID!, $token: UploadToken!) {
       updateProfile(id: $id, avatar: $token) {
         Profile { avatar { status downloadUrl expiresAt } }
       }
