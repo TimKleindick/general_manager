@@ -23,6 +23,7 @@ The cookbook collects self-contained snippets that demonstrate how to solve doma
 - [Remote manager interface end-to-end](remote_manager_interface_end_to_end.md)
 - [Excel interface end-to-end](excel_interface_end_to_end.md)
 - [Startup hooks with custom ordering](startup_hooks.md)
+- [Snapshot async workflow input before commit](workflow_input_snapshot.md)
 - [Related search invalidation](search_invalidation.md)
 
 Contributions are welcome—add your own recipes as your project evolves.

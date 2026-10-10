@@ -841,6 +841,18 @@ target are outside this exception-recovery guarantee. End recovery requires
 acquiring the mutex and recording its target; an acquisition failure before that
 point has no journal to recover.
 
+For ORM-backed writes inside a caller-owned transaction, including both
+`create_many()` paths, the decorator holds dependency-cache publication on the
+writing connection until the actual outer commit, rollback, or connection
+close. Savepoint release and rollback do not release that barrier. Committed
+warm-up work is dispatched only after the final barrier closes; rollback and
+connection close discard pending warm-up work and clear run-local ORM cache
+state. With a shared coordination cache, the barrier spans participating
+connections and workers, so callers should keep write transactions short. This
+coordination is internal to `data_change`; callers must not invoke barrier
+helpers or edit coordination keys directly. See the [cache concept](../concepts/caching.md)
+and [create-many transaction guide](../howto/create_many.md) for usage guidance.
+
 ### ORM data-change transaction lifecycle
 
 ORM-backed `@data_change` mutations expose one transaction lifecycle envelope
