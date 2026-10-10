@@ -60,6 +60,17 @@ consuming more input. This prevents a later checkpoint from skipping rows that
 an earlier caller savepoint rolled back. Use `atomic()` for caller scopes;
 low-level manual savepoint manipulation is outside this contract.
 
+Dependency-cache publication follows the same outer transaction boundary.
+GeneralManager keeps the shared publication barrier active while a caller-owned
+`create_many()` transaction is open, including across savepoint release and
+rollback. Reads from other connections continue to see only committed rows,
+but calculations started during the write cannot publish uncommitted results to
+the shared dependency cache. Commit releases the barrier and makes eligible
+warm-up work available; rollback or connection close discards that work. Keep
+long imports short when workers share the coordination cache. See the [cache
+concept](../concepts/caching.md) for the failure-recovery and shared-backend
+limits.
+
 Manually disabling autocommit outside `transaction.atomic()` is unsupported
 and rejected before consuming the next batch. A hook that marks a transaction
 for rollback without raising also fails the batch; it cannot produce a

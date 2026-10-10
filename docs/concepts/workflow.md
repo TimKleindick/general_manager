@@ -254,6 +254,15 @@ and metadata. Returned `WorkflowExecution` objects are snapshots, not live ORM
 objects; async workers may update the database immediately after `start()`
 returns.
 
+`CeleryWorkflowEngine.start(...)` shallow-copies the top level of `input_data`
+before it persists the execution. Async dispatch uses another top-level copy of
+that snapshot after the surrounding transaction commits, so later additions,
+updates, or removals on the caller's mapping do not change the stored execution
+or the task payload. Nested mappings and sequences are not deep-copied or
+JSON-normalized. Each call gets its own top-level snapshot; rolling back the
+transaction or savepoint that contains a call discards that execution and its
+pending dispatch.
+
 ## Outbox and delivery
 
 Production mode uses the workflow outbox to claim, route, retry, and dead-letter event delivery. The management commands `workflow_drain_outbox` and `workflow_replay_dead_letters` are operational tools for draining pending rows and replaying dead-lettered rows. Celery Beat can drain the outbox periodically when workflow beat settings are enabled.
