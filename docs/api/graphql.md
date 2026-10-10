@@ -432,7 +432,7 @@ adds a sibling grouped field with this shape:
   groupBy: [String!]!
   filter: <Manager>FilterInput
   exclude: <Manager>FilterInput
-  orderBy: [<Manager>OrderBy!]
+  orderBy: [<Manager>GroupsOrderBy!]
   page: Int
   pageSize: Int
   includeInactive: Boolean
@@ -446,31 +446,42 @@ fields when soft delete is enabled; relation group fields do not expose it.
 non-collection field, and is mapped to the Python interface names before the
 bucket is grouped.
 
-The returned page contains `groups` and `pageInfo`. Each group contains typed
-`keys`, paginated original `members`, `count`, and—when at least one eligible
-sum field exists—a typed `sums` object. Numeric fields (`Int`, `Float`, and
-`Decimal`) are added; measurement fields retain their `targetUnit: String`
-argument and existing conversion behavior. Text fields return a nullable
-`String` made by excluding null member values, deduplicating remaining values
+The returned page contains flat aggregate `items` and `pageInfo`. Each item
+exposes grouping keys and eligible aggregate fields directly. Numeric fields
+(`Int`, `Float`, and `Decimal`) are added; measurement fields retain their
+`targetUnit: String` argument and existing conversion behavior. Text fields
+return a nullable `String` made by excluding null member values, deduplicating remaining values
 in encounter order, and joining them with `", "`. An all-null text field
-returns null. This is a GraphQL generated-field behavior; the Python
-`GroupManager.sum(field)` method remains numeric-only.
+returns null. Nullable `Boolean` fields use `any()` over non-null member values;
+an all-null Boolean field returns `null`. The Python `GroupManager.sum(field)`
+method remains numeric-only.
+Entity `id` values are null unless selected as grouping keys. Singular manager
+relations and bucket collections expose distinct original related managers
+through nested `…List` and `…Groups` pages, each with independent query controls.
+The legacy `keys`, `sums`, `members`, and synthetic `count` wrappers are not
+generated. `pageInfo.totalCount` counts groups; query an ordinary filtered
+`…List` for original records and their count.
 
 Row and grouping-key authorization are applied before grouping. An unreadable
 grouping key fails the query with `Permission denied to read grouping key '<field>'.`.
-Each selected sum field is authorized separately for each group before aggregation;
-an unreadable sum fails that field with
-`Permission denied to read sum field '<field>'.`.
-Missing `groupBy` raises `groupBy must select at least one grouping key.`;
-unknown keys raise `'<field>' is not an eligible grouping key.`; and ordering
-by a field not selected in `groupBy` raises
-`Grouped orderBy fields must be selected grouping keys.`. Normal filter,
-bucket, and pagination errors retain their existing GraphQL behavior.
+Each selected aggregate field is authorized against every contributing member
+before aggregation; an unreadable field fails with
+`Permission denied to read grouped field '<field>'.`.
+Omitting the required `groupBy` argument fails GraphQL validation; `groupBy: []`
+raises `groupBy must select at least one grouping key.`. Unknown keys raise
+`'<field>' is not an eligible grouping key.`. `orderBy` accepts eligible
+aggregate scalar fields, including fields not selected in `groupBy`, and sorts
+their grouped values before pagination. Grouping and ordering fields both
+require source-field permission before their values are read. The grouped
+ordering enum excludes collections, object fields, and relation traversal;
+eligible scalar relation-ID aliases remain available. Root fields use
+`<Manager>GroupsOrderBy`; relation group fields use the corresponding
+`<Manager>RelationGroupsOrderBy` input. Normal filter, bucket, and pagination
+errors retain their existing GraphQL behavior.
 
-The generated `GroupPage`, `Group`, `GroupKeys`, and `GroupSums` types and their
-resolvers are schema output, not stable Python imports. Text sums are available
-from GeneralManager 0.79.2; earlier generated schemas omitted `sums` for
-text-only fields. See the [grouping concept](../concepts/graphql/filters_pagination.md#grouping),
+The generated `<Manager>GroupPage` and `<Manager>GroupType` types and their
+resolvers are schema output, not stable Python imports. See the
+[grouping concept](../concepts/graphql/filters_pagination.md#grouping),
 [GraphQL how-to](../howto/expose_via_graphql.md#query-generated-lists), and
 [cookbook query](../examples/graphql_queries.md#aggregate-unique-text-values-in-groups)
 for the model and a directly usable request.
@@ -671,14 +682,14 @@ user-facing contract. `totalCount` is counted after permission filters, user
 filters, excludes, and sorting, but before page slicing when the
 source is complete. Request-backed pages whose authorization cannot prove a
 global total return `totalCount: null` and `totalPages: null`. Ordinary lists
-sort records; explicit `…Groups` fields sort selected grouping keys after
-grouping and before pagination. Ordinary lists remain unpaginated
+sort records; grouped endpoints sort eligible aggregate scalars after grouping
+and before pagination, and `totalCount` counts groups. Ordinary lists remain unpaginated
 when both `page` and `pageSize` are omitted. Supplying either uses effective
 defaults of page 1 and size 10, which are also reported in `pageInfo`. Explicit
 zero or negative values are rejected. Empty known result sets report
 `totalPages: 0`; an out-of-range positive page returns an empty item list while
 retaining known metadata. An already-empty grouped result with pagination returns
-an empty `groups` list and its normal page metadata; it does not raise the
+an empty `items` list and its normal page metadata; it does not raise the
 grouped-bucket empty-slice error. Do not import generated/internal Python
 pagination classes directly.
 
@@ -997,3 +1008,20 @@ to `400/validation_error`, `RuntimeError` to `500/internal_error`, and caught
 `AttributeError`, `LookupError`, `RemoteAPIConfigurationError`, `TypeError`,
 `ValueError`, and `RemoteAPIRequestError` subclasses map to
 `400/invalid_request`.
+
+
+### Grouped bucket endpoints
+
+Generated `…Groups` fields require `groupBy` and return flat aggregate `items`
+with the normal `pageInfo` envelope. Ordinary `…List` fields return records and
+do not accept grouping. Grouped singular relations expose distinct original
+managers through `…List` and `…Groups`; bucket-backed collections support the
+same operations recursively. Each collection applies source permissions and
+filters before grouping, aggregate sorting before pagination, and field
+permissions before reading values.
+
+Grouped item types are distinct from ordinary manager types. There are no
+legacy `keys`, `sums`, `members` or `count` wrappers. Plain
+`List[GraphQLType]` properties remain output collections without query controls.
+See the [grouping contract](../concepts/graphql/filters_pagination.md#grouping)
+for aggregation rules, identity handling and backend restrictions.

@@ -50,9 +50,9 @@ query ProjectList($page: Int!, $pageSize: Int!) {
 }
 ```
 
-## Sort explicit group pages
+## Group through a dedicated endpoint
 
-`orderBy` orders selected group keys after grouping and before pagination.
+`orderBy` orders eligible aggregate scalars after grouping and before pagination.
 This keeps descending group order stable across pages:
 
 ```graphql
@@ -63,58 +63,64 @@ query ProjectsByStatus {
     page: 1
     pageSize: 10
   ) {
-    groups { keys { status } count }
+    items { status name }
     pageInfo { totalCount currentPage totalPages pageSize }
   }
 }
 ```
 
-If the filter produces no groups, the same query shape returns `groups: []` and
+If the filter produces no groups, the same query shape returns `items: []` and
 page metadata rather than an empty-group slicing error.
 
 ## Group by a related manager identity
 
-Grouping by a scalar foreign-key identifier preserves each original related
-manager under the group's paginated members:
+Group by the scalar relation ID and retrieve distinct original related managers:
 
 ```graphql
 query ProjectsByCommercial {
   projectGroups(groupBy: ["commercials_id"]) {
-    groups {
-      keys { commercialsId }
-      members { items { commercials { id name } } }
+    items {
+      commercialsId
+      commercialsList { items { id name } pageInfo { totalCount } }
     }
+    pageInfo { totalCount }
   }
 }
 ```
 
-The generated resolver applies the same explicit grouped-result behavior as
-the Python API. See the [grouped-data concept](../concepts/models_entities.md#grouped-data),
+Bucket relations also expose `…Groups` for recursive grouping, with independent
+filters, ordering and pagination. Plain `List[GraphQLType]` properties remain
+output lists without query controls. See the [grouped-data concept](../concepts/models_entities.md#grouped-data),
 [GraphQL how-to](../howto/expose_via_graphql.md#query-generated-lists), and
 [core API reference](../api/core.md#general_manager.manager.group_manager.GroupManager)
 for the full grouping and error contract.
 
 ## Aggregate unique text values in groups
 
-Generated group fields can return a text field under `sums` as a compact,
-stable summary:
+Generated group fields can return a text field directly under `items` as a
+compact, stable summary:
 
 ```graphql
 query ProjectNamesByStatus {
-  projectGroups(groupBy: ["status"]) {
-    groups {
-      keys { status }
-      count
-      sums { name }
+  projectGroups(
+    groupBy: ["status"]
+    orderBy: [{field: name, direction: ASC}]
+  ) {
+    items {
+      status
+      name
     }
+    pageInfo { totalCount }
   }
 }
 ```
 
-For member values `["Alpha", "Alpha", "Beta", null]`, the `name` sum is
+For member values `["Alpha", "Alpha", "Beta", null]`, the `name` aggregate is
 `"Alpha, Beta"`. Values are deduplicated in encounter order, nulls are
 excluded, and an all-null group returns `null`. Numeric sums retain their
-existing addition behavior. See the [grouping concept](../concepts/graphql/filters_pagination.md#grouping),
+existing addition behavior. `orderBy` sorts the aggregated `name` values even
+though `name` is not selected in `groupBy`; `totalCount` counts groups. See the
+[grouping concept](../concepts/graphql/filters_pagination.md#grouping),
 [GraphQL how-to](../howto/expose_via_graphql.md#query-generated-lists), and
 [GraphQL API reference](../api/graphql.md#explicit-grouped-result-sums) for
 permissions, arguments, and compatibility details.
@@ -243,7 +249,7 @@ query ProjectsByCommercialName($order: [ProjectOrderBy!]) {
     items {
       id
       name
-      commercials { id name }
+      commercialsList { items { id name } pageInfo { totalCount } }
     }
     pageInfo {
       totalCount

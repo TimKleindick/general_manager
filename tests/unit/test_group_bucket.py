@@ -55,7 +55,7 @@ def test_empty_slice_is_an_empty_explicit_group_bucket() -> None:
 
 
 def test_collection_key_is_rejected_before_grouping_an_empty_graphql_source() -> None:
-    """Generated GraphQL grouping rejects wrapped collection keys before reads."""
+    """Grouped list validation rejects wrapped collection keys before reads."""
 
     class CollectionManager:
         class Interface:
