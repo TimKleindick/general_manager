@@ -646,7 +646,7 @@ class TestGraphQLGroupingParity(GeneralManagerTransactionTestCase):
                 {
                     "items": [
                         {
-                            "id": self.calculation_parent.identification["id"],
+                            "id": str(self.calculation_parent.identification["id"]),
                             "name": "Calculation Parent",
                         }
                     ],
