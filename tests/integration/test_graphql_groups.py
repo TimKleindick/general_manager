@@ -116,7 +116,10 @@ class TestGraphQLGroups(GeneralManagerTransactionTestCase):
         )
 
     def test_grouped_id_retains_only_a_selected_key(self) -> None:
-        project = self.group_project.Factory.create(name="Shared", amount=2)
+        for identifier in (10, 2):
+            self.group_project.Interface._model.objects.create(
+                pk=identifier, name="Shared", amount=2
+            )
         response = self.query(
             """
             query($order: [GroupProjectGroupsOrderBy!]) {
@@ -137,7 +140,10 @@ class TestGraphQLGroups(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(
             payload["byId"]["items"],
-            [{"id": project.identification["id"], "name": "Shared"}],
+            [
+                {"id": "2", "name": "Shared"},
+                {"id": "10", "name": "Shared"},
+            ],
         )
 
     def test_grouped_singular_relation_exposes_distinct_list_and_groups(self) -> None:
@@ -189,8 +195,8 @@ class TestGraphQLGroups(GeneralManagerTransactionTestCase):
             item["commercialList"],
             {
                 "items": [
-                    {"id": first.identification["id"], "name": "First"},
-                    {"id": second.identification["id"], "name": "Second"},
+                    {"id": str(first.identification["id"]), "name": "First"},
+                    {"id": str(second.identification["id"]), "name": "Second"},
                 ],
                 "pageInfo": {"totalCount": 2},
             },
@@ -205,7 +211,10 @@ class TestGraphQLGroups(GeneralManagerTransactionTestCase):
         self.assertEqual(
             response.json()["data"]["ordered"]["items"],
             [
-                {"name": "Single", "commercialId": first.identification["id"]},
+                {
+                    "name": "Single",
+                    "commercialId": str(first.identification["id"]),
+                },
                 {"name": "Shared", "commercialId": None},
             ],
         )
