@@ -254,14 +254,16 @@ and metadata. Returned `WorkflowExecution` objects are snapshots, not live ORM
 objects; async workers may update the database immediately after `start()`
 returns.
 
-`CeleryWorkflowEngine.start(...)` shallow-copies the top level of `input_data`
-before it persists the execution. Async dispatch uses another top-level copy of
-that snapshot after the surrounding transaction commits, so later additions,
-updates, or removals on the caller's mapping do not change the stored execution
-or the task payload. Nested mappings and sequences are not deep-copied or
-JSON-normalized. Each call gets its own top-level snapshot; rolling back the
-transaction or savepoint that contains a call discards that execution and its
-pending dispatch.
+When creating a new execution, `CeleryWorkflowEngine.start(...)` shallow-copies
+the top level of `input_data` before persisting it. Async dispatch uses another
+top-level copy of that snapshot after the surrounding transaction commits, so
+later additions, updates, or removals on the caller's mapping do not change the
+stored execution or the task payload. Nested mappings and sequences are not
+deep-copied or JSON-normalized. Each new execution gets its own top-level snapshot; rolling
+back the transaction or savepoint that creates it discards that execution and
+its pending async dispatch. Correlation reuse returns the existing execution
+without capturing the new input or scheduling another task; rolling back a
+reuse call does not delete an execution committed earlier.
 
 ## Outbox and delivery
 

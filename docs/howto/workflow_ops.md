@@ -2,11 +2,17 @@
 
 This guide covers production operations for the workflow outbox and dead-letter flows.
 
-## Start a durable execution inside a transaction
+## Start a durable async execution inside a transaction
 
-In production mode, `CeleryWorkflowEngine.start()` persists the execution and
-dispatches its handler after the surrounding transaction commits. Pass an
-importable top-level handler and treat the input mapping as a request snapshot:
+In asynchronous production mode (`WORKFLOW_MODE="production"` and
+`WORKFLOW_ASYNC=True`), `CeleryWorkflowEngine.start()` persists a new execution
+and dispatches its handler after the surrounding transaction commits. This
+requires Celery installed and configured in the host app, with no settings or
+process-local override selecting a different engine; see the
+[input snapshot recipe](../examples/workflow_input_snapshot.md) for setup.
+With `WORKFLOW_ASYNC=False`, the handler runs inline during `start()`, before
+the caller's transaction commits. Pass an importable top-level handler and
+treat the input mapping as a request snapshot:
 
 ```python
 from django.db import transaction
@@ -29,7 +35,7 @@ with transaction.atomic():
 The top-level changes after `start()` do not affect the stored execution or the
 eventual Celery task. Nested values are shallow-copied only, so nested mutation
 requires the caller to provide its own immutable or copied values. A rollback
-of the containing transaction or savepoint discards the execution and its
+of the containing transaction or savepoint discards the new execution and its
 dispatch; a committed outer transaction dispatches the captured payload. A
 reused active or completed `correlation_id` returns the existing snapshot and
 ignores new input and metadata.
