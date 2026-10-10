@@ -55,3 +55,9 @@ If a record fails, fix the source and retry from the last durable checkpoint,
 not from the failing record alone: all records in its batch rolled back. If you
 wrap the import in an outer transaction, save its checkpoint only after that
 transaction commits; the example above intentionally rejects that usage.
+
+The same outer transaction controls dependency-cache publication. A shared
+dependency cache does not receive values calculated from uncommitted imported
+rows, and savepoint rollback discards pending warm-up work. Keep the import
+transaction short, and let `create_many()` manage the framework lifecycle
+instead of calling internal cache-barrier helpers directly.
