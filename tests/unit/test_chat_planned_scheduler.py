@@ -58,6 +58,17 @@ def _order_distinct_from_set_iteration(prefix: str, count: int) -> tuple[str, ..
     return next(order for order in permutations(items) if tuple(set(order)) != order)
 
 
+def _reference_content(messages: list[object]) -> str:
+    return next(
+        cast(Any, message).content
+        for message in reversed(messages)
+        if cast(Any, message).role == "user"
+        and cast(Any, message).content.startswith(
+            ("REFERENCE_DATA=", "RESOLVED_REFERENCE_DATA=")
+        )
+    )
+
+
 class _Executor:
     responses: ClassVar[list[object]] = []
     responses_by_task: ClassVar[dict[str, list[object]]] = {}
@@ -75,7 +86,7 @@ class _Executor:
     async def complete(self, _messages: list[object], _tools: list[object]):
         type(self).calls.append(_messages)
         type(self).roles.append(self.role)
-        content = _messages[-1].content
+        content = _reference_content(_messages)
         reference = json.loads(
             content.removeprefix("REFERENCE_DATA=").removeprefix(
                 "RESOLVED_REFERENCE_DATA="
@@ -107,9 +118,8 @@ def _settings(*, max_concurrent_tasks: int = 3) -> PlannedChatSettings:
         profiles=MappingProxyType({"test": profile}),
         roles=MappingProxyType(
             {
-                "simple_executor": "test",
-                "complex_executor": "test",
-                "fallback_executor": "test",
+                "executor": "test",
+                "fallback": "test",
                 "synthesizer": "test",
                 "planner": "test",
             }
@@ -121,9 +131,9 @@ def _settings(*, max_concurrent_tasks: int = 3) -> PlannedChatSettings:
 
 def _role_settings() -> PlannedChatSettings:
     roles = (
-        "simple_executor",
-        "complex_executor",
-        "fallback_executor",
+        "executor",
+        "executor",
+        "fallback",
         "synthesizer",
         "planner",
     )
@@ -317,6 +327,7 @@ def test_synthesis_round_budget_exhaustion_has_budget_terminal_reason(
         "event_type": "planned_terminal",
         "coverage": {"resolved": 1, "total": 1},
         "terminal_reason": "budget_exhausted",
+        "reason_origin": "scheduler",
     } in PLANNED_AUDIT_EVENTS
 
 
@@ -407,10 +418,12 @@ def test_duplicate_query_consumes_a_round_but_executes_once() -> None:
     assert events[1]["result"] == events[3]["result"]
 
 
-def _dynamic_child(task_id: str, *, depends_on: list[str]) -> dict[str, object]:
+def _dynamic_child(
+    task_id: str, *, depends_on: list[str], target_requirement_id: str | None = None
+) -> dict[str, object]:
     """Return a hand-written dynamic child accepted by the graph validator."""
 
-    requirement_id = f"{task_id}_query"
+    requirement_id = target_requirement_id or f"{task_id}_query"
     return {
         "task_id": task_id,
         "objective": "find dependent records",
@@ -461,8 +474,16 @@ def test_dynamic_children_handoff_parent_owned_snapshots_only_to_synthesis() -> 
             {
                 "action": "spawn_children",
                 "children": [
-                    _dynamic_child(first_id, depends_on=[parent.task_id]),
-                    _dynamic_child(second_id, depends_on=[parent.task_id]),
+                    _dynamic_child(
+                        first_id,
+                        depends_on=[parent.task_id],
+                        target_requirement_id="parent_first",
+                    ),
+                    _dynamic_child(
+                        second_id,
+                        depends_on=[parent.task_id],
+                        target_requirement_id="parent_second",
+                    ),
                 ],
             },
             {
@@ -525,7 +546,7 @@ def test_dynamic_children_handoff_parent_owned_snapshots_only_to_synthesis() -> 
     assert len(parent_evidence) == 2
     assert all(record.task_id == "task_1" for record in parent_evidence)
     synthesis_reference = json.loads(
-        _Executor.calls[-1][-1].content.removeprefix("RESOLVED_REFERENCE_DATA=")
+        _reference_content(_Executor.calls[-1]).removeprefix("RESOLVED_REFERENCE_DATA=")
     )
     assert {item["task_id"] for item in synthesis_reference["resolved_evidence"]} == {
         "task_1"
@@ -672,7 +693,7 @@ class _ChildDeadlineProvider:
     async def complete(
         self, messages: list[object], _tools: list[object]
     ) -> AsyncIterator[ToolCallEvent | TextChunkEvent | DoneEvent]:
-        content = cast(Any, messages[-1]).content
+        content = _reference_content(messages)
         task_id = json.loads(content.removeprefix("REFERENCE_DATA="))["task"]["task_id"]
         round_number = type(self).rounds.get(task_id, 0) + 1
         type(self).rounds[task_id] = round_number
@@ -715,9 +736,8 @@ def _child_deadline_settings() -> PlannedChatSettings:
         profiles=MappingProxyType({"child_deadline": profile}),
         roles=MappingProxyType(
             {
-                "simple_executor": "child_deadline",
-                "complex_executor": "child_deadline",
-                "fallback_executor": "child_deadline",
+                "executor": "child_deadline",
+                "fallback": "child_deadline",
                 "synthesizer": "child_deadline",
                 "planner": "child_deadline",
             }
@@ -777,8 +797,16 @@ def test_scheduler_rejects_a_third_dynamic_child_across_repeated_actions() -> No
             {
                 "action": "spawn_children",
                 "children": [
-                    _dynamic_child(first_id, depends_on=[parent.task_id]),
-                    _dynamic_child(second_id, depends_on=[parent.task_id]),
+                    _dynamic_child(
+                        first_id,
+                        depends_on=[parent.task_id],
+                        target_requirement_id="parent_first",
+                    ),
+                    _dynamic_child(
+                        second_id,
+                        depends_on=[parent.task_id],
+                        target_requirement_id="parent_second",
+                    ),
                 ],
             },
             *[{"action": "spawn_children", "children": [third_child]}] * 4,
@@ -937,7 +965,11 @@ def test_dynamic_child_rounds_exhaust_the_owning_root_budget() -> None:
             ToolCallEvent(
                 f"query-{number}",
                 "query",
-                {"manager": "PartManager", "fields": [str(number)]},
+                {
+                    "manager": "PartManager",
+                    "fields": [str(number)],
+                    "requirement_id": f"{first_id}_query_{number}",
+                },
             )
             for number in range(8)
         ]
@@ -953,7 +985,11 @@ def test_dynamic_child_rounds_exhaust_the_owning_root_budget() -> None:
             ToolCallEvent(
                 f"second-query-{number}",
                 "query",
-                {"manager": "PartManager", "fields": [str(number)]},
+                {
+                    "manager": "PartManager",
+                    "fields": [str(number)],
+                    "requirement_id": f"{second_id}_query_{number}",
+                },
             )
             for number in range(2)
         ]
@@ -969,6 +1005,8 @@ def test_dynamic_child_rounds_exhaust_the_owning_root_budget() -> None:
     prepared = PreparedPlannedTurn.for_plan(
         ValidatedPlan("read", (parent,)), _settings(), user_text="show records"
     )
+
+    prepared.budget.subtree_limit = 15
 
     asyncio.run(
         _collect(
@@ -1216,7 +1254,7 @@ def test_malformed_executor_attempt_usage_is_recorded_before_private_limiter_fai
     )
     runtime = runner.runtimes["task_1"]
     runtime.status = "running"
-    runtime.role = "complex_executor"
+    runtime.role = "executor"
 
     failure_reason = asyncio.run(runner._execute_one_pass(runtime, ()))
 
@@ -1258,7 +1296,7 @@ def test_expired_executor_admission_does_not_consume_budget_or_call_provider(
     )
     runtime = runner.runtimes["task_1"]
     runtime.status = "running"
-    runtime.role = "complex_executor"
+    runtime.role = "executor"
 
     failure_reason = asyncio.run(runner._execute_one_pass(runtime, ()))
 
@@ -1273,7 +1311,7 @@ def test_executor_passes_its_admission_timeout_without_recomputing_the_clock(
 ) -> None:
     """A later clock read must not shorten the timeout admitted before charging."""
     received_timeouts: list[float] = []
-    clock_readings = iter((9.5, 9.6, 9.9))
+    clock_readings = iter((9.5, 9.6, 9.9, 9.9))
 
     async def complete(
         _provider: object,
@@ -1305,7 +1343,7 @@ def test_executor_passes_its_admission_timeout_without_recomputing_the_clock(
     )
     runtime = runner.runtimes["task_1"]
     runtime.status = "running"
-    runtime.role = "complex_executor"
+    runtime.role = "executor"
 
     asyncio.run(runner._execute_one_pass(runtime, ()))
 
@@ -1479,59 +1517,45 @@ def _run_failure_modes(failure_modes: tuple[str, ...]) -> tuple[Any, list[str]]:
 
 
 @pytest.mark.parametrize(
-    ("failure_mode", "expected_reason"),
+    ("failure_mode", "expected_reason", "requests"),
     [
-        ("provider_none", "provider_failed"),
-        ("malformed_action", "provider_failed"),
-        ("failed_tool", "manager_unresolved"),
+        ("provider_none", "provider_failed", 1),
+        ("malformed_action", "provider_failed", 2),
+        ("failed_tool", "manager_unresolved", 2),
     ],
 )
-def test_two_normal_failures_then_two_fallback_failures_block(
+def test_transport_errors_and_repeated_invalid_operations_stop_explicitly(
     failure_mode: str,
     expected_reason: str,
+    requests: int,
 ) -> None:
     result, roles = _run_failure_modes((failure_mode,) * 4)
-
-    assert roles == [
-        "simple_executor",
-        "complex_executor",
-        "fallback_executor",
-        "fallback_executor",
-    ]
+    assert roles == ["executor"] + ["executor"] * (requests - 1)
     assert result.reasons["task_1"] == expected_reason
 
 
 @pytest.mark.parametrize(
-    ("fallback_pair", "expected_reason"),
+    ("failures", "expected_reason"),
     [
-        (("provider_none", "malformed_action"), "provider_failed"),
-        (("failed_tool", "failed_tool"), "manager_unresolved"),
-        (("failed_tool", "provider_none"), "manager_unresolved"),
-        (("provider_none", "failed_tool"), "manager_unresolved"),
+        (("failed_tool", "provider_none"), "provider_failed"),
+        (("malformed_action", "failed_tool", "failed_tool"), "manager_unresolved"),
+        (("malformed_action", "failed_tool", "malformed_action"), "provider_failed"),
     ],
 )
-def test_fallback_terminal_reason_requires_two_provider_failures(
-    fallback_pair: tuple[str, str],
-    expected_reason: str,
+def test_error_cycles_preserve_the_actual_failure_reason(
+    failures: tuple[str, ...], expected_reason: str
 ) -> None:
-    result, roles = _run_failure_modes(("failed_tool", "failed_tool", *fallback_pair))
-
-    assert roles == [
-        "simple_executor",
-        "complex_executor",
-        "fallback_executor",
-        "fallback_executor",
-    ]
+    result, roles = _run_failure_modes(failures)
+    assert roles == ["executor"] + ["executor"] * (len(failures) - 1)
     assert result.reasons["task_1"] == expected_reason
 
 
-def test_real_progress_resets_consecutive_failure_count() -> None:
+def test_successful_schema_resets_invalid_output_history() -> None:
     requirement = EvidenceRequirement("schema", "schema", "schema", None)
     task = PlannedTask("task_1", "part", (), (requirement,), ("schema",), ())
     _Executor.responses = [
         {"unexpected": "action"},
         ToolCallEvent("schema", "get_manager_schema", {"manager": "PartManager"}),
-        {"unexpected": "action"},
         {"unexpected": "action"},
         {"action": "complete", "evidence_ids": ["task_1:schema:1"]},
         {"answer": "Part schema found.", "evidence_ids": ["task_1:schema:1"]},
@@ -1559,17 +1583,16 @@ def test_real_progress_resets_consecutive_failure_count() -> None:
     runtime.candidates = ("PartManager",)
     asyncio.run(runner.run_task(runtime))
 
-    assert _Executor.roles[:5] == [
-        "simple_executor",
-        "complex_executor",
-        "complex_executor",
-        "complex_executor",
-        "fallback_executor",
+    assert _Executor.roles == [
+        "executor",
+        "executor",
+        "executor",
+        "executor",
     ]
     assert runner.result().statuses["task_1"] == "resolved"
 
 
-def test_candidate_churn_cannot_bypass_ten_local_pass_cap() -> None:
+def test_candidate_churn_cannot_bypass_repeated_invalid_output() -> None:
     _Executor.responses = [{"unexpected": "action"}] * 12
     _Executor.responses_by_task = {}
     _Executor.roles = []
@@ -1593,11 +1616,11 @@ def test_candidate_churn_cannot_bypass_ten_local_pass_cap() -> None:
     )
 
     assert prepared.result is not None
-    assert len(_Executor.roles) <= 9
-    assert prepared.result.reasons["task_1"] == "manager_unresolved"
+    assert len(_Executor.roles) == 2
+    assert prepared.result.reasons["task_1"] == "provider_failed"
 
 
-def test_resolver_passes_are_free_and_cap_at_ten_before_provider_budget() -> None:
+def test_resolver_passes_do_not_add_charges_to_invalid_provider_attempts() -> None:
     task = _task("task_1")
     _Executor.responses = [{"action": "complete", "evidence_ids": ["missing"]}] * 12
     _Executor.responses_by_task = {}
@@ -1621,8 +1644,8 @@ def test_resolver_passes_are_free_and_cap_at_ten_before_provider_budget() -> Non
         )
     )
 
-    assert len(resolver.calls) == 10
-    assert prepared.budget.subtree_count("task_1") == 9
+    assert len(resolver.calls) == 2
+    assert prepared.budget.subtree_count("task_1") == 2
 
 
 def test_executor_reference_includes_the_declared_requirement_operation() -> None:
@@ -1652,10 +1675,15 @@ def test_executor_reference_includes_the_declared_requirement_operation() -> Non
     )
 
     reference = json.loads(
-        _Executor.calls[-1][-1].content.removeprefix("REFERENCE_DATA=")
+        _reference_content(_Executor.calls[-1]).removeprefix("REFERENCE_DATA=")
     )
     assert reference["task"]["requirements"] == [
-        {"requirement_id": "ratio", "kind": "calculation", "operation": "ratio"}
+        {
+            "requirement_id": "ratio",
+            "kind": "calculation",
+            "description": "ratio",
+            "operation": "ratio",
+        }
     ]
 
 
@@ -1908,7 +1936,7 @@ class _RoundProbeProvider:
     async def complete(
         self, messages: list[object], _tools: list[object]
     ) -> AsyncIterator[ToolCallEvent | TextChunkEvent | DoneEvent]:
-        content = cast(Any, messages[-1]).content
+        content = _reference_content(messages)
         task_id = json.loads(content.removeprefix("REFERENCE_DATA="))["task"]["task_id"]
         probe = type(self).probe
         assert probe is not None
@@ -1948,9 +1976,8 @@ def _probe_settings(
         profiles=MappingProxyType({"probe": profile}),
         roles=MappingProxyType(
             {
-                "simple_executor": "probe",
-                "complex_executor": "probe",
-                "fallback_executor": "probe",
+                "executor": "probe",
+                "fallback": "probe",
                 "synthesizer": "probe",
                 "planner": "probe",
             }
@@ -2066,7 +2093,7 @@ def test_scheduler_runs_ready_children_in_creation_order(
     )
     runtime = runner.runtimes[parent.task_id]
     runtime.status = "running"
-    runtime.role = "simple_executor"
+    runtime.role = "executor"
     started: list[str] = []
 
     async def complete(*_args: object, **_kwargs: object) -> ProviderRoundResult:
@@ -2162,7 +2189,7 @@ class _BudgetProbeProvider:
     async def complete(
         self, messages: list[object], _tools: list[object]
     ) -> AsyncIterator[ToolCallEvent | TextChunkEvent | DoneEvent]:
-        content = cast(Any, messages[-1]).content
+        content = _reference_content(messages)
         task_id = json.loads(content.removeprefix("REFERENCE_DATA="))["task"]["task_id"]
         round_number = type(self).rounds_by_task.get(task_id, 0) + 1
         type(self).rounds_by_task[task_id] = round_number
@@ -2227,9 +2254,8 @@ def _budget_settings() -> PlannedChatSettings:
         profiles=MappingProxyType({"budget": profile}),
         roles=MappingProxyType(
             {
-                "simple_executor": "budget",
-                "complex_executor": "budget",
-                "fallback_executor": "budget",
+                "executor": "budget",
+                "fallback": "budget",
                 "synthesizer": "budget",
                 "planner": "budget",
             }
@@ -2304,9 +2330,11 @@ def test_scheduler_marks_a_subtree_budget_exhausted_after_fifteen_requests() -> 
     async def run() -> None:
         runtime = runner.runtimes["task_1"]
         runtime.status = "running"
-        runtime.role = "complex_executor"
+        runtime.role = "executor"
         for _ in range(16):
             await runner._execute_one_pass(runtime, ())
+
+    prepared.budget.subtree_limit = 15
 
     asyncio.run(run())
 
@@ -2345,6 +2373,8 @@ def test_scheduler_global_budget_preserves_resolved_independent_evidence() -> No
             resolver=cast(Any, _StableExactResolver()),
         )
     )
+    prepared.budget.global_limit = 80
+    prepared.budget.subtree_limit = 15
     asyncio.run(
         _collect(
             iter_planned_read_events(
@@ -2379,16 +2409,16 @@ def test_scheduler_global_budget_preserves_resolved_independent_evidence() -> No
 @pytest.mark.parametrize(
     ("plan", "expected_limit"),
     [
-        (ValidatedPlan("read", (_task("task_1"),)), 18),
-        (ValidatedPlan("mutation", ()), 5),
+        (ValidatedPlan("read", (_task("task_1"),)), None),
+        (ValidatedPlan("mutation", ()), None),
     ],
 )
 def test_three_planner_rounds_transfer_to_read_and_zero_root_mutation_ledgers(
-    plan: ValidatedPlan, expected_limit: int
+    plan: ValidatedPlan, expected_limit: None
 ) -> None:
     """Changing the transfer ledger would reject a valid three-attempt plan."""
 
-    provisional_limits: list[int] = []
+    provisional_limits: list[int | None] = []
 
     async def planner(*args: object) -> PlanningResult:
         budget = cast(Any, args[3])
@@ -2408,7 +2438,7 @@ def test_three_planner_rounds_transfer_to_read_and_zero_root_mutation_ledgers(
         )
     )
 
-    assert provisional_limits == [5]
+    assert provisional_limits == [None]
     assert prepared.budget.global_limit == expected_limit
     assert prepared.budget.global_count == 3
 
@@ -2504,7 +2534,7 @@ class _DeadlineProbeProvider:
     async def complete(
         self, messages: list[object], _tools: list[object]
     ) -> AsyncIterator[ToolCallEvent | TextChunkEvent | DoneEvent]:
-        content = cast(Any, messages[-1]).content
+        content = _reference_content(messages)
         task_id = json.loads(content.removeprefix("REFERENCE_DATA="))["task"]["task_id"]
         if task_id == "task_2":
             entered = type(self).entered
@@ -2555,9 +2585,8 @@ def _deadline_settings() -> PlannedChatSettings:
         profiles=MappingProxyType({"deadline": profile}),
         roles=MappingProxyType(
             {
-                "simple_executor": "deadline",
-                "complex_executor": "deadline",
-                "fallback_executor": "deadline",
+                "executor": "deadline",
+                "fallback": "deadline",
                 "synthesizer": "deadline",
                 "planner": "deadline",
             }
@@ -2663,9 +2692,23 @@ def test_evidence_deadline_cancels_async_provider_and_keeps_resolved_evidence() 
     assert result.reasons["task_2"] == "deadline_exceeded"
 
 
-def test_closing_public_iterator_after_tool_call_cancels_in_flight_work() -> None:
+@pytest.mark.parametrize("startup_delay", [0.0, 0.3])
+def test_closing_public_iterator_after_tool_call_cancels_in_flight_work(
+    monkeypatch: pytest.MonkeyPatch, startup_delay: float
+) -> None:
     """Removing generator-close cleanup leaks provider and tool work after disconnect."""
 
+    original_complete = _DeadlineProbeProvider.complete
+
+    async def delayed_complete(
+        self: _DeadlineProbeProvider, messages: list[object], tools: list[object]
+    ) -> AsyncIterator[ToolCallEvent | TextChunkEvent | DoneEvent]:
+        if startup_delay:
+            await asyncio.sleep(startup_delay)
+        async for event in original_complete(self, messages, tools):
+            yield event
+
+    monkeypatch.setattr(_DeadlineProbeProvider, "complete", delayed_complete)
     _DeadlineProbeProvider.entered = asyncio.Event()
     _DeadlineProbeProvider.release = asyncio.Event()
     _DeadlineProbeProvider.allow_resolve = asyncio.Event()
@@ -2679,11 +2722,13 @@ def test_closing_public_iterator_after_tool_call_cancels_in_flight_work() -> Non
     )
 
     async def run() -> None:
+        tool_entered = asyncio.Event()
         tool_cancelled = asyncio.Event()
 
         async def run_sync(
             _fn: Any, _args: tuple[Any, ...], _kwargs: dict[str, Any]
         ) -> Any:
+            tool_entered.set()
             try:
                 await asyncio.Future()
             except asyncio.CancelledError:
@@ -2702,13 +2747,18 @@ def test_closing_public_iterator_after_tool_call_cancels_in_flight_work() -> Non
                 ),
             ),
         )
-        event = await asyncio.wait_for(iterator.__anext__(), timeout=0.2)
+        # Startup is synchronization, not a latency contract or evidence deadline.
+        event = await asyncio.wait_for(iterator.__anext__(), timeout=5.0)
         assert event["type"] == "tool_call"
         entered = _DeadlineProbeProvider.entered
         assert entered is not None
-        await asyncio.wait_for(entered.wait(), timeout=0.2)
-        await iterator.aclose()
-        await iterator.aclose()
+        await asyncio.wait_for(
+            asyncio.gather(entered.wait(), tool_entered.wait()), timeout=5.0
+        )
+        assert not tool_cancelled.is_set()
+        assert _DeadlineProbeProvider.cancelled is False
+        await asyncio.wait_for(iterator.aclose(), timeout=5.0)
+        await asyncio.wait_for(iterator.aclose(), timeout=5.0)
 
         assert tool_cancelled.is_set()
         assert _DeadlineProbeProvider.cancelled is True
@@ -2913,7 +2963,7 @@ class _MatrixDeadlineProvider:
     async def complete(
         self, messages: list[object], _tools: list[object]
     ) -> AsyncIterator[ToolCallEvent | TextChunkEvent | DoneEvent]:
-        content = cast(Any, messages[-1]).content
+        content = _reference_content(messages)
         task_id = json.loads(content.removeprefix("REFERENCE_DATA="))["task"]["task_id"]
         entered = type(self).entered
         first_ready = type(self).first_ready
@@ -2992,9 +3042,8 @@ def _matrix_deadline_settings() -> PlannedChatSettings:
         profiles=MappingProxyType({"executor": executor, "synthesizer": synthesizer}),
         roles=MappingProxyType(
             {
-                "simple_executor": "executor",
-                "complex_executor": "executor",
-                "fallback_executor": "executor",
+                "executor": "executor",
+                "fallback": "executor",
                 "synthesizer": "synthesizer",
                 "planner": "synthesizer",
             }
@@ -3022,9 +3071,8 @@ def _matrix_settings() -> PlannedChatSettings:
         profiles=MappingProxyType({PRIVATE_SENTINELS[0]: profile}),
         roles=MappingProxyType(
             {
-                "simple_executor": PRIVATE_SENTINELS[0],
-                "complex_executor": PRIVATE_SENTINELS[0],
-                "fallback_executor": PRIVATE_SENTINELS[0],
+                "executor": PRIVATE_SENTINELS[0],
+                "fallback": PRIVATE_SENTINELS[0],
                 "synthesizer": PRIVATE_SENTINELS[0],
                 "planner": PRIVATE_SENTINELS[0],
             }
@@ -3072,8 +3120,16 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
                 {
                     "action": "spawn_children",
                     "children": [
-                        _dynamic_child(first_id, depends_on=[parent.task_id]),
-                        _dynamic_child(second_id, depends_on=[parent.task_id]),
+                        _dynamic_child(
+                            first_id,
+                            depends_on=[parent.task_id],
+                            target_requirement_id="parent_first",
+                        ),
+                        _dynamic_child(
+                            second_id,
+                            depends_on=[parent.task_id],
+                            target_requirement_id="parent_second",
+                        ),
                     ],
                 },
                 {
@@ -3181,7 +3237,11 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
                     ToolCallEvent(
                         f"budget-first-query-{number}",
                         "query",
-                        {"manager": "PartManager", "fields": [str(number)]},
+                        {
+                            "manager": "PartManager",
+                            "fields": [str(number)],
+                            "requirement_id": f"{first_id}_query_{number}",
+                        },
                     )
                     for number in range(8)
                 ),
@@ -3197,7 +3257,11 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
                     ToolCallEvent(
                         f"budget-second-query-{number}",
                         "query",
-                        {"manager": "PartManager", "fields": [str(number)]},
+                        {
+                            "manager": "PartManager",
+                            "fields": [str(number)],
+                            "requirement_id": f"{second_id}_query_{number}",
+                        },
                     )
                     for number in range(2)
                 ),
@@ -3214,6 +3278,8 @@ async def _run_matrix_scenario(scenario: str) -> list[dict[str, Any]]:
             _matrix_settings(),
             user_text="show parts",
         )
+        # Stop before an intentionally unavailable next root response.
+        prepared.budget.subtree_limit = 14
         return await _collect(
             iter_planned_read_events(
                 prepared,

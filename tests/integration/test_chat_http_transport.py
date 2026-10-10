@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 from types import SimpleNamespace
+from graphql import build_schema
 from typing import Any, ClassVar
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
@@ -373,9 +374,12 @@ class _Result:
 
 class _Schema:
     def __init__(self) -> None:
+        self.graphql_schema = build_schema(
+            "type Query { version: String } type Mutation { createPart(name: String): Result } type Result { success: Boolean }"
+        )
         self.calls: list[dict[str, object]] = []
 
-    def execute(self, query_text: str, context_value=None):  # type: ignore[no-untyped-def]
+    def execute(self, query_text: str, context_value=None, variable_values=None):  # type: ignore[no-untyped-def]
         self.calls.append({"query": query_text, "context": context_value})
         return _Result(data={"createPart": {"success": True}})
 
@@ -393,6 +397,19 @@ class _Schema:
 )
 class ChatHttpTransportTests(TestCase):
     def setUp(self) -> None:
+        # Preserve the old write-loop transport assertions behind an explicit
+        # prevalidated mutation handoff. Real Planned read tests are separate.
+        planner = patch(
+            "general_manager.chat.views.prepare_planned_turn",
+            new=AsyncMock(return_value=SimpleNamespace(mutation_plan=object())),
+        )
+        planner.start()
+        self.addCleanup(planner.stop)
+        catalog = patch(
+            "general_manager.chat.views._planned_catalog_summary", return_value={}
+        )
+        catalog.start()
+        self.addCleanup(catalog.stop)
         GraphQL.reset_registry()
         test_urls.urlpatterns[:] = []
         ensure_chat_http_routes()
@@ -430,7 +447,13 @@ class ChatHttpTransportTests(TestCase):
 
     def test_http_and_sse_share_planned_read_logical_events(self) -> None:
         """A transport-local planned loop would diverge from the scheduler contract."""
-        planned_turn = SimpleNamespace(mutation_plan=None)
+        planned_turn = SimpleNamespace(
+            mutation_plan=None,
+            completed_task_context={
+                "objective": "private-context-marker",
+                "completion_criteria": ["private-evidence-id"],
+            },
+        )
         expected_events = [
             {"type": "tool_call", "task_id": "task_1", "id": "call_1"},
             {"type": "tool_result", "task_id": "task_1", "id": "call_1"},
@@ -478,6 +501,9 @@ class ChatHttpTransportTests(TestCase):
         assert http_payload["events"] == expected_events
         assert sse_events == expected_events
         assert http_payload["answer"] == "planned synthesis"
+        assert "private-context-marker" not in json.dumps(http_payload) + sse_body
+        assert "private-evidence-id" not in json.dumps(http_payload) + sse_body
+        assert "completed_task_context" not in json.dumps(http_payload) + sse_body
         assert [event["type"] for event in sse_events][-2:] == ["text_chunk", "done"]
         assert all("task_id" in event for event in sse_events[:2])
 

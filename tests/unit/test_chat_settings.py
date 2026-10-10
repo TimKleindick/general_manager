@@ -212,10 +212,9 @@ class ChatSettingsTests(SimpleTestCase):
                     "enabled": True,
                     "roles": {
                         "planner": "isolated",
-                        "simple_executor": "isolated",
-                        "complex_executor": "isolated",
+                        "executor": "isolated",
                         "synthesizer": "isolated",
-                        "fallback_executor": "isolated",
+                        "fallback": "isolated",
                     },
                 },
             }

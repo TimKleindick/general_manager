@@ -745,6 +745,7 @@ def get_relation_filter_option(
                 {
                     "any": graphene.InputField(nested_type),
                     "none": graphene.InputField(nested_type),
+                    "_general_manager_filter_owner": manager_type,
                 },
             )
         return (
@@ -856,10 +857,12 @@ def create_filter_options(
     if not filter_fields:
         return None
 
+    # Preserve source identity for consumers that restrict manager exposure. This
+    # metadata is not a GraphQL field and does not alter public filter execution.
     filter_class = type(
         graphene_filter_type_name,
         (graphene.InputObjectType,),
-        filter_fields,
+        {**filter_fields, "_general_manager_filter_owner": field_type},
     )
     graphql_filter_type_registry[graphene_filter_type_name] = filter_class
     return filter_class

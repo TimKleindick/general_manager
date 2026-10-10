@@ -37,7 +37,14 @@ def _unresolved(items: Iterable[object]) -> list[dict[str, str]]:
             raise TypeError("unresolved items must be task/reason pairs.")  # noqa: TRY003
         if not isinstance(task_id, str) or not task_id:
             raise ValueError("unresolved task IDs must be non-empty strings.")  # noqa: TRY003
-        result.append({"task_id": task_id, "reason": _valid_reason(reason)})
+        result.append(
+            {
+                "task_id": task_id,
+                "reason": reason
+                if reason == "clarification_required"
+                else _valid_reason(reason),
+            }
+        )
     return result
 
 

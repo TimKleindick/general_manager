@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from functools import wraps
 import inspect
 from types import MappingProxyType
+from decimal import Decimal
 from typing import (
     Type,
     TYPE_CHECKING,
@@ -31,6 +32,7 @@ from general_manager.as_of import (
 )
 from general_manager.utils._args_to_kwargs import args_to_kwargs
 from general_manager.api.property import GraphQLProperty
+from general_manager.interface.unit_contract import FieldUnitContract
 from general_manager.interface.capabilities.base import (
     Capability,
     CapabilityName,
@@ -318,6 +320,9 @@ class InterfaceBase(ABC):
     """Common base API for interfaces backing GeneralManager classes."""
 
     _parent_class: ClassVar[Type["GeneralManager"]]
+    field_unit_contracts: ClassVar[Mapping[str, FieldUnitContract]] = MappingProxyType(
+        {}
+    )
     _interface_type: ClassVar[str]
     _as_of_behavior: ClassVar[Literal["unsupported", "historical", "transparent"]] = (
         "unsupported"
@@ -1367,6 +1372,53 @@ class InterfaceBase(ABC):
         raise NotImplementedError(
             f"{cls.__name__} must provide a read capability implementing get_attribute_types."
         )
+
+    @classmethod
+    def get_field_unit_contracts(cls) -> dict[str, dict[str, object]]:
+        """Return explicit numeric/unit bindings through the shared read abstraction.
+
+        Empty is the compatibility default. No field-name or backend inference.
+        GraphQL construction maps these declared Python names to its actual names.
+        """
+        if not cls.field_unit_contracts:
+            return {}
+        attributes = cls.get_attribute_types()
+        result: dict[str, dict[str, object]] = {}
+        for name, declaration in cls.field_unit_contracts.items():
+            if (
+                name not in attributes
+                or attributes[name]["type"] not in (int, float, Decimal)
+                or not isinstance(declaration, FieldUnitContract)
+            ):
+                message = "unit declarations require an existing numeric attribute"
+                raise ValueError(message)
+            value = declaration.as_mapping()
+            if value["kind"] == "quantity":
+                unit_field = value["unit_field"]
+                if (
+                    unit_field not in attributes
+                    or attributes[unit_field]["type"] is not str
+                ):
+                    message = "quantity units require an existing string unit attribute"
+                    raise ValueError(message)
+            result[name] = value
+        return result
+
+    @classmethod
+    def get_unit_identity_contract(cls) -> dict[str, str] | None:
+        """Prove the shared single-ID constructor; composite identities unsupported."""
+        inputs = getattr(cls, "input_fields", {})
+        if (
+            set(inputs) != {"id"}
+            or inputs["id"].type not in (int, str)
+            or inputs["id"].required is not True
+        ):
+            return None
+        return {
+            "source": "interface_input",
+            "input_name": "id",
+            "input_type": inputs["id"].type.__name__,
+        }
 
     @classmethod
     def get_attributes(cls) -> dict[str, object]:

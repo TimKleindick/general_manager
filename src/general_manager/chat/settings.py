@@ -236,7 +236,8 @@ def validate_chat_settings() -> dict[str, Any]:
     schema = GraphQL.get_schema()
     if schema is None:
         raise ChatConfigurationError.missing_graphql_schema()
-    import_provider()
+    if settings.get("allowed_mutations"):
+        import_provider()
     get_permission_callable()
     mutation_type = getattr(schema.graphql_schema, "mutation_type", None)
     available_mutations = (
@@ -262,13 +263,11 @@ def validate_chat_settings() -> dict[str, Any]:
     from general_manager.chat.planned.config import get_planned_chat_settings
 
     planned_settings = get_planned_chat_settings()
-    if planned_settings.enabled:
-        from general_manager.chat.planned.catalog import load_manager_catalog
-        from general_manager.chat.schema_index import build_schema_index
+    from general_manager.chat.planned.catalog import load_manager_catalog
+    from general_manager.chat.schema_index import build_schema_index
+    from general_manager.chat.planned.config import validate_profile_provider
 
-        from general_manager.chat.planned.config import validate_profile_provider
-
-        for profile in planned_settings.profiles.values():
-            validate_profile_provider(profile)
-        load_manager_catalog(planned_settings.catalog_source, build_schema_index())
+    for profile in planned_settings.profiles.values():
+        validate_profile_provider(profile)
+    load_manager_catalog(planned_settings.catalog_source, build_schema_index())
     return settings

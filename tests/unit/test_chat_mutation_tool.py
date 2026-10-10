@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from graphql import build_schema
 from django.contrib.auth.models import AnonymousUser
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
@@ -20,10 +21,19 @@ class _Result:
 class _RecordingSchema:
     def __init__(self, result: _Result) -> None:
         self.result = result
+        self.graphql_schema = build_schema(
+            "type Query { version: String } type Mutation { createPart(name: String, active: Boolean): Result } type Result { success: Boolean }"
+        )
         self.calls: list[dict[str, object]] = []
 
-    def execute(self, query_text: str, context_value=None):  # type: ignore[no-untyped-def]
-        self.calls.append({"query": query_text, "context": context_value})
+    def execute(self, query_text: str, context_value=None, variable_values=None):  # type: ignore[no-untyped-def]
+        self.calls.append(
+            {
+                "query": query_text,
+                "context": context_value,
+                "variables": variable_values,
+            }
+        )
         return self.result
 
 
@@ -76,7 +86,8 @@ class ChatMutationToolTests(SimpleTestCase):
         assert schema.calls[0]["context"] is context
         query_text = str(schema.calls[0]["query"])
         assert "mutation ChatMutation" in query_text
-        assert 'createPart(name: "Bolt", active: true)' in query_text
+        assert "createPart(name: $arg0, active: $arg1)" in query_text
+        assert schema.calls[0]["variables"] == {"arg0": "Bolt", "arg1": True}
         assert "{ success }" in query_text
 
     @override_settings(
@@ -293,7 +304,8 @@ class ChatMutationToolTests(SimpleTestCase):
         )
 
         assert result == {"status": "executed", "data": {"success": True}}
-        assert 'createPart(name: "Bolt")' in str(schema.calls[0]["query"])
+        assert "createPart(name: $arg0)" in str(schema.calls[0]["query"])
+        assert schema.calls[0]["variables"] == {"arg0": "Bolt"}
 
     @override_settings(
         GENERAL_MANAGER={

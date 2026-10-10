@@ -1,0 +1,755 @@
+{
+  "reference_version": "1.10",
+  "original_catalog_sha256": "972636e1e2a7ebebdab2fc03d7d17fac73cd60c6c6b8d6c5857a8dc4452b4f6f",
+  "catalog_sha256": "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11",
+  "corrections": [
+    {
+      "id": "E082-zero-revenue-P11",
+      "case_id": "E082",
+      "status": "resolved",
+      "version": "1.1",
+      "field": "expected",
+      "before": "P08 explicit zero planned revenue; P02 missing; keep groups separate.",
+      "after": "P08 and P11 have explicit zero planned revenue; P02 is missing. Return all legitimate zero-revenue projects and keep missing plans in a separate group.",
+      "rationale": "The specified base seed includes P11 Brass with zero planned revenue. E082 asks for all zero-revenue projects, so P11 and P08 qualify while missing P02 does not. User authorized this transparent reference correction before live evaluation."
+    },
+    {
+      "id": "K13-current-inventory-scope-E101",
+      "case_id": "E101",
+      "status": "resolved",
+      "version": "1.3",
+      "field": "dialogue_and_reference",
+      "before": {
+        "contract": "active_steel_materials",
+        "turns": [
+          "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?"
+        ],
+        "expected": "Exactly active steel-family Material rows M02 Steel and M04 StainlessSteel; exclude inactive M05 LegacySteel. Use the catalog active/family fields, not name similarity.",
+        "focus": "Alltagsfrage: aktive Stahlwerkstoffe"
+      },
+      "after": {
+        "contract": "steel_inventory_scope",
+        "turns": [
+          "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?",
+          "Mit aktuell meine ich nicht gelöschte Datensätze; auch inaktive Werkstoffe gehören dazu."
+        ],
+        "expected": "Turn 1 accepts an appropriate clarification about current/deleted scope, or a grounded complete current steel inventory M02, M04, M05 with a stated scope. Do not silently equate aktuell with business active=True. Turn 2 carries the steel family and explicitly non-deleted scope and returns M02 Steel, M04 StainlessSteel and M05 LegacySteel. Material.is_active is this manager’s framework soft-delete flag; its separate business active=False does not mean deleted. M05 is business-inactive but is_active=True; the fixture contains no deleted material rows. Do not fabricate deletion history or an include-deleted chat API.",
+        "focus": "Natürliche Bestandsfrage, Löschumfang und Carryover"
+      },
+      "rationale": "User retained the original natural question and authorized appropriate deletion/scope clarification with an actual follow-up. Read-only bootstrap confirms all seeded Materials are is_active=True; business active is independent. The former active-only reference excluded present M05 incorrectly. This correction preserves prior live evidence and is not a retroactive pass claim."
+    },
+    {
+      "id": "K13-current-inventory-scope-E102",
+      "case_id": "E102",
+      "status": "resolved",
+      "version": "1.3",
+      "field": "dialogue_and_reference",
+      "before": {
+        "contract": "active_steel_materials",
+        "turns": [
+          "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?"
+        ],
+        "expected": "Exactly active steel-family Material rows M02 Steel and M04 StainlessSteel; exclude inactive M05 LegacySteel. Use the catalog active/family fields, not name similarity.",
+        "focus": "Alltagsfrage: aktive Stahlwerkstoffe"
+      },
+      "after": {
+        "contract": "steel_inventory_scope",
+        "turns": [
+          "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?",
+          "Mit aktuell meine ich nicht gelöschte Datensätze; auch inaktive Werkstoffe gehören dazu."
+        ],
+        "expected": "Turn 1 accepts an appropriate clarification about current/deleted scope, or a grounded complete current steel inventory M02, M04, M05 with a stated scope. Do not silently equate aktuell with business active=True. Turn 2 carries the steel family and explicitly non-deleted scope and returns M02 Steel, M04 StainlessSteel and M05 LegacySteel. Material.is_active is this manager’s framework soft-delete flag; its separate business active=False does not mean deleted. M05 is business-inactive but is_active=True; the fixture contains no deleted material rows. Do not fabricate deletion history or an include-deleted chat API.",
+        "focus": "Natürliche Bestandsfrage, Löschumfang und Carryover"
+      },
+      "rationale": "User retained the original natural question and authorized appropriate deletion/scope clarification with an actual follow-up. Read-only bootstrap confirms all seeded Materials are is_active=True; business active is independent. The former active-only reference excluded present M05 incorrectly. This correction preserves prior live evidence and is not a retroactive pass claim."
+    },
+    {
+      "id": "K13-current-inventory-scope-E103",
+      "case_id": "E103",
+      "status": "resolved",
+      "version": "1.3",
+      "field": "dialogue_and_reference",
+      "before": {
+        "contract": "active_steel_materials",
+        "turns": [
+          "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?"
+        ],
+        "expected": "Exactly active steel-family Material rows M02 Steel and M04 StainlessSteel; exclude inactive M05 LegacySteel. Use the catalog active/family fields, not name similarity.",
+        "focus": "Alltagsfrage: aktive Stahlwerkstoffe"
+      },
+      "after": {
+        "contract": "steel_inventory_scope",
+        "turns": [
+          "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?",
+          "Mit aktuell meine ich nicht gelöschte Datensätze; auch inaktive Werkstoffe gehören dazu."
+        ],
+        "expected": "Turn 1 accepts an appropriate clarification about current/deleted scope, or a grounded complete current steel inventory M02, M04, M05 with a stated scope. Do not silently equate aktuell with business active=True. Turn 2 carries the steel family and explicitly non-deleted scope and returns M02 Steel, M04 StainlessSteel and M05 LegacySteel. Material.is_active is this manager’s framework soft-delete flag; its separate business active=False does not mean deleted. M05 is business-inactive but is_active=True; the fixture contains no deleted material rows. Do not fabricate deletion history or an include-deleted chat API.",
+        "focus": "Natürliche Bestandsfrage, Löschumfang und Carryover"
+      },
+      "rationale": "User retained the original natural question and authorized appropriate deletion/scope clarification with an actual follow-up. Read-only bootstrap confirms all seeded Materials are is_active=True; business active is independent. The former active-only reference excluded present M05 incorrectly. This correction preserves prior live evidence and is not a retroactive pass claim."
+    },
+    {
+      "id": "K13-current-inventory-scope-E104",
+      "case_id": "E104",
+      "status": "resolved",
+      "version": "1.3",
+      "field": "dialogue_and_reference",
+      "before": {
+        "contract": "active_steel_materials",
+        "turns": [
+          "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?"
+        ],
+        "expected": "Exactly active steel-family Material rows M02 Steel and M04 StainlessSteel; exclude inactive M05 LegacySteel. Use the catalog active/family fields, not name similarity.",
+        "focus": "Alltagsfrage: aktive Stahlwerkstoffe"
+      },
+      "after": {
+        "contract": "steel_inventory_scope",
+        "turns": [
+          "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?",
+          "Mit aktuell meine ich nicht gelöschte Datensätze; auch inaktive Werkstoffe gehören dazu."
+        ],
+        "expected": "Turn 1 accepts an appropriate clarification about current/deleted scope, or a grounded complete current steel inventory M02, M04, M05 with a stated scope. Do not silently equate aktuell with business active=True. Turn 2 carries the steel family and explicitly non-deleted scope and returns M02 Steel, M04 StainlessSteel and M05 LegacySteel. Material.is_active is this manager’s framework soft-delete flag; its separate business active=False does not mean deleted. M05 is business-inactive but is_active=True; the fixture contains no deleted material rows. Do not fabricate deletion history or an include-deleted chat API.",
+        "focus": "Natürliche Bestandsfrage, Löschumfang und Carryover"
+      },
+      "rationale": "User retained the original natural question and authorized appropriate deletion/scope clarification with an actual follow-up. Read-only bootstrap confirms all seeded Materials are is_active=True; business active is independent. The former active-only reference excluded present M05 incorrectly. This correction preserves prior live evidence and is not a retroactive pass claim."
+    },
+    {
+      "id": "K13-current-inventory-scope-E105",
+      "case_id": "E105",
+      "status": "resolved",
+      "version": "1.3",
+      "field": "dialogue_and_reference",
+      "before": {
+        "contract": "active_steel_materials",
+        "turns": [
+          "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?"
+        ],
+        "expected": "Exactly active steel-family Material rows M02 Steel and M04 StainlessSteel; exclude inactive M05 LegacySteel. Use the catalog active/family fields, not name similarity.",
+        "focus": "Alltagsfrage: aktive Stahlwerkstoffe"
+      },
+      "after": {
+        "contract": "steel_inventory_scope",
+        "turns": [
+          "Welche Stahlwerkstoffe haben wir aktuell in der Datenbank?",
+          "Mit aktuell meine ich nicht gelöschte Datensätze; auch inaktive Werkstoffe gehören dazu."
+        ],
+        "expected": "Turn 1 accepts an appropriate clarification about current/deleted scope, or a grounded complete current steel inventory M02, M04, M05 with a stated scope. Do not silently equate aktuell with business active=True. Turn 2 carries the steel family and explicitly non-deleted scope and returns M02 Steel, M04 StainlessSteel and M05 LegacySteel. Material.is_active is this manager’s framework soft-delete flag; its separate business active=False does not mean deleted. M05 is business-inactive but is_active=True; the fixture contains no deleted material rows. Do not fabricate deletion history or an include-deleted chat API.",
+        "focus": "Natürliche Bestandsfrage, Löschumfang und Carryover"
+      },
+      "rationale": "User retained the original natural question and authorized appropriate deletion/scope clarification with an actual follow-up. Read-only bootstrap confirms all seeded Materials are is_active=True; business active is independent. The former active-only reference excluded present M05 incorrectly. This correction preserves prior live evidence and is not a retroactive pass claim."
+    },
+    {
+      "id": "open-outlook-topics-1.9-E019",
+      "case_id": "E019",
+      "status": "resolved",
+      "version": "1.9",
+      "field": "first_turn_oracle_clarification_topics",
+      "contract": "clarify_actuals",
+      "before": [
+        "metric",
+        "horizon"
+      ],
+      "after": [
+        "criterion",
+        "horizon"
+      ],
+      "legacy_expected_prose": "Turn 1 request metric/horizon; turn 2 C01 2023..2025 actuals=[100,120,140] pieces, using specified metric and years.",
+      "rationale": "An open outlook has no defined evaluative standard. Match the unchanged v34 criterion/metric distinction. The versioned oracle topics supersede only the legacy first-turn topic prose; numerical and follow-up expectations remain unchanged.",
+      "authorization": "Tim explicitly authorized correcting E019 evaluation on 2026-10-06 at 08:47:42 UTC; parent instructed a generic contract correction across all catalog instances.",
+      "unchanged": "Frozen catalog bytes, all questions, factual values, product prompts, Judge, scorer and every historical report/answer."
+    },
+    {
+      "id": "open-outlook-topics-1.9-E031",
+      "case_id": "E031",
+      "status": "resolved",
+      "version": "1.9",
+      "field": "first_turn_oracle_clarification_topics",
+      "contract": "clarify_actuals",
+      "before": [
+        "metric",
+        "horizon"
+      ],
+      "after": [
+        "criterion",
+        "horizon"
+      ],
+      "legacy_expected_prose": "Turn 1 request metric/horizon; turn 2 C01 2023..2025 actuals=[100,120,140] pieces, using specified metric and years.",
+      "rationale": "An open outlook has no defined evaluative standard. Match the unchanged v34 criterion/metric distinction. The versioned oracle topics supersede only the legacy first-turn topic prose; numerical and follow-up expectations remain unchanged.",
+      "authorization": "Tim explicitly authorized correcting E019 evaluation on 2026-10-06 at 08:47:42 UTC; parent instructed a generic contract correction across all catalog instances.",
+      "unchanged": "Frozen catalog bytes, all questions, factual values, product prompts, Judge, scorer and every historical report/answer."
+    },
+    {
+      "id": "open-outlook-topics-1.9-E043",
+      "case_id": "E043",
+      "status": "resolved",
+      "version": "1.9",
+      "field": "first_turn_oracle_clarification_topics",
+      "contract": "clarify_actuals",
+      "before": [
+        "metric",
+        "horizon"
+      ],
+      "after": [
+        "criterion",
+        "horizon"
+      ],
+      "legacy_expected_prose": "Turn 1 request metric/horizon; turn 2 C01 2023..2025 actuals=[100,120,140] pieces, using specified metric and years.",
+      "rationale": "An open outlook has no defined evaluative standard. Match the unchanged v34 criterion/metric distinction. The versioned oracle topics supersede only the legacy first-turn topic prose; numerical and follow-up expectations remain unchanged.",
+      "authorization": "Tim explicitly authorized correcting E019 evaluation on 2026-10-06 at 08:47:42 UTC; parent instructed a generic contract correction across all catalog instances.",
+      "unchanged": "Frozen catalog bytes, all questions, factual values, product prompts, Judge, scorer and every historical report/answer."
+    },
+    {
+      "id": "open-outlook-topics-1.9-E055",
+      "case_id": "E055",
+      "status": "resolved",
+      "version": "1.9",
+      "field": "first_turn_oracle_clarification_topics",
+      "contract": "clarify_actuals",
+      "before": [
+        "metric",
+        "horizon"
+      ],
+      "after": [
+        "criterion",
+        "horizon"
+      ],
+      "legacy_expected_prose": "Turn 1 request metric/horizon; turn 2 C01 2023..2025 actuals=[100,120,140] pieces, using specified metric and years.",
+      "rationale": "An open outlook has no defined evaluative standard. Match the unchanged v34 criterion/metric distinction. The versioned oracle topics supersede only the legacy first-turn topic prose; numerical and follow-up expectations remain unchanged.",
+      "authorization": "Tim explicitly authorized correcting E019 evaluation on 2026-10-06 at 08:47:42 UTC; parent instructed a generic contract correction across all catalog instances.",
+      "unchanged": "Frozen catalog bytes, all questions, factual values, product prompts, Judge, scorer and every historical report/answer."
+    },
+    {
+      "id": "open-outlook-topics-1.9-E067",
+      "case_id": "E067",
+      "status": "resolved",
+      "version": "1.9",
+      "field": "first_turn_oracle_clarification_topics",
+      "contract": "clarify_actuals",
+      "before": [
+        "metric",
+        "horizon"
+      ],
+      "after": [
+        "criterion",
+        "horizon"
+      ],
+      "legacy_expected_prose": "Turn 1 request metric/horizon; turn 2 C01 2023..2025 actuals=[100,120,140] pieces, using specified metric and years.",
+      "rationale": "An open outlook has no defined evaluative standard. Match the unchanged v34 criterion/metric distinction. The versioned oracle topics supersede only the legacy first-turn topic prose; numerical and follow-up expectations remain unchanged.",
+      "authorization": "Tim explicitly authorized correcting E019 evaluation on 2026-10-06 at 08:47:42 UTC; parent instructed a generic contract correction across all catalog instances.",
+      "unchanged": "Frozen catalog bytes, all questions, factual values, product prompts, Judge, scorer and every historical report/answer."
+    },
+    {
+      "id": "open-outlook-topic-groups-v38-E019",
+      "case_id": "E019",
+      "status": "pending_independent_review",
+      "version": "1.10",
+      "field": "first_turn_oracle_clarification_topic_groups",
+      "before": {
+        "comparison": "required_topics",
+        "expected": [
+          "criterion",
+          "horizon"
+        ]
+      },
+      "after": {
+        "comparison": "required_topic_groups",
+        "expected": [
+          [
+            "criterion",
+            "metric"
+          ],
+          [
+            "horizon"
+          ]
+        ]
+      },
+      "rationale": "An open outlook leaves its evaluative basis unresolved. A suitable question about criterion or metric may resolve that decision; horizon remains separately required. Defined analyses still require metric, and independent suitability/result-assertion checks remain strict. Generic contract dispatch, no topic relabeling or case-ID exception.",
+      "authorization": "Tim authorized the E019 evaluation correction on 2026-10-06; parent explicitly authorized the bounded context-specific scorer correction after independent v37 review FAIL.",
+      "supersedes_reference": "1.9 exclusive criterion requirement; v37 remains preserved as rejected historical evidence",
+      "unchanged": "Questions, catalog bytes, extracted topic labels, Judge requests/responses, product, numeric/unit/source/follow-up obligations and historical scores."
+    },
+    {
+      "id": "open-outlook-topic-groups-v38-E031",
+      "case_id": "E031",
+      "status": "pending_independent_review",
+      "version": "1.10",
+      "field": "first_turn_oracle_clarification_topic_groups",
+      "before": {
+        "comparison": "required_topics",
+        "expected": [
+          "criterion",
+          "horizon"
+        ]
+      },
+      "after": {
+        "comparison": "required_topic_groups",
+        "expected": [
+          [
+            "criterion",
+            "metric"
+          ],
+          [
+            "horizon"
+          ]
+        ]
+      },
+      "rationale": "An open outlook leaves its evaluative basis unresolved. A suitable question about criterion or metric may resolve that decision; horizon remains separately required. Defined analyses still require metric, and independent suitability/result-assertion checks remain strict. Generic contract dispatch, no topic relabeling or case-ID exception.",
+      "authorization": "Tim authorized the E019 evaluation correction on 2026-10-06; parent explicitly authorized the bounded context-specific scorer correction after independent v37 review FAIL.",
+      "supersedes_reference": "1.9 exclusive criterion requirement; v37 remains preserved as rejected historical evidence",
+      "unchanged": "Questions, catalog bytes, extracted topic labels, Judge requests/responses, product, numeric/unit/source/follow-up obligations and historical scores."
+    },
+    {
+      "id": "open-outlook-topic-groups-v38-E043",
+      "case_id": "E043",
+      "status": "pending_independent_review",
+      "version": "1.10",
+      "field": "first_turn_oracle_clarification_topic_groups",
+      "before": {
+        "comparison": "required_topics",
+        "expected": [
+          "criterion",
+          "horizon"
+        ]
+      },
+      "after": {
+        "comparison": "required_topic_groups",
+        "expected": [
+          [
+            "criterion",
+            "metric"
+          ],
+          [
+            "horizon"
+          ]
+        ]
+      },
+      "rationale": "An open outlook leaves its evaluative basis unresolved. A suitable question about criterion or metric may resolve that decision; horizon remains separately required. Defined analyses still require metric, and independent suitability/result-assertion checks remain strict. Generic contract dispatch, no topic relabeling or case-ID exception.",
+      "authorization": "Tim authorized the E019 evaluation correction on 2026-10-06; parent explicitly authorized the bounded context-specific scorer correction after independent v37 review FAIL.",
+      "supersedes_reference": "1.9 exclusive criterion requirement; v37 remains preserved as rejected historical evidence",
+      "unchanged": "Questions, catalog bytes, extracted topic labels, Judge requests/responses, product, numeric/unit/source/follow-up obligations and historical scores."
+    },
+    {
+      "id": "open-outlook-topic-groups-v38-E055",
+      "case_id": "E055",
+      "status": "pending_independent_review",
+      "version": "1.10",
+      "field": "first_turn_oracle_clarification_topic_groups",
+      "before": {
+        "comparison": "required_topics",
+        "expected": [
+          "criterion",
+          "horizon"
+        ]
+      },
+      "after": {
+        "comparison": "required_topic_groups",
+        "expected": [
+          [
+            "criterion",
+            "metric"
+          ],
+          [
+            "horizon"
+          ]
+        ]
+      },
+      "rationale": "An open outlook leaves its evaluative basis unresolved. A suitable question about criterion or metric may resolve that decision; horizon remains separately required. Defined analyses still require metric, and independent suitability/result-assertion checks remain strict. Generic contract dispatch, no topic relabeling or case-ID exception.",
+      "authorization": "Tim authorized the E019 evaluation correction on 2026-10-06; parent explicitly authorized the bounded context-specific scorer correction after independent v37 review FAIL.",
+      "supersedes_reference": "1.9 exclusive criterion requirement; v37 remains preserved as rejected historical evidence",
+      "unchanged": "Questions, catalog bytes, extracted topic labels, Judge requests/responses, product, numeric/unit/source/follow-up obligations and historical scores."
+    },
+    {
+      "id": "open-outlook-topic-groups-v38-E067",
+      "case_id": "E067",
+      "status": "pending_independent_review",
+      "version": "1.10",
+      "field": "first_turn_oracle_clarification_topic_groups",
+      "before": {
+        "comparison": "required_topics",
+        "expected": [
+          "criterion",
+          "horizon"
+        ]
+      },
+      "after": {
+        "comparison": "required_topic_groups",
+        "expected": [
+          [
+            "criterion",
+            "metric"
+          ],
+          [
+            "horizon"
+          ]
+        ]
+      },
+      "rationale": "An open outlook leaves its evaluative basis unresolved. A suitable question about criterion or metric may resolve that decision; horizon remains separately required. Defined analyses still require metric, and independent suitability/result-assertion checks remain strict. Generic contract dispatch, no topic relabeling or case-ID exception.",
+      "authorization": "Tim authorized the E019 evaluation correction on 2026-10-06; parent explicitly authorized the bounded context-specific scorer correction after independent v37 review FAIL.",
+      "supersedes_reference": "1.9 exclusive criterion requirement; v37 remains preserved as rejected historical evidence",
+      "unchanged": "Questions, catalog bytes, extracted topic labels, Judge requests/responses, product, numeric/unit/source/follow-up obligations and historical scores."
+    }
+  ],
+  "original_case_count": 100,
+  "case_count": 121,
+  "expansions": [
+    {
+      "id": "1.2-everyday-business-questions",
+      "version": "1.2",
+      "case_ids": [
+        "E101",
+        "E102",
+        "E103",
+        "E104",
+        "E105",
+        "E106",
+        "E107",
+        "E108",
+        "E109",
+        "E110",
+        "E111",
+        "E112",
+        "E113",
+        "E114",
+        "E115",
+        "E116",
+        "E117",
+        "E118",
+        "E119",
+        "E120",
+        "E121"
+      ],
+      "rationale": "User authorized three additional five-scale core intents for active steel materials, active customers and ongoing projects, plus six ordinary cost, density and relative-date questions. Original 100 cases retained with the separate E082 correction."
+    }
+  ],
+  "history": [
+    {
+      "reference_version": "1.2",
+      "catalog_sha256": "d5f3a7d663790ec504845385429473a5bb58c030d930385954c6057cfc00ddd5",
+      "case_count": 121,
+      "turn_count": 144
+    },
+    {
+      "reference_version": "1.3",
+      "catalog_sha256": "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11",
+      "case_count": 121,
+      "turn_count": 149
+    },
+    {
+      "reference_version": "1.4",
+      "catalog_sha256": "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11",
+      "case_count": 121,
+      "turn_count": 149
+    }
+  ],
+  "turn_count": 149,
+  "evaluation_policy_changes": [
+    {
+      "version": "1.4",
+      "id": "simple-answer-internal-grounding",
+      "case_ids": [
+        "E101",
+        "E102",
+        "E103",
+        "E104",
+        "E105",
+        "E106",
+        "E107",
+        "E108",
+        "E109",
+        "E110",
+        "E111",
+        "E112",
+        "E113",
+        "E114",
+        "E115",
+        "E116",
+        "E117",
+        "E118",
+        "E119",
+        "E120",
+        "E121"
+      ],
+      "before": "All source requirements also required visible answer citations.",
+      "after": "Simple answers require validated per-data-fact answer quotes, actual eligible tool references covering all source roles and an independent answer_supported judgment using those sources. Visible citations are reported separately and optional. All other tasks retain the legacy visible requirement.",
+      "authorization": "User rejected visible source lines in simple database answers and explicitly requested strict internal grounding instead.",
+      "unchanged": "Catalog questions and bytes, factual gold, ID/completeness/filter/numeric checks, production synthesis, explicit source requests, historical reference and scored artifacts."
+    },
+    {
+      "version": "1.5",
+      "id": "consistent-grounding-unit-identity-and-scope",
+      "case_ids": [
+        "E001",
+        "E002",
+        "E003",
+        "E004",
+        "E005",
+        "E006",
+        "E007",
+        "E008",
+        "E009",
+        "E010",
+        "E011",
+        "E012",
+        "E013",
+        "E014",
+        "E015",
+        "E016",
+        "E017",
+        "E018",
+        "E019",
+        "E020",
+        "E021",
+        "E022",
+        "E023",
+        "E024",
+        "E025",
+        "E026",
+        "E027",
+        "E028",
+        "E029",
+        "E030",
+        "E031",
+        "E032",
+        "E033",
+        "E034",
+        "E035",
+        "E036",
+        "E037",
+        "E038",
+        "E039",
+        "E040",
+        "E041",
+        "E042",
+        "E043",
+        "E044",
+        "E045",
+        "E046",
+        "E047",
+        "E048",
+        "E049",
+        "E050",
+        "E051",
+        "E052",
+        "E053",
+        "E054",
+        "E055",
+        "E056",
+        "E057",
+        "E058",
+        "E059",
+        "E060",
+        "E061",
+        "E062",
+        "E063",
+        "E064",
+        "E065",
+        "E066",
+        "E067",
+        "E068",
+        "E069",
+        "E070",
+        "E071",
+        "E072",
+        "E073",
+        "E074",
+        "E075",
+        "E076",
+        "E077",
+        "E078",
+        "E079",
+        "E080",
+        "E081",
+        "E082",
+        "E083",
+        "E084",
+        "E085",
+        "E086",
+        "E087",
+        "E088",
+        "E089",
+        "E090",
+        "E091",
+        "E092",
+        "E093",
+        "E094",
+        "E095",
+        "E096",
+        "E097",
+        "E098",
+        "E099",
+        "E100",
+        "E101",
+        "E102",
+        "E103",
+        "E104",
+        "E105",
+        "E106",
+        "E107",
+        "E108",
+        "E109",
+        "E110",
+        "E111",
+        "E112",
+        "E113",
+        "E114",
+        "E115",
+        "E116",
+        "E117",
+        "E118",
+        "E119",
+        "E120",
+        "E121"
+      ],
+      "before": "Ordinary legacy cases required visible citations; units used literal comparison; nested entity constraints lacked identity paths; initial steel scope required an explicitly extracted deletion flag.",
+      "after": "Ordinary answers use actual internal grounding; explicit source requests stay strict. Unit typography is normalized only in the unit field with an audit. Value-free entity descriptions and evidence-only nested identity paths guide extraction. Initial steel selection scope is proved separately from explicit answer claims.",
+      "authorization": "Tim Ja bitte, 2026-10-03 20:54:45 UTC, Sentinel_d611218ae2648191acf11333a3fb1c9e.",
+      "unchanged": "Catalog bytes, questions, factual expected values, deletion/completeness requirements, evidence bindings, product/model behavior, historical reports and references."
+    },
+    {
+      "reference_version": "1.6",
+      "case_ids": [
+        "E001",
+        "E002",
+        "E003",
+        "E004",
+        "E005",
+        "E006",
+        "E007",
+        "E008",
+        "E009",
+        "E010",
+        "E011",
+        "E012",
+        "E013",
+        "E014",
+        "E015",
+        "E016",
+        "E017",
+        "E018",
+        "E019",
+        "E020",
+        "E021",
+        "E022",
+        "E023",
+        "E024",
+        "E025",
+        "E026",
+        "E027",
+        "E028",
+        "E029",
+        "E030",
+        "E031",
+        "E032",
+        "E033",
+        "E034",
+        "E035",
+        "E036",
+        "E037",
+        "E038",
+        "E039",
+        "E040",
+        "E041",
+        "E042",
+        "E043",
+        "E044",
+        "E045",
+        "E046",
+        "E047",
+        "E048",
+        "E049",
+        "E050",
+        "E051",
+        "E052",
+        "E053",
+        "E054",
+        "E055",
+        "E056",
+        "E057",
+        "E058",
+        "E059",
+        "E060",
+        "E061",
+        "E062",
+        "E063",
+        "E064",
+        "E065",
+        "E066",
+        "E067",
+        "E068",
+        "E069",
+        "E070",
+        "E071",
+        "E072",
+        "E073",
+        "E074",
+        "E075",
+        "E076",
+        "E077",
+        "E078",
+        "E079",
+        "E080",
+        "E081",
+        "E082",
+        "E083",
+        "E084",
+        "E085",
+        "E086",
+        "E087",
+        "E088",
+        "E089",
+        "E090",
+        "E091",
+        "E092",
+        "E093",
+        "E094",
+        "E095",
+        "E096",
+        "E097",
+        "E098",
+        "E099",
+        "E100",
+        "E101",
+        "E102",
+        "E103",
+        "E104",
+        "E105",
+        "E106",
+        "E107",
+        "E108",
+        "E109",
+        "E110",
+        "E111",
+        "E112",
+        "E113",
+        "E114",
+        "E115",
+        "E116",
+        "E117",
+        "E118",
+        "E119",
+        "E120",
+        "E121"
+      ],
+      "before": "Clarifications used prose topics/exact set and an empty result-ID list; six explicit ranking follow-ups expected only top-1; unit labels were typography-only; plan extraction mixed totals and optional breakdowns.",
+      "after": "Canonical required topics with independent suitability; explicit result assertion state; full ranking for clarify_importance follow-ups E007/E018/E030/E042/E054/E066; Stück maps to pieces only in unit and context.unit; totals separated from independently assessed extra breakdowns; bounded visible context support with source linkage.",
+      "authorization": "Offline remediation: consolidated independent findings and user authorization to fix them before the next live evaluation.",
+      "unchanged": "Catalog bytes/questions/121 cases/149 turns; genuine E008/E019 clarification failures; historical E101 T2 semantic failure; all historical raw answers, extractions, scores, and reports. No new model performance measured."
+    }
+  ],
+  "behavior_contract_changes": [
+    {
+      "version": "1.7",
+      "adjudication_schema": "1.3",
+      "field": "no_repeated_clarification",
+      "replaces": "clarification_repeated",
+      "rationale": "Judge repeated clarification as answer/context-bound behavior with resolving user-choice witnesses, not an absent extracted fact. Missing or contradictory judgments stay unscored. Numeric gold and saved results unchanged."
+    },
+    {
+      "version": "1.8",
+      "adjudication_schema": "1.4",
+      "evaluation_revision": "measurement-contracts-4",
+      "field": "extraction_and_nested_identity_contract",
+      "rationale": "Typed nested identity lists and context; explicit result membership, annual maps and metric/unit qualifiers; effective user scope. New contracts require a matching external extraction version. Catalog bytes and all gold facts unchanged; no historical rescoring."
+    }
+  ]
+}

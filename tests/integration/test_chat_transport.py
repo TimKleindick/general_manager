@@ -5,7 +5,7 @@ import json
 from contextlib import suppress
 from types import SimpleNamespace
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import graphene
 from asgiref.testing import ApplicationCommunicator
@@ -138,6 +138,19 @@ class _Schema:
 
 class ChatTransportIntegrationTests(TransactionTestCase):
     def setUp(self) -> None:
+        # Preserve the old write-loop transport assertions behind an explicit
+        # prevalidated mutation handoff. Real Planned read tests are separate.
+        planner = patch(
+            "general_manager.chat.consumer.prepare_planned_turn",
+            new=AsyncMock(return_value=SimpleNamespace(mutation_plan=object())),
+        )
+        planner.start()
+        self.addCleanup(planner.stop)
+        catalog = patch.object(
+            ChatConsumer, "_planned_catalog_summary", return_value={}
+        )
+        catalog.start()
+        self.addCleanup(catalog.stop)
         self._original_patterns = list(testing_asgi.websocket_urlpatterns)
         self._original_application = testing_asgi.application
         GraphQL.reset_registry()
