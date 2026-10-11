@@ -24,6 +24,7 @@ _SAFE_PROVENANCE_KEYS = frozenset(
         "field",
         "schema_view",
         "snapshot",
+        "query_schema_witness",
     }
 )
 

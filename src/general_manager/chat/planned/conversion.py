@@ -83,11 +83,12 @@ def _selected(fields: object, path: tuple[str, ...]) -> bool:
 def _schemas(
     store: EvidenceStore, task_id: str, binding: CalculationBinding
 ) -> dict[str, dict[str, Any]]:
-    assert binding.conversion is not None
-    result = {}
+    selectors = binding.conversion or binding.cross_query
+    assert selectors is not None
+    result: dict[str, dict[str, Any]] = {}
     for requirement, evidence_id in zip(
-        binding.conversion.schema_requirement_ids,
-        binding.conversion.schema_evidence_ids,
+        selectors.schema_requirement_ids,
+        selectors.schema_evidence_ids,
         strict=True,
     ):
         record = store.get(evidence_id)
@@ -104,7 +105,7 @@ def _schemas(
         manager = args.get("manager")
         if (
             not isinstance(manager, str)
-            or manager in result
+            or (manager in result and binding.cross_query is None)
             or not isinstance(payload, dict)
             or payload.get("manager") != manager
             or payload.get("schema_view") != args.get("view", "overview")
@@ -117,12 +118,33 @@ def _schemas(
             _fail(f"conversion schema declaration is invalid: {type(exc).__name__}.")
         if full is None or payload.get("snapshot") != snapshot:
             _fail("conversion schema/exposure snapshot has changed.")
+        if binding.cross_query is not None:
+            observed_types = set(payload.get("types", {}))
+            if "output_fields" in payload:
+                observed_types.add(full["type"])
+            previous = result.get(manager)
+            if previous is not None:
+                if (
+                    previous["snapshot"] != snapshot
+                    or previous["observed_types"] & observed_types
+                ):
+                    _fail(
+                        "cross-query schema fragments repeat definitions or snapshots."
+                    )
+                previous["observed_types"].update(observed_types)
+                previous["records"].append(record)
+                previous["observations"].append(payload)
+                continue
         result[manager] = {
             "record": record,
             "payload": payload,
             "full": full,
             "snapshot": snapshot,
         }
+        if binding.cross_query is not None:
+            result[manager].update(
+                records=[record], observations=[payload], observed_types=observed_types
+            )
     # A later capture/default hook cannot silently invalidate an earlier witness.
     for manager, context in result.items():
         if capture_manager_contract(manager)[1] != context["snapshot"]:
@@ -136,17 +158,17 @@ def _field(
     context = schemas.get(manager)
     if context is None:
         _fail("each conversion manager needs its own allowed schema witness.")
-    full, payload = context["full"], context["payload"]
+    full = context["full"]
     definition = full["types"][full["type"]]["fields"].get(name)
-    observed = (
+    observed = [
         payload.get("output_fields", {})
         if payload["schema_view"] == "overview"
         else payload.get("types", {}).get(full["type"], {}).get("fields", {})
-    )
-    if (
-        not isinstance(definition, dict)
-        or not isinstance(observed, Mapping)
-        or observed.get(name) != definition
+        for payload in context.get("observations", [context["payload"]])
+    ]
+    if not isinstance(definition, dict) or not any(
+        isinstance(fields, Mapping) and fields.get(name) == definition
+        for fields in observed
     ):
         _fail("conversion field definition was not observed exactly in its schema.")
     return definition

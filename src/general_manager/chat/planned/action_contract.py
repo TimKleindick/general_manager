@@ -20,6 +20,7 @@ EXECUTOR_ACTION_FIELDS = {
     "spawn_children": ("action", "children"),
     "calculate": ("action", "requirement_id", "operation", "operands"),
     "calculate_batch": ("action", "calculations"),
+    "calculate_groups": ("action", "requests"),
     "bind_calculation": ("action", "requirement_id", "binding"),
     "clarify_selector": ("action", "requirement_id", "language", "selector"),
 }
@@ -34,7 +35,14 @@ CALCULATION_EVIDENCE_RULE = (
     "be finite numbers; division by zero is invalid. Respect the declared source, "
     "group and unit binding; query reductions include every row of one complete "
     "group. Use calculate_batch for related calculations: all are validated before "
-    "any evidence is committed. A queried scalar needs no singleton sum unless a "
+    "any evidence is committed. For already bound ordinary direct query sum requirements, "
+    "use calculate_groups with explicit requests naming requirement_id and query_evidence_id "
+    "to calculate every observed group without enumerating operand paths. Each request "
+    "selects one linked query for its declared source; all groups and requests are "
+    "validated before any evidence is committed. This action does not select queries, "
+    "assign bindings or infer units. Request independent read tools together when possible; "
+    "the runtime executes those calls in their supplied order. "
+    "A queried scalar needs no singleton sum unless a "
     "declared aggregate requirement needs that group result. For a deferred binding=null, "
     "inspect schema/query evidence, then use bind_calculation with the exact source/field/group "
     "binding before calculation. A binding is assigned once and cannot be changed."
@@ -42,6 +50,13 @@ CALCULATION_EVIDENCE_RULE = (
     "requires an explicit conversion binding from complete current query/schema "
     "evidence; operands alternate each row's quantity then its observed factor, "
     "in original group-row order. Numeric field names and raw unit strings do not "
+    "prove dimensions. Explicit cross_query supports only difference of two exact ordered "
+    "direct complete ungrouped query sum calculation IDs. Require current full or selected "
+    "detail schema definitions for all output/input paths, the same typed entity identity "
+    "and gte/lt UTC interval, declared executable quantity units, and stable original "
+    "query-time schema witnesses. Extra predicates, empty sums, conversions and chained "
+    "cross-query predecessors are unsupported. Legacy different-query bindings remain "
+    "incompatible. Numeric field names and raw unit strings do not "
     "prove dimensions. Every factor origin needs its observed same-object constructor "
     "identity_contract and own exposed schema. No scalar broadcasting or invented factors."
 )
@@ -156,6 +171,29 @@ def executor_action_schema() -> dict[str, Any]:
                 "properties": {
                     "action": {"const": "calculate"},
                     **deepcopy(properties["calculate"]),
+                },
+            },
+        }
+    }
+    properties["calculate_groups"] = {
+        "requests": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": True,
+            "description": (
+                "Distinct already bound ordinary direct query sum requirements. "
+                "Explicitly select task-owned query evidence linked to each sole earlier "
+                "query source. Every observed group uses all its rows exactly once. "
+                "All requests commit atomically. Empty, partial, deferred, derived, "
+                "conversion and cross-query reductions are unsupported."
+            ),
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["requirement_id", "query_evidence_id"],
+                "properties": {
+                    field: {"type": "string", "minLength": 1, "pattern": r"\S"}
+                    for field in ("requirement_id", "query_evidence_id")
                 },
             },
         }

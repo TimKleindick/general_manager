@@ -157,7 +157,8 @@ def calculate_evidence(
         _calculation_error("sum_products evidence requires a source-bound conversion.")
     verified_scope = (
         calculation_scope(operation, normalized_operands, store, task_id, binding)
-        if binding is not None and binding.conversion is not None
+        if binding is not None
+        and (binding.conversion is not None or binding.cross_query is not None)
         else None
     )
     values = [resolver.resolve(operand) for operand in normalized_operands]

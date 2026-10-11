@@ -61,6 +61,10 @@ def calculation_scope(
     task_id: str,
     binding: CalculationBinding,
 ) -> dict[str, object]:
+    if binding.cross_query is not None:
+        from general_manager.chat.planned.cross_query import cross_query_scope
+
+        return cross_query_scope(operation, operands, store, task_id, binding)
     if binding.conversion is not None:
         if operation != "sum_products":
             _invalid("conversion bindings belong only to sum_products.")
@@ -246,6 +250,46 @@ def validate_calculation_binding_evidence(
     ]
     if not sources or any(not records for records in sources):
         _invalid("Read concrete evidence for every declared source before binding.")
+    if binding.cross_query is not None:
+        if requirement.operation != "difference":
+            _invalid("cross-query bindings support only difference.")
+        position = task.requirements.index(requirement)
+        earlier = {item.requirement_id: item for item in task.requirements[:position]}
+        if any(
+            earlier.get(source) is None
+            or earlier[source].kind != "calculation"
+            or earlier[source].operation != "sum"
+            for source in binding.source_requirement_ids
+        ) or any(
+            earlier.get(source) is None or earlier[source].kind != "schema"
+            for source in binding.cross_query.schema_requirement_ids
+        ):
+            _invalid(
+                "cross-query sources and schema requirements must be earlier declarations in this task."
+            )
+        if any(
+            store.get(source.calculation_evidence_id)
+            not in store.for_requirement(
+                task.task_id, earlier[source.source_requirement_id]
+            )
+            for source in binding.cross_query.sources
+        ):
+            _invalid(
+                "cross-query predecessors must satisfy their exact current declared requirements."
+            )
+        calculate_evidence(
+            "cross-query-binding-validation",
+            task.task_id,
+            "difference",
+            [
+                CalculationOperand(source.calculation_evidence_id, ("value",))
+                for source in binding.cross_query.sources
+            ],
+            store,
+            require_linked=True,
+            binding=binding,
+        )
+        return
     if binding.conversion is not None:
         if requirement.operation != "sum_products" or len(sources) != 1:
             _invalid("conversion bindings require one query source and sum_products.")
