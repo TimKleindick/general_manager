@@ -141,8 +141,14 @@ python manage.py search_reconcile --once
 ```
 
 The command requires exactly one run mode: `--once` runs one sweep and exits,
-while `--watch` repeats until interrupted. Service errors propagate so command
-runners and CI fail visibly.
+while `--watch` repeats until interrupted. `--once` reports failed sweeps to
+stderr and raises `CommandError` (CLI status 1) when any claimed manager/index
+pair fails, even though the service catches per-pair failures. `--watch` reports
+those failures to stderr and keeps retrying. Other service errors propagate.
+Inspect logs and `SearchIndexState.last_error` for the failing pair and error.
+
+Apply migrations and explicit read-only synchronization before deployment search
+maintenance. See [startup maintenance](startup_maintenance.md).
 
 Keep the in-memory development backend initialized while you work:
 

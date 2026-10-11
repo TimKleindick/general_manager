@@ -3,6 +3,8 @@ import pytest
 from contextlib import suppress
 
 from django.db import connections, models, transaction as django_transaction
+from django.core.management import call_command
+from io import StringIO
 from django.test import override_settings
 from django.db.models import CharField, IntegerField, SmallIntegerField, TextField
 from decimal import Decimal
@@ -23,6 +25,12 @@ from tests.utils.database import create_test_models, drop_test_models
 from django.utils import timezone
 from unittest.mock import patch
 from datetime import timedelta
+
+
+@pytest.fixture(autouse=True)
+def development_readonly_startup(settings):
+    """These startup-sync scenarios deliberately exercise development behavior."""
+    settings.DEBUG = True
 
 
 class ReadOnlyIntegrationTest(GeneralManagerTransactionTestCase):
@@ -540,6 +548,17 @@ class ReadOnlyManyToManyTests(GeneralManagerTransactionTestCase):
         self.Tag.Interface._model.all_objects.all().delete()
         self.Category.Interface._model.all_objects.all().delete()
         self.Product.Interface._model.all_objects.all().delete()
+
+    @override_settings(GENERAL_MANAGER={"READ_ONLY_SYNC_ON_STARTUP": False})
+    def test_manual_command_includes_m2m_and_foreign_key_dependencies(self):
+        from general_manager.manager.meta import GeneralManagerMeta
+
+        with patch.object(GeneralManagerMeta, "all_classes", [self.Product]):
+            call_command("sync_read_only", managers=["Product"], stdout=StringIO())
+        product = self.Product.filter(sku="PROD001").first()
+        assert product.category.code == "ELEC"
+        row = self.Product.Interface._model.objects.get(sku="PROD001")
+        assert set(row.tags.values_list("name", flat=True)) == {"featured", "sale"}
 
     def test_m2m_with_dict_lookups_resolves_correctly(self) -> None:
         """Verify M2M fields can use dict lookups to resolve related instances."""
@@ -1064,6 +1083,29 @@ class ReadOnlySecondaryDatabaseRoutingTests(GeneralManagerTransactionTestCase):
     def test_router_selected_sync_transaction_rolls_back(self) -> None:
         with patch.object(self.SecondaryStatus.Interface, "database", None):
             self.test_injected_transaction_rolls_back_secondary_after_later_write_fails()
+
+    def test_command_preflights_the_configured_database(self) -> None:
+        from general_manager.manager.meta import GeneralManagerMeta
+
+        model = self.SecondaryStatus.Interface._model
+        self.SecondaryStatus._data = [{"code": "SECONDARY", "label": "current"}]
+        with (
+            patch.object(GeneralManagerMeta, "all_classes", [self.SecondaryStatus]),
+            patch.object(
+                connections["default"].introspection, "table_names", return_value=[]
+            ) as default_introspection,
+        ):
+            call_command(
+                "sync_read_only", managers=["SecondaryStatus"], stdout=StringIO()
+            )
+        default_introspection.assert_not_called()
+        assert model.objects.using("secondary").get(code="SECONDARY").label == "current"
+        assert model.objects.using("default").count() == 0
+
+    @override_settings(DATABASE_ROUTERS=[_SecondaryDatabaseRouter()])
+    def test_command_preflights_the_router_selected_database(self) -> None:
+        with patch.object(self.SecondaryStatus.Interface, "database", None):
+            self.test_command_preflights_the_configured_database()
 
     def test_sync_reads_updates_and_reconciles_on_secondary_only(self) -> None:
         """Secondary payload reconciliation leaves the default alias untouched."""

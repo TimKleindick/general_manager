@@ -148,6 +148,7 @@ nav:
       - howto/graphql_file_uploads_s3.md
       - howto/search.md
       - howto/search_reconciliation.md
+      - howto/startup_maintenance.md
       - howto/cache_dependent_calculation.md
       - howto/write_custom_interface.md
       - howto/create_custom_interface_type.md
@@ -184,6 +185,7 @@ nav:
       - examples/excel_interface_end_to_end.md
       - examples/startup_hooks.md
       - examples/workflow_input_snapshot.md
+      - examples/production_maintenance.md
       - examples/remote_manager_interface_end_to_end.md
       - examples/request_interface_end_to_end.md
       - examples/search_invalidation.md
