@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 from .trace import TraceRecorder, fingerprint, sanitize
 from general_manager.chat.planned.schema_projection import (
+    REFERENCE_VERSION as REFERENCE_TRANSPORT_VERSION,
     VERSION as SCHEMA_TRANSPORT_VERSION,
 )
 
@@ -48,10 +49,13 @@ class EvaluationProfile:
     strong_model: str
     reasoning: str = "medium"
     schema_transport_version: str = SCHEMA_TRANSPORT_VERSION
+    reference_transport_version: str = REFERENCE_TRANSPORT_VERSION
 
     def __post_init__(self) -> None:
         if self.schema_transport_version != SCHEMA_TRANSPORT_VERSION:
             raise ValueError("unsupported_schema_transport_version")
+        if self.reference_transport_version != REFERENCE_TRANSPORT_VERSION:
+            raise ValueError("unsupported_reference_transport_version")
 
     def role_config(self, role: str) -> dict[str, Any]:
         strong = self.name == "strong-only" or (
@@ -63,6 +67,7 @@ class EvaluationProfile:
             "role": role,
             "profile": self.name,
             "schema_transport_version": self.schema_transport_version,
+            "reference_transport_version": self.reference_transport_version,
             "strong": strong,
         }
 
@@ -140,6 +145,12 @@ class ExperimentProvider:
             != SCHEMA_TRANSPORT_VERSION
         ):
             raise ValueError("unsupported_schema_transport_version")
+        if (
+            config is not None
+            and config.get("reference_transport_version", REFERENCE_TRANSPORT_VERSION)
+            != REFERENCE_TRANSPORT_VERSION
+        ):
+            raise ValueError("unsupported_reference_transport_version")
         self._config = MappingProxyType(
             dict(config or {"role": "context", "model": "context-only"})
         )

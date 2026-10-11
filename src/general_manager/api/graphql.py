@@ -2216,20 +2216,19 @@ class GraphQL:
         list_field = graphene.Field(page_type, **attributes)
 
         def _all_items(
-            _: object,
-            include_inactive: bool,
+            _: object, include_inactive: bool
         ) -> Bucket[GeneralManager] | None:
-            """
-            Return all instances for the associated GeneralManager class.
+            return (
+                generalManagerClass.filter(include_inactive=True)
+                if include_inactive
+                else generalManagerClass.all()
+            )
 
-            Returns:
-                All instances for the associated GeneralManager class, typically provided as a Bucket/QuerySet-like iterable.
-            """
-            if include_inactive:
-                return generalManagerClass.filter(include_inactive=True)
-            return generalManagerClass.all()
+        from general_manager.api.graphql_resolvers import create_root_list_resolver
 
-        list_resolver = cls._create_list_resolver(_all_items, generalManagerClass)
+        list_resolver = create_root_list_resolver(
+            generalManagerClass, resolver_factory=cls._create_list_resolver
+        )
         cls._query_fields[list_field_name] = list_field
         cls._query_fields[f"resolve_{list_field_name}"] = list_resolver
 

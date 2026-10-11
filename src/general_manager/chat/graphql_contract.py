@@ -30,6 +30,11 @@ from graphql.language import ast
 from graphql.language.ast import OperationType
 
 from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql_filter_contract import (
+    public_filter_contracts,
+    public_population_contract,
+)
+from general_manager.api.graphql_value_contract import public_value_contracts
 from general_manager.interface.unit_contract import (
     public_unit_contract,
     public_unit_identity,
@@ -383,6 +388,7 @@ def _copy_contract_schema(
     roots: Sequence[str] = (),
     manager_types: Mapping[str, Any] | None = None,
     visibility: Mapping[str, bool] | None = None,
+    registry: Mapping[str, Any] | None = None,
 ) -> GraphQLSchema:
     """Freeze observable definitions; never clone private runtime values.
 
@@ -446,6 +452,26 @@ def _copy_contract_schema(
         if is_object_type(named)
         for field in fields.values()
     }
+    captured_filters = {
+        identity: contract
+        for named, fields in selected.values()
+        if is_input_object_type(named)
+        for identity, contract in public_filter_contracts(named).items()
+        if any(id(field) == identity for field in fields.values())
+    }
+    captured_values = {
+        identity: contract
+        for named, fields in selected.values()
+        if is_object_type(named)
+        for identity, contract in public_value_contracts(named).items()
+        if any(id(field) == identity for field in fields.values())
+    }
+    captured_populations = {
+        id(field): public_population_contract(
+            field, GraphQL.manager_registry if registry is None else registry
+        )
+        for field in root_fields.values()
+    }
     result = object.__new__(type(schema))
     memo: dict[int, Any] = {id(schema): result}
     for named in schema.type_map.values():
@@ -476,6 +502,11 @@ def _copy_contract_schema(
         # Only its native serialized public representation is observable here.
         copied.default_value = Undefined
         copied._contract_argument_info = _serialize_argument_info(value)
+        filter_contract = captured_filters.get(id(value))
+        if filter_contract is not None:
+            copied._contract_argument_info["filter_contract"] = deepcopy(
+                filter_contract
+            )
         return copied
 
     def copy_field(value: Any, *, input_field: bool) -> Any:
@@ -485,6 +516,8 @@ def _copy_contract_schema(
         copied.type, copied.description = type_ref(value.type), value.description
         copied._contract_unit_info = deepcopy(captured_units.get(id(value)))
         copied._contract_identity_info = deepcopy(captured_identities.get(id(value)))
+        copied._contract_value_info = deepcopy(captured_values.get(id(value)))
+        copied._contract_population_info = deepcopy(captured_populations.get(id(value)))
         copied.args = {
             name: argument(arg)
             for name, arg in _visible_arguments(
@@ -556,6 +589,7 @@ def capture_manager_contract(manager: str) -> tuple[dict[str, Any] | None, str]:
         roots=summary["roots"] if summary else (),
         manager_types=original_managers,
         visibility=visibility,
+        registry=registry,
     )
     manager_types = {
         name: schema.get_type(named.name) for name, named in original_managers.items()
@@ -645,6 +679,9 @@ def _manager_contract(
                     identity = getattr(field, "_contract_identity_info", None)
                     if identity is not None:
                         fields[name]["identity_contract"] = deepcopy(identity)
+                    value = getattr(field, "_contract_value_info", None)
+                    if value is not None:
+                        fields[name]["value_contract"] = deepcopy(value)
                 args = _visible_arguments(field, manager_types, visibility)
                 if args:
                     fields[name]["arguments"] = {
@@ -661,6 +698,11 @@ def _manager_contract(
         "root_fields": {
             name: {
                 "type": str(field.type),
+                **(
+                    {"population_contract": deepcopy(field._contract_population_info)}
+                    if getattr(field, "_contract_population_info", None) is not None
+                    else {}
+                ),
                 "arguments": {
                     key: _argument_info(arg)
                     for key, arg in _visible_arguments(

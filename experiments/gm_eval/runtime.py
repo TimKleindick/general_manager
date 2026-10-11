@@ -769,6 +769,9 @@ def bootstrap(
         GENERAL_MANAGER={
             "AUTOCREATE_GRAPHQL": True,
             "VALIDATE_INPUT_VALUES": True,
+            # The disposable fixture deliberately runs its registered read-only
+            # hooks in two seed phases, even with production-style DEBUG=False.
+            "READ_ONLY_SYNC_ON_STARTUP": True,
             "CHAT": {
                 "enabled": False,
                 "allowed_mutations": [],

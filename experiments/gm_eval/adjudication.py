@@ -53,12 +53,18 @@ are present facts only when the answer actually claims an empty result.
 
 Normalize equivalent wording without demanding exact prose. Canonical metric
 names include gross_shipped_quantity, net_shipped_quantity, shipped_weight,
-planned_net_revenue and shipped_quantity; source kinds include actual,
+planned_net_revenue, shipped_quantity and actual_net_project_cost; source kinds include actual,
 existing_plan and new_forecast. Separate metric identity, quantity basis (gross
 shipments versus net after returns), currency and tax basis. A currency unit is
 EUR, not "EUR excluding VAT"; evaluate the tax qualifier independently under
 answer_supported. Preserve an incorrect or unsupported qualifier as a semantic
 failure, never normalize away a net/gross or tax contradiction.
+actual_net_project_cost means actually incurred net costs of projects, whether
+asserted as a total or grouped by project or WBS element. Equivalent singular,
+plural or translated wording for this meaning uses this canonical metric.
+Do not use it for planned or forecast costs, gross costs or revenue. Preserve
+the answer's amounts, currency, period and source kind independently; naming
+the metric does not establish that those claims or qualifiers are correct.
 Explicit gross actual shipment results or aggregate totals use gross_shipped_quantity
 even without a gross-versus-net comparison. This rule does not relabel historical year-by-year series.
 Historical series of unadjusted shipped quantities use shipped_quantity; a supported
@@ -87,9 +93,21 @@ null with absent support. Extract result membership separately from this order.
 For plan/actuals year maps, extract aggregate totals separately from optional
 component breakdowns; check every additional breakdown in its semantic check.
 Use stable entity IDs only when the answer or saved evidence resolves the name
-uniquely. Numeric values may be JSON numbers or decimal strings; preserve units
+uniquely. Entity IDs retain their manager and original JSON type: never cast
+an ID into another type or a code, or resolve it through another manager merely
+because the numeric ID or name agrees. A canonical code may identify the same
+record only when eligible visible evidence uniquely links it within that manager.
+Preserve explicit wrong IDs and codes; resolving a name is not permission to
+replace a conflicting identity. Numeric values may be JSON numbers or decimal strings; preserve units
 and currencies separately. The field schemas show shapes, never correct values.
 Each present fact needs one or more verbatim nonempty quotes from this answer.
+When context includes metric, unit and years, extract the scope of the same
+asserted component as the corresponding standalone facts. An explicit scope
+need not be repeated under a separate 'context' heading. Keep other components'
+periods, units and source kinds separate; do not merge them into that scope.
+Preserve contradictory component claims. Leave an unasserted context component
+null or absent; never fill it from tool values or other components. If neither
+an asserted scope nor an eligible contextual reference resolves it, context remains absent.
 Only customer_ids, constraints and context may resolve a clear contextual reference using an
 explicit visible prior USER choice. Attach history_quotes with its visible_history
 index and verbatim quote, plus eligible source evidence IDs confirming the same
@@ -97,6 +115,10 @@ entity/scope. The current answer must refer to that scope and no intervening
 choice may replace it. Never reconstruct omitted numeric results, infer choices
 from available tools, or use an unsupported prior assistant claim as authority.
 Leave unresolved scope absent/unknown. Judge visible_context_carryover independently.
+Selection constraints may assert a single value or a flat list of values.
+Preserve every explicitly claimed list element and its order, including wrong
+values; do not collapse it into a scalar or replace display names with an
+inferred category value. A representable constraint is not necessarily correct.
 The grounding_contract lists data_fields requiring source support. For each such
 present fact supply at least one eligible evidence ID that actually supports the
 claim. If the answer makes a claim that no eligible source supports, preserve
@@ -118,6 +140,10 @@ paths support that claim. Include the full manager qualifier: different calls
 or manager-qualified records are not interchangeable merely because their
 manager, entity ID or returned value agrees. Additional witnesses for separate
 answer claims may remain outside the shared set; the two lists need not be equal.
+For a multi-hop relation claim, independently verify every necessary link in
+the eligible path, including bridge records. Reference each necessary witness
+by its exact manager-qualified evidence ID in both the relevant fact_support
+and answer_supported. A matching endpoint alone does not prove a relation.
 Preserve unsupported facts and false semantic judgments when the evidence does
 not support them; never copy or supplement IDs automatically to obtain coverage.
 
@@ -205,11 +231,31 @@ def _shape(name: str, value: Any) -> dict[str, Any]:
                 else {}
             )
             return {"type": ["object", "null"], "additionalProperties": item_shape}
+        properties = {str(key): _shape(str(key), item) for key, item in value.items()}
+        if name == "constraints":
+            # Claim cardinality need not match Gold's scalar filter cardinality.
+            # Widen only scalar selection claims, never numeric result fields.
+            for key, item in value.items():
+                if isinstance(item, (str, int, float, bool)):
+                    scalar = properties[str(key)]
+                    properties[str(key)] = {
+                        "anyOf": [
+                            scalar,
+                            {
+                                "type": "array",
+                                "items": {
+                                    "type": [
+                                        kind
+                                        for kind in scalar["type"]
+                                        if kind != "null"
+                                    ]
+                                },
+                            },
+                        ]
+                    }
         return {
             "type": ["object", "null"],
-            "properties": {
-                str(key): _shape(str(key), item) for key, item in value.items()
-            },
+            "properties": properties,
             "additionalProperties": True,
         }
     if isinstance(value, list):
@@ -342,6 +388,10 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
         shapes["context"]["description"] = (
             "The effective current scope, including current refinements and unchanged explicit USER "
             "choices supported by eligible evidence; not merely the previous turn's scope. "
+            "When requested, metric, unit and years describe the same asserted component as "
+            "the corresponding standalone facts; an explicit scope does not need a separate context heading. "
+            "Do not merge another component's year, unit or source kind into this scope. "
+            "Preserve contradictory scope claims, and leave unasserted components null or absent. "
             "Never copy omitted numeric answers from history or tools."
         )
     if "unit" in shapes:
@@ -365,6 +415,9 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
             "or a null/empty narrowing filter. If the answer asserts unrestricted scope "
             "with no effective filters, use the empty object. Preserve every actual narrowing, "
             "contradiction or unknown extra claimed filter; do not discard it to match a schema. "
+            "Use a scalar for a single claimed value and a flat list for multiple claimed values. "
+            "Preserve list elements and order; never collapse a list to a reference value "
+            "or infer category values from display names. "
             "Check the correctness of neutral and explanatory scope statements separately "
             "under answer_supported. Absent scope remains absent, not an invented empty scope."
         )
@@ -1192,6 +1245,20 @@ def _schema_binding(call: Mapping[str, Any], **coordinates: Any) -> dict[str, An
     }
 
 
+def _schema_transport_scope(call: Mapping[str, Any]) -> str:
+    """Compare returned views while retaining each call's exact arguments.
+
+    An omitted view and its actual public default are the same schema scope.
+    Every other argument and the complete typed output must agree.
+    """
+    arguments = deepcopy(call["arguments"])
+    if _schema_call(call):
+        arguments.setdefault("view", call["output"].get("schema_view", "full"))
+    return _json(
+        {"tool": call["name"], "arguments": arguments, "output": call["output"]}
+    )
+
+
 def _schema_history_sources(
     run: Mapping[str, Any],
     turn_index: int,
@@ -1206,53 +1273,125 @@ def _schema_history_sources(
     available = []
     for index in range(turn_index):
         turn = _saved_turn(run, index)
-        if turn.get("persistence_verified") is not True:
-            continue
         calls, _ = _tool_observations(run, index, schema)
         for call in calls:
-            if not _transport_call(call):
+            if call.get("name") not in {"get_manager_schema", "search_managers"}:
                 continue
+            durable_matches = []
             for durable_index, row in enumerate(turn.get("durable_messages", [])):
                 if (
-                    isinstance(row, dict)
+                    turn.get("persistence_verified") is True
+                    and _transport_call(call)
+                    and isinstance(row, dict)
                     and row.get("role") == "tool"
                     and row.get("tool_name") == call["name"]
                     and _json(row.get("tool_args")) == _json(call["arguments"])
                     and _json(row.get("tool_result")) == _json(call["output"])
                 ):
-                    available.append((call, durable_index, row))
+                    durable_matches.append((durable_index, row))
+            # Keep incomplete candidates so a missing durable source cannot
+            # turn a multiple-origin history into an apparently unique one.
+            available.append((call, durable_matches))
     sources = []
     for history_index, row in enumerate(history):
         matches = []
-        for call, durable_index, durable in available:
+        for call, durable_matches in available:
             origin = historical_schema_origin(
                 row["role"],
                 row["content"],
                 tool_name=call["name"],
-                tool_result=call["output"],
-                binding=_schema_binding(call, durable_index=durable_index),
+                tool_result=call.get("output"),
+                binding={},
             )
             if origin is not None:
-                matches.append((call, durable_index, durable))
-        # Identical text from multiple possible original calls remains literal.
-        if len(matches) != 1:
+                matches.append((call, durable_matches))
+        if not matches or any(len(durable) != 1 for _, durable in matches):
             continue
-        call, durable_index, durable = matches[0]
-        sources.append(
-            {
-                "history_index": history_index,
-                "history_sha256": sha256(row["content"].encode()).hexdigest(),
-                "durable_index": durable_index,
-                "call": deepcopy(call),
-                "durable": deepcopy(
-                    {
-                        key: durable[key]
-                        for key in ("role", "tool_name", "tool_args", "tool_result")
-                    }
-                ),
-            }
-        )
+        origins = []
+        calls_seen, durable_seen, scopes = set(), set(), set()
+        for call, durable_matches in matches:
+            durable_index, durable = durable_matches[0]
+            calls_seen.add((call["source_turn"], call["id"], call["source_call_id"]))
+            durable_seen.add((call["source_turn"], durable_index))
+            scopes.add(_schema_transport_scope(call))
+            origins.append(
+                {
+                    "durable_index": durable_index,
+                    "call": deepcopy(call),
+                    "durable": deepcopy(
+                        {
+                            key: durable[key]
+                            for key in ("role", "tool_name", "tool_args", "tool_result")
+                        }
+                    ),
+                }
+            )
+        if (
+            len(calls_seen) != len(origins)
+            or len(durable_seen) != len(origins)
+            or len(scopes) != 1
+        ):
+            continue
+        proof = {
+            "history_index": history_index,
+            "history_sha256": sha256(row["content"].encode()).hexdigest(),
+        }
+        if len(origins) == 1:
+            sources.append({**proof, **origins[0]})
+        else:
+            sources.append(
+                {
+                    **proof,
+                    "format": "gm.history-origins/1",
+                    "origins": origins,
+                    "origins_sha256": _digest(origins),
+                }
+            )
     return sources
+
+
+def _validated_schema_history_origin(
+    request: Mapping[str, Any], index: int, proof: Mapping[str, Any]
+) -> Any:
+    """Validate one separate paired call/durable coordinate against exact text."""
+    from general_manager.chat.planned.schema_projection import historical_schema_origin
+
+    if set(proof) != {"durable_index", "call", "durable"}:
+        _invalid("invalid_schema_transport_source")
+    call, durable = proof["call"], proof["durable"]
+    if (
+        type(proof["durable_index"]) is not int
+        or proof["durable_index"] < 0
+        or not isinstance(call, dict)
+        or not _transport_call(call)
+        or type(call.get("source_turn")) is not int
+        or not 0 <= call["source_turn"] < request["turn_index"]
+        or not isinstance(call.get("id"), str)
+        or re.fullmatch(rf"turn-{call['source_turn'] + 1}/call-[1-9][0-9]*", call["id"])
+        is None
+        or not isinstance(call.get("source_call_id"), str)
+        or not call["source_call_id"]
+        or not isinstance(call.get("task_id"), str)
+        or not call["task_id"]
+        or not isinstance(durable, dict)
+        or set(durable) != {"role", "tool_name", "tool_args", "tool_result"}
+        or durable["role"] != "tool"
+        or durable["tool_name"] != call["name"]
+        or _json(durable["tool_args"]) != _json(call["arguments"])
+        or _json(durable["tool_result"]) != _json(call["output"])
+    ):
+        _invalid("invalid_schema_transport_source")
+    row = request["packet"]["visible_history"][index]
+    origin = historical_schema_origin(
+        row["role"],
+        row["content"],
+        tool_name=call["name"],
+        tool_result=call["output"],
+        binding=_schema_binding(call, durable_index=proof["durable_index"]),
+    )
+    if origin is None:
+        _invalid("invalid_schema_transport_source")
+    return origin
 
 
 def _judge_schema_slots(request: Mapping[str, Any]) -> tuple[SchemaSlot, ...]:
@@ -1277,53 +1416,80 @@ def _judge_schema_slots(request: Mapping[str, Any]) -> tuple[SchemaSlot, ...]:
         _invalid("invalid_schema_transport_source")
     seen = set()
     for proof in sources:
-        if not isinstance(proof, dict) or set(proof) != {
-            "history_index",
-            "history_sha256",
-            "durable_index",
-            "call",
-            "durable",
-        }:
+        if not isinstance(proof, dict):
             _invalid("invalid_schema_transport_source")
-        index, call, durable = proof["history_index"], proof["call"], proof["durable"]
+        multiple = proof.get("format") == "gm.history-origins/1"
+        expected_keys = {"history_index", "history_sha256"} | (
+            {"format", "origins", "origins_sha256"}
+            if multiple
+            else {"durable_index", "call", "durable"}
+        )
+        if set(proof) != expected_keys:
+            _invalid("invalid_schema_transport_source")
+        index = proof["history_index"]
         history = packet["visible_history"]
         if (
             type(index) is not int
             or not 0 <= index < len(history)
             or index in seen
-            or type(proof["durable_index"]) is not int
-            or proof["durable_index"] < 0
-            or not isinstance(call, dict)
-            or not _transport_call(call)
-            or type(call.get("source_turn")) is not int
-            or not 0 <= call["source_turn"] < request["turn_index"]
-            or not isinstance(call.get("id"), str)
-            or re.fullmatch(
-                rf"turn-{call['source_turn'] + 1}/call-[1-9][0-9]*", call["id"]
-            )
-            is None
-            or not isinstance(call.get("source_call_id"), str)
-            or not call["source_call_id"]
-            or not isinstance(durable, dict)
-            or set(durable) != {"role", "tool_name", "tool_args", "tool_result"}
-            or durable["role"] != "tool"
-            or durable["tool_name"] != call["name"]
-            or _json(durable["tool_args"]) != _json(call["arguments"])
-            or _json(durable["tool_result"]) != _json(call["output"])
             or sha256(history[index]["content"].encode()).hexdigest()
             != proof["history_sha256"]
         ):
             _invalid("invalid_schema_transport_source")
         seen.add(index)
-        origin = historical_schema_origin(
-            history[index]["role"],
-            history[index]["content"],
-            tool_name=call["name"],
-            tool_result=call["output"],
-            binding=_schema_binding(call, durable_index=proof["durable_index"]),
-        )
-        if origin is None:
-            _invalid("invalid_schema_transport_source")
+        if multiple:
+            origins = proof["origins"]
+            if (
+                not isinstance(origins, list)
+                or len(origins) < 2
+                or _digest(origins) != proof["origins_sha256"]
+            ):
+                _invalid("invalid_schema_transport_source")
+            calls_seen, durable_seen, scopes = set(), set(), set()
+            bindings = []
+            for item in origins:
+                if not isinstance(item, dict):
+                    _invalid("invalid_schema_transport_source")
+                _validated_schema_history_origin(request, index, item)
+                call = item["call"]
+                calls_seen.add(
+                    (call["source_turn"], call["id"], call["source_call_id"])
+                )
+                durable_seen.add((call["source_turn"], item["durable_index"]))
+                scopes.add(_schema_transport_scope(call))
+                bindings.append(
+                    _schema_binding(
+                        call,
+                        durable_index=item["durable_index"],
+                        task_id=call["task_id"],
+                    )
+                )
+            if (
+                len(calls_seen) != len(origins)
+                or len(durable_seen) != len(origins)
+                or len(scopes) != 1
+            ):
+                _invalid("invalid_schema_transport_source")
+            call = origins[0]["call"]
+            origin = historical_schema_origin(
+                history[index]["role"],
+                history[index]["content"],
+                tool_name=call["name"],
+                tool_result=call["output"],
+                binding={
+                    "format": "gm.history-origins/1",
+                    "origins": bindings,
+                    "origins_sha256": _digest(bindings),
+                },
+            )
+            if origin is None:
+                _invalid("invalid_schema_transport_source")
+        else:
+            origin = _validated_schema_history_origin(
+                request,
+                index,
+                {key: proof[key] for key in ("durable_index", "call", "durable")},
+            )
         slots.append(
             SchemaSlot(
                 ("visible_history", index, "content"),

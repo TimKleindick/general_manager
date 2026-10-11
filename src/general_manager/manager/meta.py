@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
-from functools import wraps
+from functools import partial, wraps
+from types import FunctionType, MethodType
 import threading
 from _thread import RLock as RLockType
 from typing import (
@@ -13,13 +14,17 @@ from typing import (
     TypeVar,
     cast,
 )
-from weakref import WeakKeyDictionary
+from weakref import WeakKeyDictionary, ref
 
 from django.apps import apps
 
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.logging import get_logger
+from general_manager.utils.executable_contract import (
+    executable_signature,
+    literal_signature,
+)
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
@@ -42,6 +47,63 @@ _MANAGER_DEPENDENCY_TRACKING_CLASS_CACHE: WeakKeyDictionary[
 ] = WeakKeyDictionary()
 _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN = object()
 _MANAGER_CLASS_STATE_MISSING = object()
+_ATTRIBUTE_DESCRIPTOR_BINDINGS: WeakKeyDictionary[
+    object, tuple[object, object, str, object, object, object, object]
+] = WeakKeyDictionary()
+
+
+def _attribute_source_key(source: object) -> object:
+    if isinstance(source, (FunctionType, MethodType)):
+        return executable_signature(source)
+    if type(source) is partial:
+        function = executable_signature(source.func)
+        arguments = literal_signature(source.args)
+        keywords = literal_signature(source.keywords)
+        return (
+            None
+            if function is None or arguments is None or keywords is None
+            else (id(source.func), function, arguments, keywords)
+        )
+    if callable(source):
+        return None
+    return literal_signature(source)
+
+
+def common_attribute_descriptor(owner: type, name: str, descriptor: object) -> bool:
+    """Revalidate only descriptors produced by the actual common factory."""
+    try:
+        binding = _ATTRIBUTE_DESCRIPTOR_BINDINGS.get(descriptor)
+    except TypeError:
+        return False
+    if binding is None:
+        return False
+    descriptor_ref, manager_ref, attribute, getter, code, source_ref, source_key = (
+        binding
+    )
+    attributes = vars(owner).get("_attributes")
+    source = (
+        attributes.get(name, _MANAGER_CLASS_STATE_MISSING)
+        if type(attributes) is dict
+        else _MANAGER_CLASS_STATE_MISSING
+    )
+    return (
+        callable(descriptor_ref)
+        and descriptor_ref() is descriptor
+        and callable(manager_ref)
+        and manager_ref() is owner
+        and attribute == name
+        and getattr(descriptor, "_class", None) is owner
+        and getattr(descriptor, "_attr_name", None) == name
+        and cast(object, type(descriptor).__getattribute__) is object.__getattribute__
+        and getattr(type(descriptor), "__get__", None) is getter
+        and executable_signature(getter) == code
+        and type(attributes) is dict
+        and source_key is not None
+        and source is not _MANAGER_CLASS_STATE_MISSING
+        and callable(source_ref)
+        and source_ref() is source
+        and _attribute_source_key(source) == source_key
+    )
 
 
 def _manager_dependency_tracking_class(
@@ -962,7 +1024,27 @@ class GeneralManagerMeta(type):
                             pass
                     return attribute
 
-            return Descriptor(attr_name, new_class)
+            descriptor = Descriptor(attr_name, new_class)
+            source_attributes = vars(new_class).get("_attributes", {})
+            source = source_attributes.get(attr_name, _MANAGER_CLASS_STATE_MISSING)
+            try:
+                source_ref: Callable[[], object] = ref(source)
+            except TypeError:
+
+                def literal_source_ref(value: object = source) -> object:
+                    return value
+
+                source_ref = literal_source_ref
+            _ATTRIBUTE_DESCRIPTOR_BINDINGS[descriptor] = (
+                ref(descriptor),
+                ref(new_class),
+                attr_name,
+                Descriptor.__get__,
+                executable_signature(Descriptor.__get__),
+                source_ref,
+                _attribute_source_key(source),
+            )
+            return descriptor
 
         for attr_name in attributes:
             setattr(new_class, attr_name, descriptor_method(attr_name, new_class))

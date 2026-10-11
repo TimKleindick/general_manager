@@ -40,6 +40,10 @@ def selected_evidence(
                 require_linked=True,
             )
             pending.extend(item["evidence_id"] for item in record.payload()["operands"])
+            binding = record.payload().get("binding", {})
+            for mode in ("cross_query", "conversion"):
+                if mode in binding:
+                    pending.extend(binding[mode]["schema_evidence_ids"])
         selected.add(evidence_id)
     return tuple(record for record in store.records if record.evidence_id in selected)
 

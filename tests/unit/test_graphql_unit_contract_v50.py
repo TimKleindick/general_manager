@@ -14,7 +14,11 @@ from general_manager.chat.schema_inspection import (
     SchemaInspectionError,
 )
 from general_manager.interface.base_interface import InterfaceBase
-from general_manager.interface.unit_contract import FieldUnitContract, UNIT_EXTENSION
+from general_manager.interface.unit_contract import (
+    FieldUnitContract,
+    UNIT_EXTENSION,
+    public_unit_identity,
+)
 
 
 @pytest.fixture
@@ -99,6 +103,55 @@ def _attach(fixture: Any) -> Any:
     schema, managers, types = fixture
     attach_unit_contracts(schema, managers, types)
     return schema
+
+
+@pytest.mark.parametrize("input_type", [int, str])
+@pytest.mark.parametrize("primary_fields", ["public", "hidden", "ambiguous"])
+def test_constructor_identity_uses_declared_primary_attribute_without_business_id_fallback(
+    input_type: type,
+    primary_fields: str,
+) -> None:
+    from general_manager.api.graphql_units import attach_unit_contracts
+
+    schema = build_schema(
+        "type Item { recordKey: ID, id: Int } type Query { item: Item }"
+    )
+    attributes = {
+        "id": {"type": int},
+        "record_key": {
+            "type": input_type,
+            "is_identifier": True,
+            "is_primary_key": True,
+        },
+    }
+    if primary_fields == "ambiguous":
+        attributes["other_key"] = dict(attributes["record_key"])
+
+    class Declared(InterfaceBase):
+        input_fields: ClassVar = {"id": SimpleNamespace(type=input_type, required=True)}
+
+        @classmethod
+        def get_attribute_types(cls) -> Any:
+            return attributes
+
+    fields = {"id": SimpleNamespace(name=None)}
+    if primary_fields != "hidden":
+        fields["record_key"] = SimpleNamespace(name=None)
+    generated = SimpleNamespace(_meta=SimpleNamespace(name="Item", fields=fields))
+    manager = SimpleNamespace(Interface=Declared)
+    attach_unit_contracts(schema, {"Item": manager}, {"Item": generated})
+    native = schema.get_type("Item")
+    assert public_unit_identity(native.fields["id"]) is None
+    identity = public_unit_identity(native.fields["recordKey"])
+    assert identity == (
+        {
+            "source": "interface_input",
+            "input_name": "id",
+            "input_type": input_type.__name__,
+        }
+        if primary_fields == "public"
+        else None
+    )
 
 
 def test_shared_declarations_bind_actual_graphql_names_and_own_manager_details(

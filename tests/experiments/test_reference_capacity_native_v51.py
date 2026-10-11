@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from general_manager.chat.planned.schema_projection import REFERENCE_VERSION
 from tests.experiments.test_gm_eval_harness import _child
 from tests.experiments.test_unit_conversion_sequence_v50 import PROGRAM
 
@@ -22,7 +23,10 @@ def program(manager_count, parity):
     )
     value = value.replace(
         "body={**payload",
-        "observations += sum(m.schema_observation is not None for m in messages)\n   reference_frames += sum(m.projection_receipt is not None and m.projection_receipt.get('format')=='gm.reference-data/1' for m in messages)\n   body={**payload",
+        "observations += sum(m.schema_observation is not None for m in messages)\n"
+        "   reference_frames += sum(m.projection_receipt is not None and "
+        f"m.projection_receipt.get('format')=={REFERENCE_VERSION!r} for m in messages)\n"
+        "   body={**payload",
     )
     value = value.replace(
         "{'manager':'Shipment','requirement_id':'quantity_schema'}",

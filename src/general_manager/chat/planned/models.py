@@ -100,6 +100,139 @@ class ConversionBinding:
 
 
 @dataclass(frozen=True)
+class CrossQuerySourceBinding:
+    """Exact predecessor and observed executable entity/period selectors."""
+
+    source_requirement_id: str
+    calculation_evidence_id: str
+    entity_path: tuple[str, ...]
+    period_path: tuple[str, ...]
+    entity_filter_path: tuple[str, ...]
+    period_start_filter_path: tuple[str, ...]
+    period_end_filter_path: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if any(
+            not isinstance(item, str) or not item.strip()
+            for item in (self.source_requirement_id, self.calculation_evidence_id)
+        ) or any(
+            not isinstance(path, tuple)
+            or not path
+            or any(not isinstance(part, str) or not part.strip() for part in path)
+            for path in (
+                self.entity_path,
+                self.period_path,
+                self.entity_filter_path,
+                self.period_start_filter_path,
+                self.period_end_filter_path,
+            )
+        ):
+            message = "invalid cross-query source selectors"
+            raise ValueError(message)
+
+    def as_mapping(self) -> dict[str, object]:
+        return {
+            "source_requirement_id": self.source_requirement_id,
+            "calculation_evidence_id": self.calculation_evidence_id,
+            **{
+                key: list(getattr(self, key))
+                for key in (
+                    "entity_path",
+                    "period_path",
+                    "entity_filter_path",
+                    "period_start_filter_path",
+                    "period_end_filter_path",
+                )
+            },
+        }
+
+    @classmethod
+    def from_mapping(cls, value: object) -> CrossQuerySourceBinding:
+        from collections.abc import Mapping
+
+        paths = (
+            "entity_path",
+            "period_path",
+            "entity_filter_path",
+            "period_start_filter_path",
+            "period_end_filter_path",
+        )
+        if (
+            not isinstance(value, Mapping)
+            or set(value)
+            != {"source_requirement_id", "calculation_evidence_id", *paths}
+            or any(not isinstance(value[key], list) for key in paths)
+        ):
+            message = "invalid cross-query source shape"
+            raise ValueError(message)
+        return cls(
+            value["source_requirement_id"],
+            value["calculation_evidence_id"],
+            *(tuple(value[key]) for key in paths),
+        )
+
+
+@dataclass(frozen=True)
+class CrossQueryBinding:
+    """Two ordered direct sums with exact current task-owned schema witnesses."""
+
+    sources: tuple[CrossQuerySourceBinding, CrossQuerySourceBinding]
+    schema_requirement_ids: tuple[str, ...]
+    schema_evidence_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.sources, tuple)
+            or len(self.sources) != 2
+            or any(
+                not isinstance(item, CrossQuerySourceBinding) for item in self.sources
+            )
+            or len({item.source_requirement_id for item in self.sources}) != 2
+            or len({item.calculation_evidence_id for item in self.sources}) != 2
+            or any(
+                not isinstance(items, tuple)
+                or not items
+                or len(items) > 6
+                or any(not isinstance(item, str) or not item.strip() for item in items)
+                or len(set(items)) != len(items)
+                for items in (self.schema_requirement_ids, self.schema_evidence_ids)
+            )
+            or len(self.schema_requirement_ids) != len(self.schema_evidence_ids)
+        ):
+            message = "invalid cross-query source/schema binding"
+            raise ValueError(message)
+
+    def as_mapping(self) -> dict[str, object]:
+        return {
+            "sources": [source.as_mapping() for source in self.sources],
+            "schema_requirement_ids": list(self.schema_requirement_ids),
+            "schema_evidence_ids": list(self.schema_evidence_ids),
+        }
+
+    @classmethod
+    def from_mapping(cls, value: object) -> CrossQueryBinding:
+        from collections.abc import Mapping
+
+        keys = {"sources", "schema_requirement_ids", "schema_evidence_ids"}
+        if (
+            not isinstance(value, Mapping)
+            or set(value) != keys
+            or any(not isinstance(value[key], list) for key in keys)
+            or len(value["sources"]) != 2
+        ):
+            message = "invalid cross-query binding shape"
+            raise ValueError(message)
+        return cls(
+            (
+                CrossQuerySourceBinding.from_mapping(value["sources"][0]),
+                CrossQuerySourceBinding.from_mapping(value["sources"][1]),
+            ),
+            tuple(value["schema_requirement_ids"]),
+            tuple(value["schema_evidence_ids"]),
+        )
+
+
+@dataclass(frozen=True)
 class CalculationBinding:
     """A declared source/field/group contract, never an asserted business label."""
 
@@ -109,6 +242,7 @@ class CalculationBinding:
     unit_path: tuple[str, ...] | None = None
     utc_year_by: tuple[tuple[str, ...], ...] = ()
     conversion: ConversionBinding | None = None
+    cross_query: CrossQueryBinding | None = None
 
     def __post_init__(self) -> None:
         paths = (
@@ -119,6 +253,19 @@ class CalculationBinding:
         )
         if (
             (
+                self.cross_query is not None
+                and (
+                    not isinstance(self.cross_query, CrossQueryBinding)
+                    or self.conversion is not None
+                    or self.value_path is not None
+                    or self.source_requirement_ids
+                    != tuple(
+                        source.source_requirement_id
+                        for source in self.cross_query.sources
+                    )
+                )
+            )
+            or (
                 self.conversion is not None
                 and (
                     not isinstance(self.conversion, ConversionBinding)
@@ -153,6 +300,11 @@ class CalculationBinding:
     def as_mapping(self) -> dict[str, object]:
         return {
             **(
+                {"cross_query": self.cross_query.as_mapping()}
+                if self.cross_query is not None
+                else {}
+            ),
+            **(
                 {"conversion": self.conversion.as_mapping()}
                 if self.conversion is not None
                 else {}
@@ -173,6 +325,10 @@ class CalculationBinding:
         from collections.abc import Mapping
 
         conversion = None
+        cross_query = None
+        if isinstance(value, Mapping) and "cross_query" in value:
+            cross_query = CrossQueryBinding.from_mapping(value["cross_query"])
+            value = {key: item for key, item in value.items() if key != "cross_query"}
         if isinstance(value, Mapping) and "conversion" in value:
             conversion = ConversionBinding.from_mapping(value["conversion"])
             value = {key: item for key, item in value.items() if key != "conversion"}
@@ -208,6 +364,7 @@ class CalculationBinding:
             None if value["unit_path"] is None else tuple(value["unit_path"]),
             tuple(tuple(path) for path in value.get("utc_year_by", [])),
             conversion,
+            cross_query,
         )
 
 
