@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.83.0 (2026-10-11)
+
+### Documentation
+
+- Clarify async workflow transaction prerequisites
+  ([`1197d65`](https://github.com/TimKleindick/general_manager/commit/1197d6577f437935b7d022c5376544d856b70ee0))
+
+- Document recent public API changes
+  ([`2e3bdd2`](https://github.com/TimKleindick/general_manager/commit/2e3bdd2dcc7aa045c2152d7e00d42879703434cb))
+
+### Features
+
+- Make startup read-only maintenance development-aware
+  ([`5fa6597`](https://github.com/TimKleindick/general_manager/commit/5fa65971ca1f810179a874e72c6d0dfa8f1f22b2))
+
+### Breaking Changes
+
+- When READ_ONLY_SYNC_ON_STARTUP is unset, DEBUG=False now skips automatic read-only
+  synchronization. Production deployments must run sync_read_only after migrations or explicitly
+  enable the previous behavior.
+
+
 ## v0.82.5 (2026-10-11)
 
 ### Bug Fixes
