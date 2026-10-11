@@ -32,6 +32,40 @@ and scalar or structured input shapes. See the
 [identifier guide](../howto/expose_via_graphql.md#filter-by-identifier)
 for explicit UUID/string input configuration and the full migration steps.
 
+## Project native identities
+
+Using the `Record` declaration from the
+[native identity property guide](../howto/expose_via_graphql.md#declare-native-identity-properties),
+create a row with PK `2147483648` and query:
+
+```graphql
+query RecordIdentity($id: ID!) {
+  record(id: $id) { id recordKey recordKeys externalId }
+}
+```
+
+```json
+{"id": "2147483648"}
+```
+
+The result is:
+
+```json
+{
+  "record": {
+    "id": "2147483648",
+    "recordKey": "2147483648",
+    "recordKeys": ["2147483648"],
+    "externalId": 7
+  }
+}
+```
+
+Only the properties declared with `is_identifier=True` adopt identity output.
+The native `record.record_key` and `values_list("id", flat=True)` values remain
+integers. Keep schema-generated ID outputs as strings; update client types and
+equality/cache-key handling when adding the declaration to an existing schema.
+
 ## Paginated listings
 
 ```graphql

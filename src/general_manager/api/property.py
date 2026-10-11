@@ -55,7 +55,7 @@ class GraphQLPropertyTimeoutConfigurationError(ValueError):
 class GraphQLProperty(property):
     """Descriptor that exposes a resolver with GraphQL metadata and caching.
 
-    Stable inspection attributes are `sortable`, `filterable`,
+    Stable inspection attributes are `sortable`, `filterable`, `is_identifier`,
     `query_annotation`, `cache`, `timeout`, `warm_up`, and `graphql_type_hint`.
     The descriptor preserves normal `property` behavior such as `fget` and
     `__doc__`, but those values follow Python's property/wraps mechanics rather
@@ -66,6 +66,7 @@ class GraphQLProperty(property):
 
     sortable: bool
     filterable: bool
+    is_identifier: bool
     warm_up: bool
     query_annotation: object | None
     timeout: int | None
@@ -77,6 +78,7 @@ class GraphQLProperty(property):
         *,
         sortable: bool = False,
         filterable: bool = False,
+        is_identifier: bool = False,
         query_annotation: object | None = None,
         cache: GraphQLPropertyCache = "none",
         timeout: int | None = None,
@@ -101,6 +103,10 @@ class GraphQLProperty(property):
             filterable: Whether generated GraphQL fields may expose filtering
                 for this property. Stored as supplied; runtime truthiness is not
                 coerced or validated.
+            is_identifier: Declare native integer, string, or UUID identities,
+                either scalar or a homogeneous list, tuple, or set. Generates
+                GraphQL ID output without changing Python values. Unsupported
+                annotations raise TypeError during schema generation.
             query_annotation: Opaque ORM annotation object or callable consumed
                 by database bucket query construction.
             cache: Resolver cache scope. `"none"` evaluates every access,
@@ -160,6 +166,7 @@ class GraphQLProperty(property):
 
         self.sortable = sortable
         self.filterable = filterable
+        self.is_identifier = is_identifier
         self.query_annotation = query_annotation
         self.cache = cache
         self.timeout = timeout
@@ -276,6 +283,7 @@ def graph_ql_property(
     *,
     sortable: bool = False,
     filterable: bool = False,
+    is_identifier: bool = False,
     query_annotation: object | None = None,
     cache: GraphQLPropertyCache = "run",
     timeout: int | None = None,
@@ -290,6 +298,7 @@ def graph_ql_property(
     *,
     sortable: bool = False,
     filterable: bool = False,
+    is_identifier: bool = False,
     query_annotation: object | None = None,
     cache: GraphQLPropertyCache = "run",
     timeout: int | None = None,
@@ -307,6 +316,13 @@ def graph_ql_property(
             property.
         filterable: Whether generated GraphQL fields may expose filtering for
             this property.
+        is_identifier: Explicitly declare native integer, string, or UUID
+            identities. Scalars map to ID and homogeneous list, tuple, or set
+            collections to [ID], preserving nullable property output and native
+            Python values. Optional annotations and optional elements are
+            supported. Manager objects, nested collections, ambiguous unions,
+            and other scalar types raise TypeError during schema generation.
+            Names and query_annotation never infer this flag. Defaults to False.
         query_annotation: Opaque ORM annotation object or callable consumed by
             database bucket query construction.
         cache: Cache scope. `"run"` is the default and memoizes only within the
@@ -354,6 +370,7 @@ def graph_ql_property(
             sortable=sortable,
             query_annotation=query_annotation,
             filterable=filterable,
+            is_identifier=is_identifier,
             cache=cache,
             timeout=timeout,
             warm_up=warm_up,

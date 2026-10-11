@@ -98,7 +98,7 @@ cache-decorator validation; unexpected timeouts are reported before unsupported
 runtime cache values from the shared cache decorator.
 
 `graph_ql_property` is the stable public API. The descriptor stores the metadata
-used by schema generation as `sortable`, `filterable`, `query_annotation`,
+used by schema generation as `sortable`, `filterable`, `is_identifier`, `query_annotation`,
 `cache`, `timeout`, `warm_up`, and `graphql_type_hint`; treat those attributes as
 read-only after class definition. `GraphQLPropertyReturnAnnotationError`,
 `GraphQLPropertyTimeoutConfigurationError`, and
