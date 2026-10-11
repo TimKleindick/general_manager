@@ -18,9 +18,10 @@ from typing import (
     cast,
     get_args,
 )
+from uuid import UUID
 
 import graphene
-from graphql import GraphQLError
+from graphql import GraphQLError, GraphQLID
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
@@ -35,6 +36,7 @@ from general_manager.api.graphql_ordering import (
 from general_manager.bucket._ordering import SortTerm, sort_items
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.input import Input
 from general_manager.measurement.measurement import Measurement
 from general_manager.utils.type_checks import safe_issubclass
 from general_manager.search.backend_registry import get_search_backend
@@ -880,13 +882,16 @@ def normalize_id_filter_value(
     value: object,
 ) -> object:
     """
-    Convert equality filters marked as scalar identities to their native types.
+    Convert confirmed identity equality operands to their native types.
 
     Actual ORM primary keys use the declared constructor input, independent of
     the model column name. Raw relation references use the target field's
     ``to_python`` conversion, including ``to_field`` references. Ordered lookups
-    and non-list/tuple ``in`` values pass through unchanged. Conversion preserves
-    existing filter semantics; constructor and write validation remain separate.
+    and non-list/tuple ``in`` values pass through unchanged. Declared native
+    properties use their validated annotation and the standard Input cast;
+    collection operands retain the backend's existing element comparisons.
+    Equality lists retain production adapters' OR grammar. Constructor and
+    write validation remain separate. Null operands and elements remain null.
 
     Raises:
         Exceptions from ``Input.cast()`` or ORM field conversion propagate.
@@ -900,6 +905,22 @@ def normalize_id_filter_value(
     interface = getattr(field_type, "Interface", None)
     if interface is None:
         return value
+    prop = interface.get_graph_ql_properties().get(attribute_name)
+    if prop is not None:
+        if not prop.is_identifier:
+            return value
+        native_type, _ = property_identifier_type(
+            prop.graphql_type_hint,
+            owner_name=field_type.__name__,
+            field_name=attribute_name,
+        )
+        scalar_input = Input(native_type)
+        if operator == "in" and not isinstance(value, (list, tuple)):
+            return value
+        if isinstance(value, (list, tuple)):
+            return [_cast_identity_scalar(scalar_input.cast, item) for item in value]
+        return _cast_identity_scalar(scalar_input.cast, value)
+
     metadata = interface.get_attribute_types().get(attribute_name, {})
     if not metadata.get("is_identifier"):
         return value
@@ -924,10 +945,19 @@ def normalize_id_filter_value(
     if converter is None:
         return value
 
-    if operator == "in":
-        if not isinstance(value, (list, tuple)):
-            return value
-        return [converter(item) for item in value]
+    if operator == "in" and not isinstance(value, (list, tuple)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_cast_identity_scalar(converter, item) for item in value]
+    return _cast_identity_scalar(converter, value)
+
+
+def _cast_identity_scalar(
+    converter: Callable[[object], object], value: object
+) -> object:
+    """Use existing ID validation before native casting can truncate JSON values."""
+    if value is not None and not isinstance(value, UUID):
+        GraphQLID.parse_value(value)
     return converter(value)
 
 
@@ -1216,16 +1246,22 @@ def register_search_query(
             decision = getattr(permission_plan, "decision", "conditional")
             if decision == "deny_all":
                 continue
+            # Shared indexes may give the same field different native types.
+            # Keep parsed user filters and permission constraints untouched.
+            manager_filters = {
+                key: normalize_id_filter_value(manager_class, key, value)
+                for key, value in parsed_filters.items()
+            }
             backend_shape = get_backend_shape(manager_class)
             instance_check_reasons = resolve_instance_check_reasons(
                 permission_plan,
                 backend_shape=backend_shape,
             )
             filter_groups = (
-                parsed_filters or None
+                manager_filters or None
                 if decision == "allow_all"
                 else merge_permission_filters(
-                    parsed_filters,
+                    manager_filters,
                     permission_plan.filters,
                 )
             )

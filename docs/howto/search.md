@@ -210,6 +210,27 @@ Filters can also be passed as a list of filter items:
 }
 ```
 
+For a configured identity filter such as the real `leader_id` foreign-key
+alias, send the GraphQL ID string inside the JSON-encoded filter:
+
+```json
+{"filters": "{\"leader_id__in\": [\"9007199254740993\"]}"}
+```
+
+Default equality and `__exact` work the same way. UUID references convert to
+native UUIDs; string references such as `"007"` keep their exact spelling. For a
+native scalar or collection projection, declare its identity contract with
+`@graph_ql_property(is_identifier=True)` and add its name to `IndexConfig.filters`.
+This search declaration does not require a generated ORM `filterable` property
+or `query_annotation`. Keep indexed values native and retain business numbers
+as JSON numbers. ID-like names and annotations alone do not opt into conversion.
+
+No database or index migration is required when upgrading this normalization.
+If the model PK is named `id`, use an explicitly declared property (for example,
+`record_key`) for search filters because `id` is reserved by the search document
+envelope. A custom `to_document` must preserve the native type promised by the
+manager's identity metadata.
+
 By default, GraphQL search returns exact post-permission totals. Exact totals
 preserve existing behavior, but permission-filtered searches may need to scan
 additional backend pages after the current result page is already filled.
