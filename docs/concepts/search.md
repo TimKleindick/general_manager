@@ -14,6 +14,19 @@ Search documents include:
 - A stable, type-scoped document id.
 - A `type` label and `identification` mapping for reconstruction.
 - A `data` payload built from configured fields (and filter fields).
+- Explicit native identity metadata, inherited from ORM PK/reference fields and
+  properties declared with `is_identifier=True`.
+
+Identity metadata controls equality/membership transport, without converting
+manager, database, bucket, or stored business values to strings. Meilisearch
+uses separate versioned tokens because numeric filtering can collapse adjacent
+large integer IDs and text equality can ignore case. DevSearch compares native
+values using its existing operator rules. Use `__in` for portable collection
+membership. Names ending in `_id` alone do not declare identities; ordinary
+business numbers and pattern/range filters retain existing adapter behavior.
+Custom document aliases can declare their native scalar kind through
+`IndexConfig.identity_fields`. See [the search API](../api/search.md) for manual
+documents, filter groups, and custom backend contracts.
 
 ## Search configuration model
 

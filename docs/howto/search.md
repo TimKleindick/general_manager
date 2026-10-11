@@ -3,6 +3,52 @@
 This tutorial walks through enabling search with Meilisearch, indexing data, and
 querying via GraphQL. It assumes Django + the auto GraphQL schema are enabled.
 
+## Reindex existing identity projections
+
+After upgrading to identity-aware search transport, rebuild every affected
+manager/index pair before accepting identity-filtered traffic. Existing
+Meilisearch documents lack the new equality tokens, so declared identity filters
+omit those rows until reindexing finishes. A partly rebuilt index returns only
+rebuilt matching rows; it never broadens back to numeric comparison. Plan a
+maintenance window, or build a separate application-owned index and switch
+traffic after verifying it.
+
+For one configured pair, use the supported indexer in the application process:
+
+```python
+from general_manager.search.indexer import SearchIndexer
+
+SearchIndexer().reindex_manager_index(Project, "global")
+```
+
+This rebuilds current rows and removes stale documents belonging to that manager
+type, preserving other types in the index. `python manage.py search_index
+--reindex --manager Project` rebuilds all configured indexes for the selected
+manager. Its `--index` option selects settings updates; it does not limit that
+manager's reindex scope. Settings-only `search_index` calls preserve identity
+filterability. Reconciliation fingerprints also track resolved identity types
+and transport version, so enabled reconciliation marks affected pairs for
+rebuilding. Verify exact equality/membership and authorized totals after repair.
+No database migration or changes to native constructors are required.
+
+When using a custom `to_document`, declare aliased native identity fields on
+the index instead of stringifying all numbers:
+
+```python
+IndexConfig(
+    name="global",
+    fields=["customer_alias", "quantity"],
+    filters=["customer_alias", "quantity"],
+    identity_fields={"customer_alias": int},
+)
+```
+
+The declaration describes the native identity kind, including scalar elements
+of nullable/list fields. Unmarked `quantity` stays a business number. For direct
+provider queries use `build_search_filters(Project, "global", filters)`; manual
+documents and custom providers can use the explicit document/filter metadata
+contract described in [the API reference](../api/search.md).
+
 ## Step 1: Configure a backend
 
 Add a search backend in `settings.py`:
