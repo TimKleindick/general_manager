@@ -26,3 +26,19 @@ model input failure. A recovered new run can still complete normally; an
 independent replay never supplies replacement evidence to the model. This
 classification change applies to new runs and separately versioned offline
 replays. Previously frozen results are not rewritten.
+
+## Database statement budgets
+
+On PostgreSQL, the read tool applies the smaller of the configured statement
+timeout and the remaining planned-query budget. A boolean context value does
+not supply a planned timeout. The transaction and `SET LOCAL statement_timeout`
+start when the query first executes SQL on the default connection and remain
+scoped to that GraphQL execution. They are cleaned up when execution finishes
+or raises an error.
+
+An Interface that completes a query without SQL does not open the default
+database merely to install this budget. Installing the deferred SQL execution
+hook does not access the database. This preserves queries implemented by
+calculation, read-only, and other non-SQL Interfaces when the application's
+default database is PostgreSQL. Statement timeout behavior on other database
+backends is unchanged.
