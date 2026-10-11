@@ -10,11 +10,15 @@ from general_manager.manager.general_manager import GeneralManager
 from general_manager.search.backend import SearchBackend, SearchDocument
 from general_manager.search.backend_registry import get_search_backend
 from general_manager.search.config import SearchConfigSpec
+from general_manager.search.identity import (
+    get_search_identity_fields,
+)
 from general_manager.search.registry import (
     collect_index_settings,
     get_index_config,
     get_search_config,
     get_type_label,
+    iter_index_configs,
 )
 from general_manager.search.utils import (
     build_document_id,
@@ -148,6 +152,7 @@ def _serialize_document(
         data=data,
         field_boosts=index_config.field_boosts(),
         index_boost=index_config.boost,
+        identity_fields=get_search_identity_fields(manager_class, index_config),
     )
 
 
@@ -187,11 +192,22 @@ def _ensure_index(backend: SearchBackend, index_name: str) -> None:
         index_name (str): Name of the index to ensure exists and be configured.
     """
     settings_payload = collect_index_settings(index_name)
+    identity_contracts: dict[str, dict[str, type]] = {}
+    for manager_class, index_config in iter_index_configs(index_name):
+        declared = get_search_identity_fields(manager_class, index_config)
+        identity_contracts.setdefault(get_type_label(manager_class), {}).update(
+            {
+                name: native_type
+                for name, native_type in declared.items()
+                if name in index_config.filters
+            }
+        )
     backend.ensure_index(
         index_name,
         {
             "searchable_fields": settings_payload.searchable_fields,
             "filterable_fields": settings_payload.filterable_fields,
+            "identity_fields": identity_contracts,
             "sortable_fields": settings_payload.sortable_fields,
             "field_boosts": settings_payload.field_boosts,
         },

@@ -9,9 +9,8 @@ from django.core.management.base import BaseCommand
 
 from general_manager.logging import get_logger
 from general_manager.search.backend_registry import get_search_backend
-from general_manager.search.indexer import SearchIndexer
+from general_manager.search.indexer import SearchIndexer, _ensure_index
 from general_manager.search.registry import (
-    collect_index_settings,
     get_index_names,
     iter_searchable_managers,
 )
@@ -99,16 +98,7 @@ class Command(BaseCommand):
             target_indexes = get_index_names()
 
         for index_name in sorted(target_indexes):
-            settings_payload = collect_index_settings(index_name)
-            backend.ensure_index(
-                index_name,
-                {
-                    "searchable_fields": settings_payload.searchable_fields,
-                    "filterable_fields": settings_payload.filterable_fields,
-                    "sortable_fields": settings_payload.sortable_fields,
-                    "field_boosts": settings_payload.field_boosts,
-                },
-            )
+            _ensure_index(backend, index_name)
             logger.info(
                 "search index ensured",
                 context={"index": index_name},

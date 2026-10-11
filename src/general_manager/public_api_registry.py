@@ -793,6 +793,11 @@ RULE_EXPORTS: LazyExportMap = {
 }
 
 SEARCH_EXPORTS: LazyExportMap = {
+    "SearchIdentityFilterGroup": (
+        "general_manager.search.identity",
+        "SearchIdentityFilterGroup",
+    ),
+    "build_search_filters": ("general_manager.search.identity", "build_search_filters"),
     "FieldConfig": ("general_manager.search.config", "FieldConfig"),
     "IndexConfig": ("general_manager.search.config", "IndexConfig"),
     "SearchConfigProtocol": ("general_manager.search.config", "SearchConfigProtocol"),

@@ -17,6 +17,10 @@ from django.utils.module_loading import import_string
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.search.config import IndexConfig
+from general_manager.search.identity import (
+    IDENTITY_TRANSPORT_VERSION,
+    get_search_identity_fields,
+)
 from general_manager.search.models import (
     SEARCH_INDEX_DIRTY_REASON_DATA_CHANGED,
     SEARCH_INDEX_DIRTY_REASON_FORCED,
@@ -158,7 +162,8 @@ def build_search_schema_fingerprint(
     Build a stable fingerprint for one manager/index search configuration.
 
     The fingerprint includes the manager import path, index fields, filters,
-    sorts, boosts, min score, type label, update strategy, and import-like paths
+    sorts, boosts, min score, resolved identity kinds and transport version,
+    type label, update strategy, and import-like paths
     for custom `document_id` and `to_document` callables. It returns a SHA-256
     hex digest. Field order follows `index_config.iter_fields()`, filters and
     sorts keep configured order, duplicate entries remain in the payload, and
@@ -189,6 +194,14 @@ def build_search_schema_fingerprint(
         if config
         else [],
     }
+    identities = get_search_identity_fields(manager_class, index_config)
+    if identities:
+        payload["identity_transport"] = {
+            "version": IDENTITY_TRANSPORT_VERSION,
+            "fields": {
+                name: native_type.__name__ for name, native_type in identities.items()
+            },
+        }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 

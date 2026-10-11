@@ -1,5 +1,7 @@
 # Lessons
 
+- Trigger: Adding identity-aware search transport for a lossy provider. Action: carry explicit native types alongside document/filter values, isolate provider equality tokens from business fields, and update settings-only commands plus reconciliation fingerprints. Preserve raw Dev scalar/list grammar and final native permission gates. Verification: reproduce adjacent large IDs against real providers, then check authenticated conditional counts, stale/mixed reindexing, shared type scopes, and all supported database suites.
+
 - Trigger: Adding identity semantics to native GraphQLType fields. Action: consume explicit dataclass field metadata at schema assembly and carry it through strict nullability mapping, while leaving native frozen values and unmarked business scalars intact. Verification: execute scalar/list/optional identity queries above the GraphQL Int limit, a public manager-property cookbook, invalid metadata cases, and existing property/search identity regressions.
 
 - Trigger: Performing a non-trivial repository code review with ratings. Action: use parallel subagents for mapping, risk review, and targeted test execution, then validate top findings directly in source before reporting severity. Verification: include at least one passing focused test command plus line-referenced evidence for each high-severity finding.

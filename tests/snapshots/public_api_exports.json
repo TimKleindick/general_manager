@@ -1094,6 +1094,10 @@
       "general_manager.search.backend",
       "SearchHit"
     ],
+    "SearchIdentityFilterGroup": [
+      "general_manager.search.identity",
+      "SearchIdentityFilterGroup"
+    ],
     "SearchIndexer": [
       "general_manager.search.indexer",
       "SearchIndexer"
@@ -1109,6 +1113,10 @@
     "TypesenseBackend": [
       "general_manager.search.backends.typesense",
       "TypesenseBackend"
+    ],
+    "build_search_filters": [
+      "general_manager.search.identity",
+      "build_search_filters"
     ],
     "configure_search_backend": [
       "general_manager.search.backend_registry",

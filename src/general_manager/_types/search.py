@@ -18,10 +18,12 @@ __all__ = [
     "SearchConfigSpec",
     "SearchDocument",
     "SearchHit",
+    "SearchIdentityFilterGroup",
     "SearchIndexer",
     "SearchInvalidationRule",
     "SearchResult",
     "TypesenseBackend",
+    "build_search_filters",
     "configure_search_backend",
     "configure_search_backend_from_settings",
     "get_search_backend",
@@ -44,10 +46,12 @@ from general_manager.search.config import SearchConfigProtocol
 from general_manager.search.config import SearchConfigSpec
 from general_manager.search.backend import SearchDocument
 from general_manager.search.backend import SearchHit
+from general_manager.search.identity import SearchIdentityFilterGroup
 from general_manager.search.indexer import SearchIndexer
 from general_manager.search.config import SearchInvalidationRule
 from general_manager.search.backend import SearchResult
 from general_manager.search.backends.typesense import TypesenseBackend
+from general_manager.search.identity import build_search_filters
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.backend_registry import (
     configure_search_backend_from_settings,
