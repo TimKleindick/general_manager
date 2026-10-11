@@ -1084,6 +1084,21 @@ interface is already bound to a parent manager and model. That callable runs
 metadata can become unavailable between hook registration and startup execution.
 When the interface is not bound at registration time, it returns an empty tuple
 instead of a no-op callable.
+Automatic hooks resolve `READ_ONLY_SYNC_ON_STARTUP` through
+`general_manager.conf.get_setting`, with Django `DEBUG` as the unset fallback.
+Explicit dictionary settings win over prefixed and top-level legacy settings,
+including explicit `False`. Direct `sync_data()` calls retain their semantics.
+
+The installed `sync_read_only` command synchronizes all registered read-only
+managers, or roots selected by repeatable `--manager` / programmatic
+`managers=[...]`. Selectors are unique class names or exact `module.qualname`
+paths; transitive read-only dependencies run first. Unknown/ambiguous selections
+and dependency cycles fail before sync. It preflights schemas and raises
+`django.core.management.base.CommandError` for schema/sync failures (CLI status
+1), using configured capabilities and aliases without a global transaction.
+Its CLI invocation suppresses duplicate automatic read-only sync. See
+[startup maintenance](../howto/startup_maintenance.md).
+
 `get_system_checks(interface_cls)` returns a callable that delegates to
 `ensure_schema_is_up_to_date()` when binding metadata is available and returns
 an empty list otherwise; observability and introspection errors propagate from

@@ -5,7 +5,8 @@ from collections.abc import Sequence
 from typing import Callable, ClassVar
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
+from django.core.management import call_command
 from django.core.management.base import BaseCommand
 
 from general_manager import bootstrap as gm_bootstrap
@@ -144,6 +145,7 @@ class StartupHookRegistryTests(SimpleTestCase):
             hook()
         self.assertEqual(DummyStartupCapability.calls, [DummyStartupInterface])
 
+    @override_settings(DEBUG=True)
     def test_read_only_management_exposes_sync_hook(self) -> None:
         capability = ReadOnlyManagementCapability()
         calls: list[str] = []
@@ -334,6 +336,57 @@ class StartupHookRunnerTests(SimpleTestCase):
         GeneralmanagerConfig.install_startup_hook_runner()
         BaseCommand().run_from_argv(["manage.py", "runserver"])
         self.assertEqual(calls, ["ran"])
+
+    def test_runner_executes_runserver_without_autoreload(self) -> None:
+        calls: list[str] = []
+        register_startup_hook(DummyStartupInterface, lambda: calls.append("ran"))
+        BaseCommand.run_from_argv = lambda *_args: None
+        GeneralmanagerConfig.install_startup_hook_runner()
+        BaseCommand().run_from_argv(["manage.py", "runserver", "--noreload"])
+        self.assertEqual(calls, ["ran"])
+
+    @override_settings(DEBUG=False, GENERAL_MANAGER={})
+    def test_production_commands_skip_readonly_sync_and_keep_other_hooks(self) -> None:
+        class ReadyInterface(ReadOnlyInterface):
+            pass
+
+        ReadyInterface._parent_class = type("Manager", (), {})
+        ReadyInterface._model = type("Model", (), {})
+        capability = ReadOnlyManagementCapability()
+        (automatic,) = capability.get_startup_hooks(ReadyInterface)
+        register_startup_hook(ReadyInterface, automatic)
+        calls = []
+        register_startup_hook(DummyStartupInterface, lambda: calls.append("ran"))
+        BaseCommand.run_from_argv = lambda *_args: None
+        GeneralmanagerConfig.install_startup_hook_runner()
+        commands = (
+            "check",
+            "migrate",
+            "makemigrations",
+            "collectstatic",
+            "shell",
+            "search_index",
+            "search_reconcile",
+        )
+        with patch.object(capability, "sync_data") as sync:
+            for command in commands:
+                BaseCommand().run_from_argv(["manage.py", command])
+        sync.assert_not_called()
+        assert len(calls) == len(commands)
+
+    def test_call_command_does_not_run_argv_startup_hooks(self) -> None:
+        calls = []
+        register_startup_hook(DummyStartupInterface, lambda: calls.append("ran"))
+        GeneralmanagerConfig.install_startup_hook_runner()
+
+        class Command(BaseCommand):
+            requires_system_checks: ClassVar = []
+
+            def handle(self, *_args, **_options):
+                calls.append("handled")
+
+        call_command(Command())
+        assert calls == ["handled"]
 
 
 class SystemCheckRegistryTests(SimpleTestCase):

@@ -92,13 +92,18 @@ class Command(BaseCommand):
 
         while True:
             result = reconcile_search_indexes(force=force, max_states=max_states)
-            self.stdout.write(
-                self.style.SUCCESS(
-                    "Reconciled "
-                    f"{result.reconciled} search index states "
-                    f"({result.documents} documents, {result.failed} failures)."
-                )
+            summary = (
+                "Reconciled "
+                f"{result.reconciled} search index states "
+                f"({result.documents} documents, {result.failed} failures)."
             )
+            if result.failed:
+                self.stderr.write(self.style.ERROR(summary))
+                if once:
+                    message = "Search reconciliation failed; inspect logs and SearchIndexState.last_error."
+                    raise CommandError(message)
+            else:
+                self.stdout.write(self.style.SUCCESS(summary))
             if once:
                 return
             force = False

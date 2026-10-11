@@ -3,7 +3,7 @@ import pytest
 
 from types import SimpleNamespace
 from typing import ClassVar
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.core.checks import Warning
 from django.db import connection
 from unittest import mock
@@ -1284,16 +1284,17 @@ class SystemCheckHookTests(SimpleTestCase):
 
 
 @pytest.mark.parametrize(
-    ("config", "enabled"),
+    ("debug", "config", "enabled"),
     [
-        ({}, True),
-        ({"READ_ONLY_SYNC_ON_STARTUP": True}, True),
-        ({"READ_ONLY_SYNC_ON_STARTUP": False}, False),
+        (True, {}, True),
+        (False, {}, False),
+        (False, {"READ_ONLY_SYNC_ON_STARTUP": True}, True),
+        (True, {"READ_ONLY_SYNC_ON_STARTUP": False}, False),
     ],
-    ids=["default", "enabled", "disabled"],
+    ids=["development-default", "production-default", "enabled", "disabled"],
 )
-def test_startup_sync_setting(settings, config, enabled):
-    """Evaluate the setting at execution time, preserving the enabled default."""
+def test_startup_sync_setting(settings, debug, config, enabled):
+    """Evaluate the override or DEBUG fallback when the hook executes."""
 
     class ReadyInterface(ReadOnlyInterface):
         pass
@@ -1304,12 +1305,45 @@ def test_startup_sync_setting(settings, config, enabled):
     (hook,) = capability.get_startup_hooks(ReadyInterface)
 
     settings.GENERAL_MANAGER = config
+    settings.DEBUG = debug
     with mock.patch.object(capability, "sync_data") as sync:
         hook()
     if enabled:
         sync.assert_called_once_with(ReadyInterface)
     else:
         sync.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("config", "prefixed", "legacy", "enabled"),
+    [
+        ({"READ_ONLY_SYNC_ON_STARTUP": False}, True, True, False),
+        ({"READ_ONLY_SYNC_ON_STARTUP": True}, False, False, True),
+        ({}, False, True, False),
+        ({}, True, False, True),
+        (None, False, True, False),
+        ({}, None, False, False),
+        ({}, None, True, True),
+    ],
+)
+def test_startup_sync_legacy_precedence(settings, config, prefixed, legacy, enabled):
+    """Explicit false values win over lower-priority true settings and DEBUG."""
+
+    class ReadyInterface(ReadOnlyInterface):
+        pass
+
+    ReadyInterface._parent_class = DummyManager
+    ReadyInterface._model = DummyModel
+    capability = ReadOnlyManagementCapability()
+    (hook,) = capability.get_startup_hooks(ReadyInterface)
+    settings.DEBUG = not enabled
+    settings.GENERAL_MANAGER = config
+    settings.READ_ONLY_SYNC_ON_STARTUP = legacy
+    if prefixed is not None:
+        settings.GENERAL_MANAGER_READ_ONLY_SYNC_ON_STARTUP = prefixed
+    with mock.patch.object(capability, "sync_data") as sync:
+        hook()
+    assert sync.call_count == int(enabled)
 
 
 class ReadOnlyStartupHookTests(SimpleTestCase):
@@ -1325,6 +1359,7 @@ class ReadOnlyStartupHookTests(SimpleTestCase):
         hooks = capability.get_startup_hooks(MissingMetadataInterface)
         self.assertEqual(hooks, tuple())
 
+    @override_settings(DEBUG=True)
     def test_hook_available_when_metadata_present(self):
         """
         Ensure get_startup_hooks returns a callable once the interface exposes manager and model metadata.

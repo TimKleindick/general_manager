@@ -191,7 +191,7 @@ def install_startup_hook_runner() -> None:
     ) -> None:
         run_main = os.environ.get("RUN_MAIN") == "true"
         command = argv[1] if len(argv) > 1 else None
-        should_run_hooks = command != "runserver" or run_main
+        should_run_hooks = command != "runserver" or run_main or "--noreload" in argv
         hooks_registry = registered_startup_hook_entries() if should_run_hooks else {}
         if hooks_registry:
             resolver_groups: list[

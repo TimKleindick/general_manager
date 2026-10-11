@@ -16,7 +16,13 @@ When you rename a manager attribute or interface field, update existing migratio
 
 ## Read-only interfaces
 
-Read-only data synchronises `_data` entries during startup. If you remove entries, they are soft-deleted (`Meta.use_soft_delete = True` is forced for read-only managers). Write data migrations when you need permanent removal.
+Read-only data synchronises `_data` automatically before management commands
+when `READ_ONLY_SYNC_ON_STARTUP` is enabled (unset follows Django `DEBUG`). In
+production, run `python manage.py migrate --noinput` before
+`python manage.py sync_read_only` in one deployment job. Removed entries are
+soft-deleted (`Meta.use_soft_delete = True` is forced for read-only managers).
+Write data migrations for permanent removal. See
+[startup maintenance and consumer migration](startup_maintenance.md).
 
 ## Historical data
 

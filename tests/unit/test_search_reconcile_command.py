@@ -12,9 +12,56 @@ from general_manager.management.commands.search_reconcile import (
     InvalidSearchReconcileOptionError,
     _positive_float_option,
 )
+from general_manager.search.reconciliation import SearchReconcileResult
 
 
 class SearchReconcileCommandTests(SimpleTestCase):
+    def test_failed_once_sweep_raises_instead_of_reporting_success(self) -> None:
+        stdout, stderr = StringIO(), StringIO()
+        with (
+            patch(
+                "general_manager.management.commands.search_reconcile.reconcile_search_indexes",
+                return_value=SearchReconcileResult(reconciled=1, documents=3, failed=2),
+            ),
+            self.assertRaises(CommandError),
+        ):
+            call_command("search_reconcile", "--once", stdout=stdout, stderr=stderr)
+        assert "2 failures" in stderr.getvalue()
+        assert stdout.getvalue() == ""
+
+    def test_failed_once_sweep_exits_nonzero_from_argv(self) -> None:
+        with (
+            patch(
+                "general_manager.management.commands.search_reconcile.reconcile_search_indexes",
+                return_value=SearchReconcileResult(failed=1),
+            ),
+            self.assertRaises(SystemExit) as error,
+        ):
+            Command(stdout=StringIO(), stderr=StringIO()).run_from_argv(
+                ["manage.py", "search_reconcile", "--once", "--skip-checks"]
+            )
+        assert error.exception.code == 1
+
+    def test_watch_reports_failed_sweep_and_continues(self) -> None:
+        stdout, stderr = StringIO(), StringIO()
+        with (
+            patch(
+                "general_manager.management.commands.search_reconcile.reconcile_search_indexes",
+                side_effect=[
+                    SearchReconcileResult(failed=1),
+                    SearchReconcileResult(reconciled=1),
+                ],
+            ),
+            patch(
+                "general_manager.management.commands.search_reconcile.time.sleep",
+                side_effect=[None, KeyboardInterrupt],
+            ),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            call_command("search_reconcile", "--watch", stdout=stdout, stderr=stderr)
+        assert "1 failures" in stderr.getvalue()
+        assert "Reconciled 1" in stdout.getvalue()
+
     def test_search_reconcile_once_runs_service(self) -> None:
         """Run one reconciliation sweep when --once is provided."""
         stdout = StringIO()

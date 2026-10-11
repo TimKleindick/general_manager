@@ -199,7 +199,7 @@ class Country(GeneralManager):
         name = CharField(max_length=50)
 ```
 
-By default, on startup the interface synchronizes `_data` with the table, creating,
+With Django `DEBUG=True`, the management-command startup hook synchronizes `_data` with the table by default, creating,
 updating, or soft-deleting entries as needed (read-only interfaces force
 `Meta.use_soft_delete = True`). Managers expose read operations only; write
 attempts raise exceptions. Each row must include either a unique model field or
@@ -211,8 +211,9 @@ or constraints, GeneralManager treats the union of those fields as one
 composite identity for synchronization, so every payload row must include every
 field in that union.
 
-To disable automatic read-only table synchronization in production, add this
-entry to your Django settings (merge it into any existing `GENERAL_MANAGER` dict):
+`READ_ONLY_SYNC_ON_STARTUP` defaults to Django `DEBUG`: development keeps
+automatic synchronization and production (`DEBUG=False`) requires explicit
+maintenance. To disable it explicitly, merge this into the existing settings:
 
 ```python
 GENERAL_MANAGER = {
@@ -220,10 +221,24 @@ GENERAL_MANAGER = {
 }
 ```
 
-The default is `True`. Disabling it skips read-only data synchronization during
-both management commands and server startup; existing table data is left intact.
-To synchronize a specific manager manually, run `python manage.py shell` and
-call its configured management capability:
+Explicit `True` or `False` overrides `DEBUG`. Resolution order is the
+`GENERAL_MANAGER` dictionary key, `GENERAL_MANAGER_READ_ONLY_SYNC_ON_STARTUP`,
+legacy top-level `READ_ONLY_SYNC_ON_STARTUP`, then `DEBUG`. Disabling automatic
+sync leaves stored data intact and keeps model/manager discovery, system checks,
+signals and GraphQL construction active. Plain WSGI/ASGI setup does not run the
+management-command hook; `runserver` runs it in the reload child or with
+`--noreload`.
+
+After migrations, synchronize all registered read-only managers explicitly:
+
+```bash
+python manage.py sync_read_only
+python manage.py sync_read_only --manager Country
+```
+
+Selections include transitive read-only relation dependencies. See the
+[deployment and migration guide](../../howto/startup_maintenance.md) for failure
+handling and search maintenance. Individual capability calls remain supported:
 
 ```python
 from your_app.managers import Country

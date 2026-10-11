@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError, FieldError
 from django.contrib.auth.models import User
 from django.utils.crypto import get_random_string
 from django.utils import timezone
+from django.test import override_settings
 from typing import ClassVar
 from unittest.mock import patch
 from general_manager.manager.general_manager import GeneralManager
@@ -34,6 +35,7 @@ from general_manager.manager.meta import (
 )
 
 
+@override_settings(DEBUG=True)
 class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):

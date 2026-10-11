@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager
+from contextvars import ContextVar
 from hashlib import sha256
 from typing import TYPE_CHECKING, ClassVar, Protocol, TypeVar, cast
 
 from django.core.checks import Warning
+from django.conf import settings
 from django.db import (
     IntegrityError,
     connection as django_connection,
@@ -44,6 +46,19 @@ from ._types import (
 )
 
 logger = get_logger("interface.read_only")
+_automatic_sync_suppressed: ContextVar[bool] = ContextVar(
+    "read_only_automatic_sync_suppressed", default=False
+)
+
+
+@contextmanager
+def _suppress_automatic_sync() -> Iterator[None]:
+    """Let explicit CLI maintenance own sync while other startup hooks still run."""
+    token = _automatic_sync_suppressed.set(True)
+    try:
+        yield
+    finally:
+        _automatic_sync_suppressed.reset(token)
 
 
 class _ColumnDescription(Protocol):
@@ -1156,9 +1171,9 @@ class ReadOnlyManagementCapability(BaseCapability):
         returned. The registered hook catches `MissingReadOnlyBindingError`
         only to tolerate binding metadata becoming unavailable between
         registration and startup execution; other sync errors propagate.
-        Automatic synchronization is skipped when `READ_ONLY_SYNC_ON_STARTUP`
-        is disabled in GeneralManager settings. Explicit `sync_data()` calls
-        remain available.
+        Automatic synchronization uses `READ_ONLY_SYNC_ON_STARTUP`, falling
+        back to Django `DEBUG` when unset. Explicit `sync_data()` calls remain
+        available regardless of that setting.
 
         Parameters:
             interface_cls: Interface class used to derive the bound manager and model.
@@ -1192,7 +1207,9 @@ class ReadOnlyManagementCapability(BaseCapability):
             binding is not available (raises MissingReadOnlyBindingError), logs a debug
             message and returns without raising.
             """
-            if not get_setting("READ_ONLY_SYNC_ON_STARTUP", True):
+            if _automatic_sync_suppressed.get() or not get_setting(
+                "READ_ONLY_SYNC_ON_STARTUP", settings.DEBUG
+            ):
                 return
             try:
                 self.sync_data(interface_cls)
