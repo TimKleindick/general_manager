@@ -20,7 +20,7 @@ from general_manager import GraphQLType
 
 
 class ProjectHour(GraphQLType):
-    task_id: int
+    task_id: int = field(metadata={"is_identifier": True})
     hours: float
     note: str | None = None
     tags: list[str] = field(default_factory=list)
@@ -30,6 +30,9 @@ The generated GraphQL object is `ProjectHourType`. Required annotations become
 non-null fields, `T | None` becomes nullable, and collection element
 nullability follows the element annotation. `GraphQLType` declarations do not
 create root queries, mutations, subscriptions, filters, or input objects.
+The explicit field marker makes `taskId: ID!`; `hours` remains `Float!` and
+tags remain strings. The native Python task key stays an integer. Field names
+do not imply identity, and absent/false metadata keeps ordinary scalar types.
 
 Import the declaration module during application startup, before GeneralManager
 builds the schema:
@@ -70,7 +73,7 @@ class ProjectHoursSummary(GeneralManager):
     def hours(self) -> list[ProjectHour]:
         return [
             ProjectHour(
-                task_id=7,
+                task_id=9007199254740993,
                 hours=8.5,
                 note="Ready for review",
                 tags=["billable", "forecast"],
@@ -109,7 +112,7 @@ The response has the nested shape declared by `ProjectHour`:
     "projectHoursSummary": {
       "hours": [
         {
-          "taskId": 7,
+          "taskId": "9007199254740993",
           "hours": 8.5,
           "note": "Ready for review",
           "tags": ["billable", "forecast"]
@@ -126,3 +129,16 @@ Bare collections, fixed-length tuples, `Any`, `Annotated[...]`, unresolved
 references, and unions with more than one non-null member fail schema
 generation with a field-specific error. The output-type contract is available
 from GeneralManager 0.75.0.
+
+For additional flat identity shapes, use the same field metadata with native
+`str` or `UUID`, `list[T]`, `set[T]`, or `tuple[T, ...]`. For example,
+`related_ids: list[int] = field(metadata={"is_identifier": True})` becomes
+`[ID!]!`, while `related_ids: list[int | None] | None` with that marker becomes
+`[ID]`. Optional `UUID` identity fields become nullable `ID`. Defaults and
+`default_factory` remain standard dataclass behavior. Unmarked UUIDs remain
+outside the ordinary scalar allowlist. Invalid flag values and unsupported
+identity annotations raise a field-specific `TypeError`.
+
+Opting in changes the GraphQL scalar and integer JSON values to strings;
+regenerate client types and preserve IDs as opaque strings, including leading
+zeros. It does not change Python/DB values or add output-object filters.

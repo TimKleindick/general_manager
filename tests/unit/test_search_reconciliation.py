@@ -140,6 +140,27 @@ class SearchReconciliationDiscoveryTests(TestCase):
 
         assert original != changed
 
+    def test_fingerprint_tracks_native_identity_metadata_and_alias_kind(self) -> None:
+        index = ReconcileProject.SearchConfig.indexes[0]
+        original = build_search_schema_fingerprint(ReconcileProject, index)
+        with patch.object(
+            ReconcileProject.Interface,
+            "get_attribute_types",
+            return_value={
+                "name": {"type": str, "is_identifier": True},
+                "status": {"type": str},
+            },
+        ):
+            declared = build_search_schema_fingerprint(ReconcileProject, index)
+        aliases = [
+            IndexConfig(name="global", fields=["name"], identity_fields={"name": kind})
+            for kind in (int, str)
+        ]
+        assert declared != original
+        assert build_search_schema_fingerprint(
+            ReconcileProject, aliases[0]
+        ) != build_search_schema_fingerprint(ReconcileProject, aliases[1])
+
     def test_fingerprint_changes_when_invalidation_rule_metadata_changes(
         self,
     ) -> None:

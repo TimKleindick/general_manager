@@ -10,6 +10,11 @@ from threading import RLock
 from general_manager.search.backend import SearchDocument, SearchHit, SearchResult
 from general_manager.bucket._ordering import normalize_ordering, sort_items
 from general_manager.utils.filter_parser import apply_lookup
+from general_manager.search.identity import (
+    SearchIdentityFilterGroup,
+    identity_lookup,
+    canonical_identity,
+)
 
 
 @dataclass
@@ -176,6 +181,10 @@ class DevSearchBackend:
                 case-sensitive, missing fields behave like `None`, incompatible
                 mixed-type comparisons and invalid lookup/value combinations
                 return `False`, and `None` compares only through `exact`.
+                Explicit `SearchIdentityFilterGroup` equality/membership uses
+                native casts and owner scope without changing these operator
+                rules. Matching document metadata and a present field are
+                required. Plain mappings retain raw comparisons.
             filter_expression (str | None): Unsupported in this backend; passing a value raises NotImplementedError.
             sort (Sequence[str] | None): Signed document data field names.
                 Prefix a field with ``-`` for descending order. If omitted,
@@ -392,12 +401,38 @@ class DevSearchBackend:
             if not all(isinstance(group, Mapping) for group in filters):
                 return False
             return any(self._passes_filters(document, group) for group in filters)
+        if isinstance(filters, SearchIdentityFilterGroup):
+            if filters.type_label is not None and document.type != filters.type_label:
+                return False
         for key, value in filters.items():
-            if "__" in key:
+            identity = None
+            if isinstance(filters, SearchIdentityFilterGroup):
+                identity = identity_lookup(key, filters.identity_fields)
+            if identity is not None:
+                field_name, lookup, native_type = identity
+                if (
+                    field_name not in document.data
+                    or document.identity_fields.get(field_name) is not native_type
+                ):
+                    return False
+            elif "__" in key:
                 field_name, lookup = key.split("__", 1)
             else:
                 field_name, lookup = key, "exact"
             doc_value = document.data.get(field_name)
+            if identity is not None and (
+                lookup != "in" or isinstance(value, (list, tuple, set))
+            ):
+                doc_value = (
+                    [canonical_identity(native_type, item) for item in doc_value]
+                    if isinstance(doc_value, (list, tuple, set))
+                    else canonical_identity(native_type, doc_value)
+                )
+                value = (
+                    [canonical_identity(native_type, item) for item in value]
+                    if isinstance(value, (list, tuple, set))
+                    else canonical_identity(native_type, value)
+                )
             if lookup == "exact" and isinstance(value, (list, tuple, set)):
                 if isinstance(doc_value, (list, tuple, set)):
                     if not set(doc_value).intersection(value):

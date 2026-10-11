@@ -24,7 +24,7 @@ submodules shown below, but they are not re-exported from `general_manager.searc
 
 `FieldConfig` and `IndexConfig` validate numeric boost/min-score bounds and
 reject the reserved document-envelope names `id`, `gm_document_id`, `type`,
-`identification`, and `data` at construction time. `FieldConfig.boost` and
+`identification`, `data`, and `gm_identity` at construction time. `FieldConfig.boost` and
 `IndexConfig.boost` must be positive when provided; `IndexConfig.min_score` must
 be non-negative when provided.
 `IndexConfig.iter_fields()` converts plain string field entries to
@@ -144,6 +144,61 @@ checked-in `0004_search_index_state.py` migration and avoid no-op generated
 index-rename migrations.
 
 ::: general_manager.search.backend.SearchDocument
+
+::: general_manager.search.identity.SearchIdentityFilterGroup
+
+::: general_manager.search.identity.build_search_filters
+
+Explicit identity provenance travels separately from native document/filter
+values. `SearchIndexer` inherits actual ORM PK/reference metadata and
+`@graph_ql_property(is_identifier=True)` declarations for configured fields,
+including terminal identity fields in configured relation paths.
+`IndexConfig.identity_fields={"customer_alias": int}` declares aliases supplied
+by custom document mappers. Supported scalar types are `int`, `str`, and `UUID`;
+nullable/collection identities use the scalar element type. Unsupported types,
+unconfigured alias names, and overrides conflicting with manager metadata fail
+with `general_manager.search.identity.SearchIdentityConfigurationError`.
+
+`build_search_filters(manager_class, index_name, filters)` returns dict-compatible
+native filter groups carrying identity types and the manager's type label.
+Caller keys, values, AND/OR group boundaries, and permission constraints remain
+unchanged. Generated GraphQL search attaches this metadata after merging native
+user and permission filters. For manual documents, provide both
+`SearchDocument.identity_fields` and a `SearchIdentityFilterGroup`; the latter's
+optional `type_label` scopes a shared index. These helpers are also re-exported
+from `general_manager.search`.
+
+Index settings carry native contracts separately from ordinary configured
+filter names. For manual documents, configure their filterability explicitly:
+
+```python
+backend.ensure_index("owned", {
+    "filterable_fields": ["type", "customer_alias"],
+    "identity_fields": {"Record": {"customer_alias": int}},
+})
+```
+
+`identity_fields` in settings is keyed by document type label, so shared indexes
+retain each owner's native kinds. Meilisearch derives its shadow fields from
+declared names that are also filterable. Other backends receive original
+`filterable_fields` and can consume or ignore the additional native contracts.
+Document and filter metadata must agree on the native kind.
+
+DevSearch honors explicit groups without changing its existing scalar/list
+comparison rules; plain mappings keep raw comparisons. Meilisearch binds plain
+structured filters to registered index/manager contracts, and explicit groups
+also work without registration. Its declared identity `exact`/`in` filters use
+bounded tokens under the reserved `gm_identity` envelope, preserving adjacent
+large integers, UUIDs, opaque text case, and leading zeros. Original data stays
+stored for retrieval and sorting; UUID/set conversion occurs only in the JSON
+payload copy. Other lookups and unmarked business fields retain adapter behavior.
+Custom backends continue receiving mappings/native values and must honor identity
+metadata when their provider has lossy comparison semantics. A raw Meilisearch
+`filter_expression` bypasses structured identity transport.
+
+Existing persistent documents require a full reindex. Rows lacking tokens are
+omitted from declared identity filters; mixed indexes never fall back to numeric
+equality. See [the migration procedure](../howto/search.md#reindex-existing-identity-projections).
 
 ::: general_manager.search.backend.SearchHit
 

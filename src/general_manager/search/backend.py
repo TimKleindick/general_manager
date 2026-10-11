@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 
@@ -20,7 +21,10 @@ class SearchDocument:
     protocol does not require adapters to reject mismatches between
     `document.index` and an `index_name` argument. `data` contains
     searchable/stored fields. `field_boosts` and `index_boost` are hints for
-    adapters that support weighted matching. The payload mappings, including
+    adapters that support weighted matching. `identity_fields` maps explicit
+    identity names to native scalar types (`int`, `str`, or `UUID`), including
+    nullable/collection element types. It never coerces document values.
+    The payload mappings, including
     `identification`, are not copied by the model; callers should treat them as
     immutable after handing them to a backend. Dataclass field annotations are
     the validation boundary; this model does not coerce or validate runtime
@@ -36,6 +40,7 @@ class SearchDocument:
     data: Mapping[str, object]
     field_boosts: Mapping[str, float]
     index_boost: float | None = None
+    identity_fields: Mapping[str, builtins.type] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

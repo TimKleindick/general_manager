@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from importlib import import_module
 from inspect import signature
 from typing import Mapping, Protocol, Sequence, cast
+from uuid import UUID
 
 from general_manager.search.backend import (
     SearchBackendClientMissingError,
@@ -17,6 +18,14 @@ from general_manager.search.backend import (
     SearchResult,
 )
 from general_manager.bucket._ordering import normalize_ordering
+from general_manager.search.identity import (
+    SearchIdentityFilterGroup,
+    bind_search_filters,
+    identity_field_key,
+    identity_token,
+    meilisearch_identity_filters,
+    SearchIdentityConfigurationError,
+)
 
 
 def _load_meilisearch_api_error() -> type[Exception] | None:
@@ -155,6 +164,9 @@ class MeilisearchBackend:
                 - "searchable_fields": iterable of field names to set as searchableAttributes.
                 - "filterable_fields": iterable of field names to set as filterableAttributes.
                 - "sortable_fields": iterable of field names to set as sortableAttributes.
+                - "identity_fields": contracts keyed by document type; each
+                  maps identity names to int/str/UUID. Shadow filterability is
+                  added only for names listed in "filterable_fields".
 
         Non-iterable setting values and strings/bytes are ignored; iterable
         values such as lists, tuples, and sets are converted to strings. This
@@ -169,6 +181,29 @@ class MeilisearchBackend:
         index = self._get_or_create_index(index_name)
         searchable_fields = self._string_sequence_setting(settings, "searchable_fields")
         filterable_fields = self._string_sequence_setting(settings, "filterable_fields")
+        contracts = settings.get("identity_fields", {})
+        if not isinstance(contracts, Mapping):
+            raise SearchIdentityConfigurationError(
+                "identity_fields", "expected a mapping of type contracts"
+            )
+        identity_names: set[str] = set()
+        for owner, contract in contracts.items():
+            if not isinstance(contract, Mapping):
+                raise SearchIdentityConfigurationError(
+                    str(owner), "expected a native field mapping"
+                )
+            validated = SearchIdentityFilterGroup({}, identity_fields=contract)
+            identity_names.update(validated.identity_fields)
+        if filterable_fields is not None:
+            shadow_fields = {
+                "gm_identity." + identity_field_key(name)
+                for name in identity_names
+                if name in filterable_fields
+            }
+            filterable_fields = [
+                *filterable_fields,
+                *sorted(shadow_fields - set(filterable_fields)),
+            ]
         sortable_fields = self._string_sequence_setting(settings, "sortable_fields")
         ranking_rules = self._ranking_rules_with_sort_first(index, settings)
         task = index.update_settings({"rankingRules": ranking_rules})
@@ -322,7 +357,13 @@ class MeilisearchBackend:
             with structured filters. String rendering uses ``str(value)`` and
             escapes backslashes and double quotes; this also applies to numbers,
             booleans, and ``None``. Empty `in` lists produce an empty
-            parenthesized clause. ``sort`` is normalized as signed field names
+            parenthesized clause. Declared identity equality/membership uses
+            separate versioned tokens without changing source values. Plain
+            structured filters inherit registered manager/index contracts;
+            `SearchIdentityFilterGroup` supports unregistered documents.
+            Old documents without tokens require reindexing; raw
+            `filter_expression` bypasses identity transport.
+            ``sort`` is normalized as signed field names
             and forwarded as ordered Meilisearch ``field:direction`` entries.
             A sorted query reads the index settings and raises
             ``MeilisearchOrderingConfigurationError`` unless ``sort`` has the
@@ -342,7 +383,9 @@ class MeilisearchBackend:
         filter_expr = (
             filter_expression
             if filter_expression is not None
-            else self._build_filter_expression(filters, types)
+            else self._build_filter_expression(
+                bind_search_filters(index_name, filters, types), types
+            )
         )
         if filter_expr:
             payload["filter"] = filter_expr
@@ -447,22 +490,48 @@ class MeilisearchBackend:
                 - `data`: the original data mapping,
                 - additional top-level keys copied from `document.data` except
                   reserved keys (`id`, `gm_document_id`, `type`,
-                  `identification`, `data`).
+                  `identification`, `data`, `gm_identity`).
+                - `gm_identity`: bounded equality tokens for declared present
+                  identity fields. UUID/set JSON conversion affects only the
+                  payload copy, never the source document.
         """
-        reserved_keys = {"id", "gm_document_id", "type", "identification", "data"}
+        reserved_keys = {
+            "id",
+            "gm_document_id",
+            "type",
+            "identification",
+            "data",
+            "gm_identity",
+        }
         extra_data = {
             key: value
             for key, value in document.data.items()
             if key not in reserved_keys
         }
-        return {
-            "id": MeilisearchBackend._normalize_document_id(document.id),
-            "gm_document_id": document.id,
-            "type": document.type,
-            "identification": document.identification,
-            "data": document.data,
-            **extra_data,
-        }
+        identities: dict[str, object] = {}
+        for name, native_type in document.identity_fields.items():
+            if name not in document.data:
+                continue
+            value = document.data[name]
+            identities[identity_field_key(name)] = (
+                [identity_token(native_type, item) for item in value]
+                if isinstance(value, (list, tuple, set))
+                else identity_token(native_type, value)
+            )
+        return cast(
+            dict[str, object],
+            _json_search_value(
+                {
+                    "id": MeilisearchBackend._normalize_document_id(document.id),
+                    "gm_document_id": document.id,
+                    "type": document.type,
+                    "identification": document.identification,
+                    "data": document.data,
+                    **extra_data,
+                    "gm_identity": identities,
+                }
+            ),
+        )
 
     @staticmethod
     def _build_filter_expression(
@@ -485,6 +554,9 @@ class MeilisearchBackend:
                 fields in one mapping are combined with AND; multiple mappings
                 are combined with OR. Empty `in` lists produce the exact clause
                 ``()``.
+                Explicit identity groups instead target versioned `gm_identity`
+                fields. Null has its own token; empty identity `in` operands
+                produce an always-false clause.
             types (Sequence[str] | None):
                 Sequence of type names to restrict results to; these are combined with OR against the `type` field.
 
@@ -502,12 +574,22 @@ class MeilisearchBackend:
             group_clauses: list[str] = []
             for group in filter_groups:
                 parts: list[str] = []
-                for key, value in group.items():
+                if (
+                    isinstance(group, SearchIdentityFilterGroup)
+                    and group.type_label is not None
+                ):
+                    parts.append(f'type = "{_escape_filter_value(group.type_label)}"')
+                for key, value in meilisearch_identity_filters(group):
                     if "__" in key:
                         field_name, lookup = key.split("__", 1)
                     else:
                         field_name, lookup = key, "exact"
                     if lookup == "in" and isinstance(value, (list, tuple, set)):
+                        if field_name.startswith("gm_identity.") and not value:
+                            parts.append(
+                                f"({field_name} EXISTS AND {field_name} NOT EXISTS)"
+                            )
+                            continue
                         options = " OR ".join(
                             [
                                 f'{field_name} = "{_escape_filter_value(item)}"'
@@ -806,6 +888,17 @@ def _is_meilisearch_already_exists(error: Exception) -> bool:
     code = _meilisearch_error_code(error)
     status = _meilisearch_status_code(error)
     return status == 409 or "already_exists" in code
+
+
+def _json_search_value(value: object) -> object:
+    """Copy native document values into JSON-compatible provider payloads."""
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {key: _json_search_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_search_value(item) for item in value]
+    return value
 
 
 def _escape_filter_value(value: object) -> str:

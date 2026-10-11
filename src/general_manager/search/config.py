@@ -5,12 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, cast
+from uuid import UUID
 
 from general_manager.manager.general_manager import GeneralManager
 
 
 _RESERVED_DOCUMENT_FIELD_NAMES = frozenset(
-    {"id", "gm_document_id", "type", "identification", "data"}
+    {"id", "gm_document_id", "type", "identification", "data", "gm_identity"}
 )
 
 
@@ -110,6 +111,10 @@ class IndexConfig:
         sorts: Field names allowed for backend sorting.
         boost: Optional positive index-level boost.
         min_score: Optional non-negative minimum relevance score.
+        identity_fields: Native scalar kinds (`int`, `str`, `UUID`) for configured
+            document aliases, including nullable/collection element types.
+            Manager identity metadata is inherited automatically; conflicting
+            overrides fail when the index contract is resolved.
 
     Raises:
         InvalidIndexBoostError: If `boost` is not `None` and is less than or
@@ -126,6 +131,7 @@ class IndexConfig:
     sorts: Sequence[str] = field(default_factory=tuple)
     boost: float | None = None
     min_score: float | None = None
+    identity_fields: Mapping[str, type] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate index-level boost and minimum score after initialization."""
@@ -143,6 +149,25 @@ class IndexConfig:
         for field_name in (*self.filters, *self.sorts):
             if field_name in _RESERVED_DOCUMENT_FIELD_NAMES:
                 raise ReservedDocumentFieldNameError(field_name)
+        from general_manager.search.identity import SearchIdentityConfigurationError
+
+        serialized_fields = {
+            *(
+                entry.name if isinstance(entry, FieldConfig) else entry
+                for entry in self.fields
+            ),
+            *self.filters,
+            *self.sorts,
+        }
+        for field_name, native_type in self.identity_fields.items():
+            if field_name not in serialized_fields:
+                raise SearchIdentityConfigurationError(
+                    field_name, "field is not configured"
+                )
+            if native_type not in (int, str, UUID):
+                raise SearchIdentityConfigurationError(
+                    field_name, "expected int, str or UUID"
+                )
         if self.boost is not None and self.boost <= 0:
             raise InvalidIndexBoostError
         if self.min_score is not None and self.min_score < 0:

@@ -39,7 +39,8 @@ coalescing. Schedule reconciliation often enough for the application's repair
 objective.
 
 The schema fingerprint includes the manager import path, index fields, filters,
-sorts, boosts, min score, type label, update strategy, and custom
+sorts, boosts, min score, resolved native identity types and transport version,
+type label, update strategy, and custom
 `document_id`/`to_document` callable paths. Stored manager paths must import to a
 `GeneralManager` class; otherwise reconciliation records the validation error on
 that state and continues with other claimed rows.

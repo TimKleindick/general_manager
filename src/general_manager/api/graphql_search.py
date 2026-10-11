@@ -41,6 +41,7 @@ from general_manager.measurement.measurement import Measurement
 from general_manager.utils.type_checks import safe_issubclass
 from general_manager.search.backend_registry import get_search_backend
 from general_manager.search.backend import SearchHit
+from general_manager.search.identity import SearchFilters, build_search_filters
 from general_manager.search.registry import (
     get_search_config,
     get_type_label,
@@ -1257,13 +1258,16 @@ def register_search_query(
                 permission_plan,
                 backend_shape=backend_shape,
             )
-            filter_groups = (
+            filter_groups: SearchFilters = (
                 manager_filters or None
                 if decision == "allow_all"
                 else merge_permission_filters(
                     manager_filters,
                     permission_plan.filters,
                 )
+            )
+            filter_groups = build_search_filters(
+                manager_class, index_name, filter_groups
             )
             total_hits_for_manager = 0
             candidate_hits_for_manager = 0

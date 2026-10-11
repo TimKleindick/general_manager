@@ -29,7 +29,14 @@ class GraphQLTypeMeta(type):
 
 
 class GraphQLType(metaclass=GraphQLTypeMeta):
-    """Frozen annotated value exposed only as a GraphQL output object."""
+    """Frozen annotated value exposed only as a GraphQL output object.
+
+    Use ``dataclasses.field(metadata={"is_identifier": True})`` to declare
+    native int, str, or UUID identity fields and their supported homogeneous
+    collections. Schema generation preserves annotation nullability and native
+    values while exposing ID scalars. Missing or false metadata keeps existing
+    output types; other flag values fail schema generation with TypeError.
+    """
 
 
 def get_registered_graphql_types() -> tuple[type[GraphQLType], ...]:

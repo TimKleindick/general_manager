@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.82.5 (2026-10-11)
+
+### Bug Fixes
+
+- Preserve native search identity precision
+  ([`3833d7e`](https://github.com/TimKleindick/general_manager/commit/3833d7eb33bfc0a6ef45481a2e3a0b9b1fca9ff6))
+
+
+## v0.82.4 (2026-10-11)
+
+### Bug Fixes
+
+- Expose declared native output field identities as GraphQL IDs
+  ([`faa4cef`](https://github.com/TimKleindick/general_manager/commit/faa4cef96b5cb72494d72af2ea8509a5a08ab728))
+
+
 ## v0.82.3 (2026-10-11)
 
 ### Bug Fixes
