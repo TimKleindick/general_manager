@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 import re
 from typing import Any, Protocol
 
@@ -534,14 +535,32 @@ def query(
             if timeout_ms is None
             else min(timeout_ms, planned_timeout_ms)
         )
-    if timeout_ms is not None and getattr(connection, "vendor", None) == "postgresql":
-        with transaction.atomic():
-            with connection.cursor() as cursor:
-                cursor.execute("SET LOCAL statement_timeout = %s", [timeout_ms])
-            result = schema.execute(
-                query_text, variable_values=variables, context_value=context
-            )
-    else:
+    with ExitStack() as sql_scope:
+        if (
+            timeout_ms is not None
+            and getattr(connection, "vendor", None) == "postgresql"
+        ):
+            budget_started = False
+
+            def execute_with_budget(
+                execute: Callable[..., Any],
+                sql: str,
+                params: Any,
+                many: bool,
+                execution_context: Mapping[str, Any],
+            ) -> Any:
+                nonlocal budget_started
+                if not budget_started:
+                    # Installing an execute wrapper does not connect. Open the
+                    # transaction only when this query actually emits SQL, and
+                    # keep it until the whole GraphQL execution has completed.
+                    budget_started = True
+                    sql_scope.enter_context(transaction.atomic())
+                    with connection.cursor() as cursor:
+                        cursor.execute("SET LOCAL statement_timeout = %s", [timeout_ms])
+                return execute(sql, params, many, execution_context)
+
+            sql_scope.enter_context(connection.execute_wrapper(execute_with_budget))
         result = schema.execute(
             query_text, variable_values=variables, context_value=context
         )
