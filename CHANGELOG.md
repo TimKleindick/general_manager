@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.82.5 (2026-10-11)
+
+### Bug Fixes
+
+- Preserve native search identity precision
+  ([`3833d7e`](https://github.com/TimKleindick/general_manager/commit/3833d7eb33bfc0a6ef45481a2e3a0b9b1fca9ff6))
+
+
 ## v0.82.4 (2026-10-11)
 
 ### Bug Fixes
