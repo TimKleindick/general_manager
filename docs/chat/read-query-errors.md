@@ -36,6 +36,12 @@ start when the query first executes SQL on the default connection and remain
 scoped to that GraphQL execution. They are cleaned up when execution finishes
 or raises an error.
 
+Nested read queries use the shortest active statement budget. After an inner
+query finishes, the next outer statement receives the outer query's budget
+again. If transaction or timeout setup fails, later GraphQL resolvers in that
+query cannot continue executing SQL. Transaction cleanup and later independent
+queries retain their own scopes, including queries started by commit callbacks.
+
 An Interface that completes a query without SQL does not open the default
 database merely to install this budget. Installing the deferred SQL execution
 hook does not access the database. This preserves queries implemented by

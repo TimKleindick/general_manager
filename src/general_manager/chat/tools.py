@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
+from contextvars import ContextVar
 import re
+from types import TracebackType
 from typing import Any, Protocol
 
 from django.db import connection, transaction
@@ -37,6 +39,12 @@ from general_manager.chat.tool_metadata import TOOL_DESCRIPTIONS, TOOL_INPUT_SCH
 _GRAPHQL_IDENTIFIER_RE = re.compile(r"^[_A-Za-z][_0-9A-Za-z]*$")
 _LIMIT_ERROR = "limit must be a positive integer"
 _OFFSET_ERROR = "offset must be a non-negative integer"
+_ACTIVE_SQL_BUDGETS: ContextVar[tuple[tuple[object, int], ...]] = ContextVar(
+    "chat_active_sql_budgets", default=()
+)
+_SUSPENDED_SQL_BUDGET_HOOKS: ContextVar[frozenset[object]] = ContextVar(
+    "chat_suspended_sql_budget_hooks", default=frozenset()
+)
 
 
 class ChatToolContext(Protocol):
@@ -540,7 +548,49 @@ def query(
             timeout_ms is not None
             and getattr(connection, "vendor", None) == "postgresql"
         ):
+            budget_identity = object()
+            active_token = _ACTIVE_SQL_BUDGETS.set(
+                (*_ACTIVE_SQL_BUDGETS.get(), (budget_identity, timeout_ms))
+            )
+            sql_scope.callback(_ACTIVE_SQL_BUDGETS.reset, active_token)
+            atomic_scope = ExitStack()
             budget_started = False
+            budget_setting = False
+            applied_timeout_ms: int | None = None
+            budget_failure: BaseException | None = None
+
+            def close_atomic_scope(
+                exception_type: type[BaseException] | None,
+                exception: BaseException | None,
+                traceback: TracebackType | None,
+            ) -> bool | None:
+                # Django's savepoint cleanup still passes through outer hooks.
+                # Suspend existing hooks for cleanup. New queries in callbacks
+                # still install a budget, retaining any enclosing query's limit.
+                closing_token = _SUSPENDED_SQL_BUDGET_HOOKS.set(
+                    _SUSPENDED_SQL_BUDGET_HOOKS.get()
+                    | frozenset(identity for identity, _ in _ACTIVE_SQL_BUDGETS.get())
+                )
+                cleanup_active_token = _ACTIVE_SQL_BUDGETS.set(
+                    tuple(
+                        entry
+                        for entry in _ACTIVE_SQL_BUDGETS.get()
+                        if entry[0] is not budget_identity
+                    )
+                )
+                try:
+                    if exception is None and budget_failure is not None:
+                        return atomic_scope.__exit__(
+                            type(budget_failure),
+                            budget_failure,
+                            budget_failure.__traceback__,
+                        )
+                    return atomic_scope.__exit__(exception_type, exception, traceback)
+                finally:
+                    _ACTIVE_SQL_BUDGETS.reset(cleanup_active_token)
+                    _SUSPENDED_SQL_BUDGET_HOOKS.reset(closing_token)
+
+            sql_scope.push(close_atomic_scope)
 
             def execute_with_budget(
                 execute: Callable[..., Any],
@@ -549,15 +599,52 @@ def query(
                 many: bool,
                 execution_context: Mapping[str, Any],
             ) -> Any:
-                nonlocal budget_started
-                if not budget_started:
-                    # Installing an execute wrapper does not connect. Open the
-                    # transaction only when this query actually emits SQL, and
-                    # keep it until the whole GraphQL execution has completed.
-                    budget_started = True
-                    sql_scope.enter_context(transaction.atomic())
-                    with connection.cursor() as cursor:
-                        cursor.execute("SET LOCAL statement_timeout = %s", [timeout_ms])
+                nonlocal budget_started, budget_setting, applied_timeout_ms
+                nonlocal budget_failure
+                closing = _SUSPENDED_SQL_BUDGET_HOOKS.get()
+                if budget_identity in closing:
+                    return execute(sql, params, many, execution_context)
+                if budget_failure is not None:
+                    # GraphQL may catch one resolver's setup error and continue
+                    # siblings. None of their SQL may escape this failed budget.
+                    raise budget_failure
+                try:
+                    if not budget_started:
+                        # Installing the hook does not connect. Keep the lazy
+                        # transaction until the whole execution has completed.
+                        budget_started = True
+                        starting_token = _SUSPENDED_SQL_BUDGET_HOOKS.set(
+                            closing
+                            | frozenset(
+                                identity for identity, _ in _ACTIVE_SQL_BUDGETS.get()
+                            )
+                        )
+                        try:
+                            atomic_scope.enter_context(transaction.atomic())
+                        finally:
+                            _SUSPENDED_SQL_BUDGET_HOOKS.reset(starting_token)
+                    effective_timeout_ms = min(
+                        budget for _, budget in _ACTIVE_SQL_BUDGETS.get()
+                    )
+                    if (
+                        not budget_setting
+                        and applied_timeout_ms != effective_timeout_ms
+                    ):
+                        # Nested hooks see the same active minimum. Reapply when
+                        # an inner scope ends, before the next outer statement.
+                        budget_setting = True
+                        try:
+                            with connection.cursor() as cursor:
+                                cursor.execute(
+                                    "SET LOCAL statement_timeout = %s",
+                                    [effective_timeout_ms],
+                                )
+                            applied_timeout_ms = effective_timeout_ms
+                        finally:
+                            budget_setting = False
+                except BaseException as error:
+                    budget_failure = error
+                    raise
                 return execute(sql, params, many, execution_context)
 
             sql_scope.enter_context(connection.execute_wrapper(execute_with_budget))
