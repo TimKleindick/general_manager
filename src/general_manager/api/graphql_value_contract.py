@@ -151,6 +151,7 @@ def public_value_contracts(native: Any) -> dict[int, dict[str, str]]:
     if pins is None:
         return {}
     result = {}
+    source_signatures: dict[int, object] = {}
     for public, pin in pins.items():
         field = native.fields.get(public)
         generated = pin.generated()
@@ -162,8 +163,16 @@ def public_value_contracts(native: Any) -> dict[int, dict[str, str]]:
             or _type_key(field.type) != pin.type_key
             or _source(field.resolve, pin.attribute) != pin.transform
             or not _manager_source(pin.owner, pin.attribute)
-            or _COMMON_FILTER_SOURCE_SIGNATURE(pin.owner) != pin.semantics
         ):
+            continue
+        owner_identity = id(pin.owner)
+        if owner_identity not in source_signatures:
+            # All fields in this output observation share one captured source
+            # view. Recompute it on every call; retain no cross-call cache.
+            source_signatures[owner_identity] = _COMMON_FILTER_SOURCE_SIGNATURE(
+                pin.owner
+            )
+        if source_signatures[owner_identity] != pin.semantics:
             continue
         leaf = get_named_type(field.type)
         if not isinstance(leaf, GraphQLObjectType) and not _leaf_valid(leaf):

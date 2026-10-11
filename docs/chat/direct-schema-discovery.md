@@ -35,6 +35,16 @@ cannot authorize this new discovery protocol. The GraphQL read contract remains
 version 2; full native definitions and untagged full Python defaults are unchanged.
 Default, enum or exposure changes still invalidate old detail tokens. Selectors
 fail atomically, and the inspection path captures fresh state on every call.
+Each capture builds only the requested manager's summary. Root capabilities
+are grouped once by their exact native output type, rather than rescanned for
+every catalog manager. All exposure bindings remain in the snapshot, and
+selected definitions still undergo the complete executable-contract checks.
+Ordinary scalar predicates do not invoke the ID-converter selector; identifier
+predicates retain the declared input and native-type checks. These changes do
+not introduce a schema cache or change the public projection or snapshot format.
+Within one output observation, all getter fields use the same freshly captured
+source signature for their owner. Later observations recompute that signature
+and reject changed inputs or executable meanings.
 
 Structured schema requirements retain their manager, view, selected definition
 set and snapshot bindings. Unspecified legacy requirements still require full

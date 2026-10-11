@@ -263,25 +263,26 @@ def _build_index(
     registry: Mapping[str, Any],
     manager_types: Mapping[str, Any],
     visibility: Mapping[str, bool] | None = None,
+    *,
+    selected_manager: str | None = None,
 ) -> dict[str, dict[str, Any]]:
+    roots_by_output: dict[int, list[tuple[str, Any]]] = {}
+    for name, field in (schema.query_type.fields if schema.query_type else {}).items():
+        shape = page_shape(field.type)
+        if shape:
+            output = _list_item(
+                cast(Any, get_named_type(field.type)).fields[shape[0]].type
+            )
+            roots_by_output.setdefault(id(output), []).append((name, field))
     index = {}
     for manager, output in manager_types.items():
+        if selected_manager is not None and manager != selected_manager:
+            continue
         if _hidden_type(output, manager_types, visibility):
             continue
         roots = []
         filters: set[str] = set()
-        for name, field in (
-            schema.query_type.fields if schema.query_type else {}
-        ).items():
-            shape = page_shape(field.type)
-            if (
-                not shape
-                or _list_item(
-                    cast(Any, get_named_type(field.type)).fields[shape[0]].type
-                )
-                is not output
-            ):
-                continue
+        for name, field in roots_by_output.get(id(output), ()):
             roots.append(name)
             filter_key = argument_name(field, "filter")
             filter_arg = field.args.get(filter_key) if filter_key else None
@@ -580,9 +581,13 @@ def capture_manager_contract(manager: str) -> tuple[dict[str, Any] | None, str]:
         )
         if owner is not None:
             visibility[named.name] = bool(getattr(owner, "chat_exposed", False))
-    summary = _build_index(original, registry, original_managers, visibility).get(
-        manager
-    )
+    summary = _build_index(
+        original,
+        registry,
+        original_managers,
+        visibility,
+        selected_manager=manager,
+    ).get(manager)
     schema = _copy_contract_schema(
         original,
         manager=manager,

@@ -474,25 +474,26 @@ def public_filter_contracts(
         ):
             continue
         if pin.public["operator"] != "relation":
-            converter = graphql_search._identity_filter_converter(
-                owner, source_fields[name]
-            )
             metadata = attributes.get(source_fields[name], {})
-            input_spec = getattr(converter, "__self__", None)
-            if metadata.get("is_identifier") and not (
-                type(input_spec) is Input
-                and getattr(converter, "__func__", None) is _INPUT_CAST
-                and any(
-                    input_spec is declared_input
-                    for declared_input in identity_inputs.values()
+            if metadata.get("is_identifier"):
+                converter = graphql_search._identity_filter_converter(
+                    owner, source_fields[name]
                 )
-                and metadata.get("type") in (str, int)
-                and input_spec.type is metadata.get("type")
-            ):
-                # ID wire text alone cannot prove native equality: execution
-                # must use a declared input with the actual attribute's type.
-                # Keep the GraphQL field available for ordinary query execution.
-                continue
+                input_spec = getattr(converter, "__self__", None)
+                if not (
+                    type(input_spec) is Input
+                    and getattr(converter, "__func__", None) is _INPUT_CAST
+                    and any(
+                        input_spec is declared_input
+                        for declared_input in identity_inputs.values()
+                    )
+                    and metadata.get("type") in (str, int)
+                    and input_spec.type is metadata.get("type")
+                ):
+                    # ID wire text alone cannot prove native equality: execution
+                    # must use a declared input with the actual attribute's type.
+                    # Keep the GraphQL field available for ordinary queries.
+                    continue
             source, target = (
                 get_named_type(field.type),
                 get_named_type(output_field.type),

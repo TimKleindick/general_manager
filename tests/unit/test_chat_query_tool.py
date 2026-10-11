@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from copy import deepcopy
 from graphql import parse
@@ -718,6 +719,15 @@ class ChatQueryToolTests(SimpleTestCase):
     )
     def test_query_ignores_boolean_planned_statement_timeout(self) -> None:
         events: list[str] = []
+        wrappers = []
+
+        @contextmanager
+        def execute_wrapper(wrapper):
+            wrappers.append(wrapper)
+            try:
+                yield
+            finally:
+                assert wrappers.pop() is wrapper
 
         schema = _RecordingSchema(
             _Result(
@@ -733,6 +743,7 @@ class ChatQueryToolTests(SimpleTestCase):
 
         def execute(query_text: str, context_value=None, variable_values=None):  # type: ignore[no-untyped-def]
             events.append("execute")
+            cursor.execute("SELECT query_rows", [])
             return original_execute(
                 query_text, context_value=context_value, variable_values=variable_values
             )
@@ -745,8 +756,21 @@ class ChatQueryToolTests(SimpleTestCase):
                 self.calls: list[tuple[str, list[int]]] = []
 
             def execute(self, sql: str, params: list[int]) -> None:
-                events.append("set_timeout")
-                self.calls.append((sql, params))
+                def actual(sql, params, many, context):
+                    events.append(
+                        "set_timeout" if sql.startswith("SET LOCAL") else "sql"
+                    )
+                    self.calls.append((sql, params))
+
+                for wrapper in reversed(wrappers):
+                    previous = actual
+
+                    def actual(
+                        sql, params, many, context, hook=wrapper, inner=previous
+                    ):
+                        return hook(inner, sql, params, many, context)
+
+                actual(sql, params, False, {})
 
             def __enter__(self) -> "_Cursor":
                 return self
@@ -769,7 +793,11 @@ class ChatQueryToolTests(SimpleTestCase):
         with (
             patch(
                 "general_manager.chat.tools.connection",
-                SimpleNamespace(vendor="postgresql", cursor=lambda: cursor),
+                SimpleNamespace(
+                    vendor="postgresql",
+                    cursor=lambda: cursor,
+                    execute_wrapper=execute_wrapper,
+                ),
             ),
             patch("django.db.transaction.atomic", return_value=_Atomic()),
         ):
@@ -781,5 +809,15 @@ class ChatQueryToolTests(SimpleTestCase):
             )
 
         assert result["data"] == [{"name": "Bolt"}]
-        assert events == ["atomic_enter", "set_timeout", "execute", "atomic_exit"]
-        assert cursor.calls == [("SET LOCAL statement_timeout = %s", [2000])]
+        assert events == [
+            "execute",
+            "atomic_enter",
+            "set_timeout",
+            "sql",
+            "atomic_exit",
+        ]
+        assert cursor.calls == [
+            ("SET LOCAL statement_timeout = %s", [2000]),
+            ("SELECT query_rows", []),
+        ]
+        assert not wrappers
