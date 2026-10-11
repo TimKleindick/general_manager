@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.82.4 (2026-10-11)
+
+### Bug Fixes
+
+- Expose declared native output field identities as GraphQL IDs
+  ([`faa4cef`](https://github.com/TimKleindick/general_manager/commit/faa4cef96b5cb72494d72af2ea8509a5a08ab728))
+
+
 ## v0.82.3 (2026-10-11)
 
 ### Bug Fixes
