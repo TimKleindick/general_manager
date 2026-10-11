@@ -9,6 +9,7 @@ from decimal import Decimal
 import sys
 from types import UnionType
 from typing import Any, ForwardRef, Union, get_args, get_origin, get_type_hints
+from uuid import UUID
 
 import graphene
 
@@ -37,6 +38,16 @@ class GraphQLOutputAnnotationError(TypeError):
         super().__init__(
             f"Unsupported GraphQL field type for "
             f"{owner_name}.{field_name}: {annotation!r}"
+        )
+
+
+class GraphQLOutputIdentityMetadataError(TypeError):
+    """Raised when an output field's identity flag is not boolean."""
+
+    def __init__(self, owner_name: str, field_name: str, flag: object) -> None:
+        super().__init__(
+            f"Invalid is_identifier metadata for {owner_name}.{field_name}: "
+            f"expected bool, got {flag!r}"
         )
 
 
@@ -144,6 +155,7 @@ def _map_collection_annotation(
     output_type_registry: Mapping[str, type[graphene.ObjectType]],
     measurement_type: type[graphene.ObjectType],
     scalar_mapper: Callable[[type], type],
+    is_identifier: bool = False,
 ) -> _MappedAnnotation:
     origin = get_origin(annotation)
     if origin not in (list, tuple, set):
@@ -159,6 +171,13 @@ def _map_collection_annotation(
             raise _annotation_error(owner_name, field_name, annotation)
         element_annotation = args[0]
 
+    if is_identifier:
+        _, identity_type = _unwrap_optional_annotation(
+            element_annotation, owner_name=owner_name, field_name=field_name
+        )
+        if identity_type not in (int, str, UUID):
+            raise _annotation_error(owner_name, field_name, annotation)
+
     element = _map_annotation(
         element_annotation,
         owner_name=owner_name,
@@ -169,6 +188,7 @@ def _map_collection_annotation(
         output_type_registry=output_type_registry,
         measurement_type=measurement_type,
         scalar_mapper=scalar_mapper,
+        is_identifier=is_identifier,
     )
     element_type = element.graphene_type
     if not element.nullable:
@@ -192,6 +212,7 @@ def _map_non_optional_value(
     output_type_registry: Mapping[str, type[graphene.ObjectType]],
     measurement_type: type[graphene.ObjectType],
     scalar_mapper: Callable[[type], type],
+    is_identifier: bool = False,
 ) -> _MappedAnnotation:
     annotation = _resolve_registered_name(
         annotation,
@@ -220,6 +241,17 @@ def _map_non_optional_value(
             output_type_registry=output_type_registry,
             measurement_type=measurement_type,
             scalar_mapper=scalar_mapper,
+            is_identifier=is_identifier,
+        )
+
+    if is_identifier:
+        if annotation not in (int, str, UUID):
+            raise _annotation_error(owner_name, field_name, annotation)
+        return _MappedAnnotation(
+            graphene.ID,
+            annotation,
+            nullable=False,
+            contains_measurement=False,
         )
 
     if safe_issubclass(annotation, GraphQLType):
@@ -290,6 +322,7 @@ def _map_annotation(
     output_type_registry: Mapping[str, type[graphene.ObjectType]],
     measurement_type: type[graphene.ObjectType],
     scalar_mapper: Callable[[type], type],
+    is_identifier: bool = False,
 ) -> _MappedAnnotation:
     nullable, concrete = _unwrap_optional_annotation(
         annotation,
@@ -306,6 +339,7 @@ def _map_annotation(
         output_type_registry=output_type_registry,
         measurement_type=measurement_type,
         scalar_mapper=scalar_mapper,
+        is_identifier=is_identifier,
     )
     return replace(mapped, nullable=nullable)
 
@@ -322,6 +356,7 @@ def _map_non_optional_annotation(
     measurement_type: type[graphene.ObjectType],
     scalar_mapper: Callable[[type], type],
     required: bool,
+    is_identifier: bool = False,
 ) -> MappedGraphQLOutput:
     """Map one non-optional annotation to a Graphene field."""
     mapped = _map_non_optional_value(
@@ -334,6 +369,7 @@ def _map_non_optional_annotation(
         output_type_registry=output_type_registry,
         measurement_type=measurement_type,
         scalar_mapper=scalar_mapper,
+        is_identifier=is_identifier,
     )
     field_kwargs: dict[str, object] = {}
     if mapped.contains_measurement:
@@ -355,8 +391,14 @@ def map_graphql_output_annotation(
     output_type_registry: Mapping[str, type[graphene.ObjectType]],
     measurement_type: type[graphene.ObjectType],
     scalar_mapper: Callable[[type], type],
+    is_identifier: bool = False,
 ) -> MappedGraphQLOutput:
-    """Map a strict GraphQL output annotation to a mounted Graphene field."""
+    """Map a strict output hint, preserving nullability and native values.
+
+    Explicit identity fields accept int, str, UUID, and supported flat
+    collections of those types. Their resolver type stays native while the
+    generated scalar is ID. Unmarked fields retain the strict legacy mapping.
+    """
     nullable, concrete_type = _unwrap_optional_annotation(
         annotation,
         owner_name=owner_name,
@@ -374,6 +416,7 @@ def map_graphql_output_annotation(
             measurement_type=measurement_type,
             scalar_mapper=scalar_mapper,
             required=not nullable,
+            is_identifier=is_identifier,
         )
     except GraphQLOutputAnnotationError as error:
         # Preserve the annotation written on the owning field in diagnostics,

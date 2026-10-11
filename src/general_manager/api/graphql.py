@@ -100,6 +100,7 @@ from general_manager.api.graphql_mutations import (
     generate_delete_mutation_class as _generate_delete_mutation_class_fn,
 )
 from general_manager.api.graphql_output import (
+    GraphQLOutputIdentityMetadataError,
     create_output_field_resolver,
     map_graphql_output_annotation,
     resolve_output_type_hints,
@@ -518,6 +519,11 @@ class GraphQL:
         )
         fields: dict[str, graphene.Field] = {}
         for declared_field in dataclasses.fields(output_class):
+            is_identifier = declared_field.metadata.get("is_identifier", False)
+            if not isinstance(is_identifier, bool):
+                raise GraphQLOutputIdentityMetadataError(
+                    output_name, declared_field.name, is_identifier
+                )
             mapped = map_graphql_output_annotation(
                 hints[declared_field.name],
                 owner_name=output_name,
@@ -528,6 +534,7 @@ class GraphQL:
                 output_type_registry=cls.graphql_output_type_registry,
                 measurement_type=MeasurementType,
                 scalar_mapper=cls._map_field_to_graphene_base_type,
+                is_identifier=is_identifier,
             )
             field = cast(graphene.Field, mapped.field)
             field.resolver = create_output_field_resolver(
