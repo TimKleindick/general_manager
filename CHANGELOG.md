@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.82.3 (2026-10-11)
+
+### Bug Fixes
+
+- Normalize global search native identity filters
+  ([`94b98eb`](https://github.com/TimKleindick/general_manager/commit/94b98eb8cc705d71de14941b984c9e0b9dfe1425))
+
+
+## v0.82.2 (2026-10-11)
+
+### Bug Fixes
+
+- Expose declared native property identities as GraphQL IDs
+  ([`77d2c79`](https://github.com/TimKleindick/general_manager/commit/77d2c79adb2149113495811fdd62cf08af7340ae))
+
+
 ## v0.82.1 (2026-10-09)
 
 ### Bug Fixes

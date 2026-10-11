@@ -38,7 +38,10 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils.module_loading import import_string
 
-from general_manager.api.graphql_identifiers import build_identification_arguments
+from general_manager.api.graphql_identifiers import (
+    build_identification_arguments,
+    property_identifier_type,
+)
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.cache.dependency_index import (
@@ -928,6 +931,20 @@ class GraphQL:
             attr_value,
         ) in generalManagerClass.Interface.get_graph_ql_properties().items():
             raw_hint = attr_value.graphql_type_hint
+
+            if attr_value.is_identifier:
+                native_type, is_collection = property_identifier_type(
+                    raw_hint,
+                    owner_name=generalManagerClass.__name__,
+                    field_name=attr_name,
+                )
+                fields[attr_name] = (
+                    graphene.List(graphene.ID) if is_collection else graphene.ID()
+                )
+                fields[f"resolve_{attr_name}"] = cls._create_resolver(
+                    attr_name, native_type
+                )
+                continue
 
             if _contains_measurement(raw_hint):
                 mapped = map_graphql_output_annotation(

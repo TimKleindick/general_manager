@@ -32,6 +32,63 @@ and scalar or structured input shapes. See the
 [identifier guide](../howto/expose_via_graphql.md#filter-by-identifier)
 for explicit UUID/string input configuration and the full migration steps.
 
+## Project native identities
+
+Using the `Record` declaration from the
+[native identity property guide](../howto/expose_via_graphql.md#declare-native-identity-properties),
+create a row with PK `2147483648` and query:
+
+```graphql
+query RecordIdentity($id: ID!) {
+  record(id: $id) { id recordKey recordKeys externalId }
+}
+```
+
+```json
+{"id": "2147483648"}
+```
+
+The result is:
+
+```json
+{
+  "record": {
+    "id": "2147483648",
+    "recordKey": "2147483648",
+    "recordKeys": ["2147483648"],
+    "externalId": 7
+  }
+}
+```
+
+Only the properties declared with `is_identifier=True` adopt identity output.
+The native `record.record_key` and `values_list("id", flat=True)` values remain
+integers. Keep schema-generated ID outputs as strings; update client types and
+equality/cache-key handling when adding the declaration to an existing schema.
+
+## Filter global search by native identity
+
+With `leader_id` declared as a real foreign-key filter on the `global` index:
+
+```graphql
+query SearchByLeader($filters: JSONString) {
+  search(query: "", filters: $filters) {
+    total
+    results { __typename }
+  }
+}
+```
+
+```json
+{"filters": "[{\"field\": \"leader_id\", \"values\": [\"9007199254740993\"]}]"}
+```
+
+The resolver sends the native integer `9007199254740993` to the selected
+manager's backend. Business integer filters still require JSON numbers, and
+string keys such as `"007"` remain strings. Native property filters require the
+explicit identity declaration shown above; backend collection membership
+semantics remain unchanged. See the [search guide](../howto/search.md#step-4-query-via-graphql).
+
 ## Paginated listings
 
 ```graphql

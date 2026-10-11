@@ -316,16 +316,24 @@ positive backend filter and `none` becomes an exclude. Nested excludes from
 `none` are inverted back into positive filters. Relation filter generation is
 limited by the configured relation depth; depth zero stops nested relation input
 creation.
-Equality-style `id`, `id__exact`, and list/tuple-shaped `id__in` values are cast
-through the target manager's `id` input field when available.
-Only Python list and tuple values are element-cast for `id__in`; other iterable
-shapes pass through unchanged.
+Global JSON filters use each manager's confirmed identity metadata for default
+equality, `__exact` and list/tuple `__in`. ORM primary keys and raw references
+use the existing input/target-field converters. Explicit native properties use
+`@graph_ql_property(is_identifier=True)` and their validated element annotation.
+List/tuple equality operands are also converted element by element, preserving
+adapters' existing OR grammar. String keys
+such as `"007"` keep their zeros; integer strings convert without floating-point
+rounding, including values above `2**53 - 1`. Nulls remain null and invalid ID
+operands raise conversion errors. Business fields and non-equality lookups
+retain their backend behavior. Metadata is resolved independently per manager
+in a shared index, while Python, database and indexed values stay native.
 
 Search permission constraints use the same shape as other GraphQL read
 prefilters: an ordered list of entries containing optional `filter` and
 `exclude` mappings. The search backend receives the user filters merged with
-each entry's `filter` mapping, with permission keys overriding user keys in that
-alternative. The paired `exclude` mapping is evaluated after the hit is
+each entry's `filter` mapping. Conflicting lookup keys retain the user predicate
+for the backend request and enforce the permission predicate on the hydrated
+instance, preserving their intersection. The paired `exclude` mapping is evaluated after the hit is
 instantiated. Empty entries (`{}`, `{"filter": {}}`, or `{"exclude": {}}`) mean
 that one alternative is unrestricted relative to the user filters. If the plan
 still requires instance checks, `can_read_instance()` must pass for that hit.
