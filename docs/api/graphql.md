@@ -110,6 +110,33 @@ scalar hints such as `graphql_scalar="bigint"`. An ordinary integer field
 named `external_id`, or a calculation/request composite business input named
 `id`, keeps its native GraphQL scalar.
 
+`graph_ql_property(..., is_identifier: bool = False)` adds an explicit native
+identity contract. With `is_identifier=True`, supported return annotations are
+`int`, `str`, `UUID`, and homogeneous `list[T]`, `set[T]`, or `tuple` collections
+of those types (including `tuple[T, ...]` and fixed homogeneous tuples).
+`Annotated` and optional wrappers are supported, including nullable elements.
+Generated fields are nullable `ID` / `[ID]`, preserving manager-property
+nullability. Values serialize as strings only at the GraphQL boundary, without
+changing the resolver annotation, Python/cache values, or Bucket projections.
+
+The descriptor exposes `is_identifier` alongside `graphql_type_hint` through
+`Interface.get_graph_ql_properties()`. Treat metadata as read-only after class
+definition. Filterable declared identities use that flag for equality/`exact`
+(`ID`) and membership (`[ID]`) input scalars; ordered comparisons retain the
+native type and existing backend filter semantics. The flag does not enable
+filtering or supply a query annotation. Global-search normalization of native
+property filters is a separate follow-up; this declaration does not supply a
+source ORM field or constructor input for such conversion.
+
+Unsupported identity annotations fail schema generation with a field-specific
+`TypeError`: booleans, floats, untyped collections, nested collections,
+heterogeneous tuples, ambiguous unions, manager objects, measurements, and
+output value objects are unsupported. Declare the native key type, rather than
+`graphene.ID`. The flag defaults to `False`, so existing property schemas remain
+unchanged until an application opts in. Opting in changes the schema scalar and
+JSON value type for integer identities; regenerate client types and keep IDs
+as opaque strings, including significant leading zeros.
+
 Equality and exact filters for a scalar identity use `ID`; membership filters
 use `[ID]`. This also applies to non-`id` primary-key names and raw foreign-key
 aliases. Ordered comparisons retain the native scalar and its hints. Python

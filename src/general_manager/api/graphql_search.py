@@ -25,6 +25,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
 from general_manager.conf import get_setting
+from general_manager.api.graphql_identifiers import property_identifier_type
 from general_manager.api.graphql_ordering import (
     GraphQLOrderingInputError,
     create_ordering_types,
@@ -842,12 +843,20 @@ def create_filter_options(
             continue
         hints = [t for t in get_args(prop.graphql_type_hint) if t is not type(None)]
         prop_type = hints[0] if hints else cast(type, prop.graphql_type_hint)
+        prop_info: dict[str, object] = {}
+        if prop.is_identifier:
+            prop_type, _ = property_identifier_type(
+                prop.graphql_type_hint,
+                owner_name=field_type.__name__,
+                field_name=prop_name,
+            )
+            prop_info["is_identifier"] = True
         filter_fields = {
             **filter_fields,
             **{
                 k: v
                 for k, v in get_filter_options(
-                    prop_type, prop_name, map_field_to_graphene_read
+                    prop_type, prop_name, map_field_to_graphene_read, prop_info
                 )
                 if v is not None
             },

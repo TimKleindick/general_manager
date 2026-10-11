@@ -188,6 +188,53 @@ Its detail query still accepts the constructor argument `id: ID!`, which
 addresses that model's `code` PK. UUID values remain `UUID` objects in Python;
 code values remain strings.
 
+### Declare native identity properties
+
+Mark a property returning real keys explicitly, retaining its native Python
+annotation and cache configuration:
+
+```python
+from django.db import models
+
+from general_manager import GeneralManager, graph_ql_property
+from general_manager.interface import DatabaseInterface
+
+
+class Record(GeneralManager):
+    class Interface(DatabaseInterface):
+        id = models.BigAutoField(primary_key=True)
+        sequence = models.IntegerField(default=7)
+
+    @graph_ql_property(is_identifier=True, cache="none")
+    def record_key(self) -> int:
+        return self.id
+
+    @graph_ql_property(is_identifier=True)
+    def record_keys(self) -> list[int]:
+        return list(type(self).filter(id=self.id).values_list("id", flat=True))
+
+    @graph_ql_property
+    def external_id(self) -> int:
+        return self.sequence
+```
+
+The generated fields are `recordKey: ID`, `recordKeys: [ID]`, and
+`externalId: Int`. UUID and string key properties use the same option with
+`UUID` and `str` annotations. Homogeneous tuples and sets, optional values,
+and optional elements are supported. Properties remain nullable. Do not mark
+business numbers or object/manager results as identities; nested collections,
+mixed unions, and unsupported native types fail schema generation with
+`TypeError`. A property name or an ORM query annotation alone does not select
+`ID`. Set `filterable=True` and configure backend filtering separately when
+needed. Python and Bucket projection values remain native.
+
+After opting in, regenerate the schema and client types and update comparisons
+and cache keys to use strings. A scalar property previously returning the JSON
+number `7` now returns `"7"`; a list returns `["7"]`. A key such as
+`2147483648`, which previously exceeded GraphQL `Int` and produced an error,
+now serializes as `"2147483648"`. See the [query recipe](../examples/graphql_queries.md#project-native-identities)
+for an executable selection.
+
 ### Migrate existing clients
 
 1. Change affected variable declarations from `Int` or `String` to `ID`, and

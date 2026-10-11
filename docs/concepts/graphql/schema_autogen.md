@@ -40,6 +40,16 @@ scalar hints remain in that metadata. Names alone do not identify a field:
 ordinary fields such as `external_id`, and calculation/request composite
 business inputs named `id`, retain their native GraphQL scalars.
 
+Native properties lose their source field's identity metadata. Declare that
+contract explicitly with `@graph_ql_property(is_identifier=True)`: an `int`,
+`str`, or `UUID` result becomes `ID`, and a homogeneous `list`, `tuple`, or
+`set` of those values becomes `[ID]`. Optional values and elements remain
+nullable, as do ordinary manager property fields. Resolver, cache, database,
+and detached `Bucket.values()` / `values_list()` values keep their native types.
+Neither an ID-like name nor `query_annotation=F("id")` implies identity.
+Manager objects and output value objects retain their existing object shapes;
+do not mark them as native identifiers.
+
 Equality, exact, and membership filters for identity fields use `ID`, `ID`,
 and `[ID]`, respectively. Range comparisons retain their native scalar,
 including any `graphql_scalar="bigint"` hint. Server-side conversion preserves
