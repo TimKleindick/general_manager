@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.82.2 (2026-10-11)
+
+### Bug Fixes
+
+- Expose declared native property identities as GraphQL IDs
+  ([`77d2c79`](https://github.com/TimKleindick/general_manager/commit/77d2c79adb2149113495811fdd62cf08af7340ae))
+
+
 ## v0.82.1 (2026-10-09)
 
 ### Bug Fixes
