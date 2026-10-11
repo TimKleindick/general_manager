@@ -43,6 +43,12 @@ class GraphQLPropertyIdentityTests(GeneralManagerTransactionTestCase):
             record_keys = graph_ql_property(is_identifier=True, cache="none")(
                 integer_keys
             )
+            dependency_key = graph_ql_property(is_identifier=True, cache="dependency")(
+                integer_key
+            )
+            dependency_keys = graph_ql_property(is_identifier=True, cache="dependency")(
+                integer_keys
+            )
             restricted_key = graph_ql_property(is_identifier=True)(integer_key)
 
             @graph_ql_property(is_identifier=True, cache="dependency")
@@ -312,3 +318,103 @@ class GraphQLPropertyIdentityTests(GeneralManagerTransactionTestCase):
                 "recordKeys": [str(2**100 + 1)],
             },
         )
+
+    def test_grouped_schema_preserves_native_identity_and_business_types(self) -> None:
+        schema = GraphQL.get_schema().graphql_schema
+        for manager in self.general_manager_classes:
+            fields = schema.get_type(f"{manager.__name__}GroupType").fields
+            scalar = "referenceKey" if manager is self.Reference else "recordKey"
+            collection = "referenceKeys" if manager is self.Reference else "recordKeys"
+            with self.subTest(manager=manager.__name__):
+                self.assertEqual(str(fields[scalar].type), "ID")
+                self.assertEqual(str(fields[collection].type), "[ID]")
+        fields = schema.get_type("PropertyBigRecordGroupType").fields
+        self.assertEqual(str(fields["externalId"].type), "Int")
+        self.assertEqual(str(fields["businessIds"].type), "[Int]")
+
+    def test_grouped_integer_identities_keep_native_aggregation_and_nulls(self) -> None:
+        for pk in (2, 10):
+            self.BigRecord.Interface._model.objects.create(pk=pk)
+        response = self.query("""
+            query { propertyBigRecordGroups(groupBy: ["sequence"]) {
+                items {
+                    recordKey recordKeys dependencyKey dependencyKeys optionalKey optionalKeys absentKeys
+                    emptyKeys externalId businessIds
+                }
+                pageInfo { totalCount }
+            } }
+        """)
+        self.assertResponseNoErrors(response)
+        items = response.json()["data"]["propertyBigRecordGroups"]["items"]
+        self.assertEqual(len(items), 1)
+        item = items[0]
+        self.assertEqual(item["recordKey"], "12")
+        self.assertCountEqual(item["recordKeys"], ["2", "10"])
+        self.assertEqual(item["dependencyKey"], "12")
+        self.assertCountEqual(item["dependencyKeys"], ["2", "10"])
+        self.assertEqual(
+            response.json()["data"]["propertyBigRecordGroups"]["pageInfo"],
+            {"totalCount": 1},
+        )
+        self.assertIsNone(item["optionalKey"])
+        self.assertCountEqual(item["optionalKeys"], ["2", None, "10", None])
+        self.assertIsNone(item["absentKeys"])
+        self.assertEqual(item["emptyKeys"], [])
+        self.assertEqual(item["externalId"], 14)
+        self.assertEqual(item["businessIds"], [7, 7])
+
+    def test_grouped_string_and_large_integer_identities_serialize_as_ids(self) -> None:
+        for code in ("a", "b"):
+            self.CodeRecord.Interface._model.objects.create(pk=code)
+        pk = 2**60 + 1
+        self.BigIntegerRecord.Interface._model.objects.create(pk=pk)
+        response = self.query("""
+            query {
+                propertyCodeRecordGroups(groupBy: ["id"]) {
+                    items { recordKey recordKeys }
+                }
+                propertyBigIntegerRecordGroups(groupBy: ["id"]) {
+                    items { id recordKey recordKeys }
+                }
+            }
+        """)
+        self.assertResponseNoErrors(response)
+        data = response.json()["data"]
+        codes = data["propertyCodeRecordGroups"]["items"]
+        self.assertEqual(len(codes), 1)
+        self.assertCountEqual(codes[0]["recordKey"].split(", "), ["a", "b"])
+        self.assertCountEqual(codes[0]["recordKeys"], ["a", "b"])
+        self.assertEqual(
+            data["propertyBigIntegerRecordGroups"]["items"],
+            [{"id": str(pk), "recordKey": str(pk), "recordKeys": [str(pk)]}],
+        )
+
+    def test_grouped_unsupported_identity_annotations_report_field_errors(self) -> None:
+        self.BigRecord.Interface._model.objects.create(pk=2)
+        self.UuidRecord.Interface._model.objects.create()
+        for manager, field, native_field in (
+            (self.BigRecord, "keyTuple", "key_tuple"),
+            (self.BigRecord, "keySet", "key_set"),
+            (self.UuidRecord, "recordKey", "record_key"),
+            (self.UuidRecord, "recordKeys", "record_keys"),
+        ):
+            with self.subTest(manager=manager.__name__, field=field):
+                query_name = (
+                    manager.__name__[0].lower() + manager.__name__[1:] + "Groups"
+                )
+                response = self.query(
+                    f'query {{ {query_name}(groupBy: ["id"]) {{ '
+                    f"items {{ {field} }} pageInfo {{ totalCount }} }} }}"
+                )
+                result = response.json()
+                self.assertEqual(
+                    result["errors"][0]["message"],
+                    f"{native_field} is not available for grouped results.",
+                )
+                self.assertEqual(
+                    result["errors"][0]["path"], [query_name, "items", 0, field]
+                )
+                self.assertEqual(
+                    result["data"][query_name],
+                    {"items": [{field: None}], "pageInfo": {"totalCount": 1}},
+                )
