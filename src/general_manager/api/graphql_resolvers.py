@@ -1654,7 +1654,9 @@ def create_list_resolver(
             items = qs_paginated
         else:
             items = list(cast(Iterable[GeneralManager], qs_paginated))
-        if isinstance(items, list):
+        # Dependency-cache keys identify original entities, not synthetic groups.
+        # Grouped field resolution reads the cached properties of each member.
+        if isinstance(items, list) and not isinstance(qs_paginated, GroupBucket):
             selected_property_names = collect_selected_graphql_property_names(
                 info,
                 manager_class,

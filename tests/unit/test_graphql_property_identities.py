@@ -9,6 +9,7 @@ import pytest
 from general_manager.api.graphql import GraphQL
 from general_manager.api.graphql_type import GraphQLType
 from general_manager.api.property import graph_ql_property
+from general_manager.bucket.base_bucket import Bucket
 from general_manager.manager import GeneralManager
 from general_manager.measurement import Measurement
 
@@ -101,6 +102,12 @@ def test_unsupported_identity_declaration_fails_schema_with_field_context(annota
     prop = property_with_annotation(annotation)
     with pytest.raises(TypeError, match=r"IdentityAnnotationManager\.key"):
         generate_property_type(prop)
+
+
+def test_bucket_identity_is_rejected_before_relation_mapping():
+    prop = property_with_annotation(Bucket[GeneralManager])
+    with pytest.raises(TypeError, match=r"IdentityAnnotationManager\.key_list"):
+        generate_property_type(prop, "key_list")
 
 
 @pytest.mark.parametrize("name", ["id", "external_id", "customer_id", "quantity"])
