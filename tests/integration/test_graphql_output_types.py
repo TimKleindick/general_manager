@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import field
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, ClassVar, Literal, cast
@@ -24,6 +25,7 @@ from general_manager.api.property import (
 from general_manager.bootstrap import handle_graph_ql
 from general_manager.interface import CalculationInterface
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.manager.input import Input
 from general_manager.measurement.measurement import Measurement
 from general_manager.permission.base_permission import (
@@ -418,6 +420,91 @@ class GraphQLOutputPropertyIntegrationTests(SimpleTestCase):
                     ]
                 }
             },
+        )
+
+    def test_identity_cookbook_query_through_native_manager_property(self) -> None:
+        for name in (
+            "all_classes",
+            "read_only_classes",
+            "pending_attribute_initialization",
+            "pending_graphql_interfaces",
+        ):
+            self.addCleanup(
+                setattr, GeneralManagerMeta, name, getattr(GeneralManagerMeta, name)
+            )
+            setattr(GeneralManagerMeta, name, list(getattr(GeneralManagerMeta, name)))
+        self.addCleanup(
+            _restore_module_bindings,
+            {"ProjectHour": globals().get("ProjectHour", _MISSING)},
+        )
+
+        class ProjectHour(GraphQLType):
+            task_id: int = field(metadata={"is_identifier": True})
+            hours: float
+            note: str | None = None
+            tags: list[str] = field(default_factory=list)
+
+        globals()["ProjectHour"] = ProjectHour
+
+        class ProjectHoursSummary(GeneralManager):
+            class Interface(CalculationInterface):
+                project_id = Input(int, possible_values=(42,))
+
+            @graph_ql_property(cache="none")
+            def hours(self) -> list[ProjectHour]:
+                return [
+                    ProjectHour(
+                        task_id=9007199254740993,
+                        hours=8.5,
+                        note="Ready for review",
+                        tags=["billable", "forecast"],
+                    )
+                ]
+
+        GraphQL.reset_registry()
+        with (
+            patch.object(GraphQL, "register_file_upload_mutation"),
+            patch.object(GraphQL, "register_search_query"),
+            patch("general_manager.uploads.urls.add_file_upload_urls"),
+            patch("general_manager.bootstrap.add_graphql_url"),
+        ):
+            handle_graph_ql([ProjectHoursSummary])
+        schema = GraphQL.get_schema()
+        assert schema is not None
+        result = schema.execute(
+            """query ProjectHours {
+              projectHoursSummary(projectId: 42) {
+                hours { taskId hours note tags }
+              }
+            }""",
+            context_value=SimpleNamespace(user=AnonymousUser()),
+        )
+        self.assertIsNone(result.errors)
+        self.assertEqual(
+            result.data,
+            {
+                "projectHoursSummary": {
+                    "hours": [
+                        {
+                            "taskId": "9007199254740993",
+                            "hours": 8.5,
+                            "note": "Ready for review",
+                            "tags": ["billable", "forecast"],
+                        }
+                    ]
+                }
+            },
+        )
+        native = ProjectHoursSummary(project_id=42).hours[0]
+        self.assertIs(type(native.task_id), int)
+        self.assertEqual(native.task_id, 9007199254740993)
+        output = schema.graphql_schema.get_type("ProjectHourType")
+        assert output is not None
+        self.assertEqual(str(output.fields["taskId"].type), "ID!")
+        query = schema.graphql_schema.query_type
+        assert query is not None
+        self.assertEqual(
+            str(query.fields["projectHoursSummary"].args["projectId"].type), "Int!"
         )
 
     def test_late_declaration_survives_setup_and_cleanup(self) -> None:

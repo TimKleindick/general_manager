@@ -77,6 +77,32 @@ The [typed output-object recipe](../examples/graphql_output_types.md) shows the
 same contract with a complete startup import, calculation property, and
 GraphQL query.
 
+For flat native identities inside an output value, mark each dataclass field:
+
+```python
+from dataclasses import field
+from uuid import UUID
+from general_manager import GraphQLType
+
+
+class RecordProjection(GraphQLType):
+    record_key: int = field(metadata={"is_identifier": True})
+    related_keys: list[int] = field(metadata={"is_identifier": True})
+    optional_key: UUID | None = field(metadata={"is_identifier": True})
+    quantity: int
+```
+
+Return native values from the owning property: for example,
+`RecordProjection(9007199254740993, [9007199254740993], None, 17)`.
+The fields expose `ID!`, `[ID!]!`, `ID`, and `Int!`; GraphQL returns identity
+strings and the numeric quantity. Keep the object-returning property's own
+identity flag unset. The field flag defaults to false and must be a boolean;
+it changes only explicitly marked native int/string/UUID fields and supported
+flat collections. Optional and element nullability, frozen values, defaults,
+permissions, and native annotations are preserved. Do not cast values to
+strings or annotate fields with `graphene.ID`; use native key annotations.
+Regenerate client types after opting in and keep IDs as opaque strings.
+
 ## Declare manager relations
 
 Annotate related fields with the manager class that should appear in generated

@@ -111,6 +111,27 @@ Python annotations define nullability and collection element nullability:
 | `list[User \| None]` | `[UserType]!` |
 | `list[User] \| None` | `[UserType!]` |
 
+For native identity fields, use the explicit dataclass field metadata rather
+than changing the Python annotation:
+
+```python
+class RecordProjection(GraphQLType):
+    record_key: int = field(metadata={"is_identifier": True})
+    record_keys: list[int | None] | None = field(metadata={"is_identifier": True})
+    quantity: int
+```
+
+Import `field` from `dataclasses` and `GraphQLType` from `general_manager`.
+The fields become `recordKey: ID!`, `recordKeys: [ID]`, and `quantity: Int!`.
+Marked native `int`, `str`, and `UUID` identities and supported flat
+`list`, `set`, and variadic tuple collections serialize as strings at the
+GraphQL boundary. Python annotations and frozen values remain native.
+Required/optional annotations determine both nullability levels exactly as
+before. Missing/false metadata keeps ordinary scalars, including fields named
+`id` or `external_id`; names never imply identity. Other flag values raise
+a field-specific `TypeError`. Output field metadata does not provide manager
+identity, root operations, input objects, or search normalization.
+
 For scalar fields, the strict allowlist is `str`, `bool`, `int`, `float`,
 `Decimal`, `datetime`, `date`, and subclasses of those types. Unknown
 scalar-like classes are rejected; output declarations do not use the legacy
@@ -120,6 +141,9 @@ classes, and `list[T]`, `tuple[T, ...]`, or `set[T]` collections. Optional forms
 use `T | None`. Bare collections, every fixed-length tuple (including
 `tuple[int, int]`), `Any`, `Annotated[...]`, unresolved references, and unions
 containing more than one non-null type are rejected during schema generation.
+The same strict shape rules apply to marked identities, with native `UUID`
+additionally accepted only for explicitly marked fields. Bool, float, manager,
+measurement, nested collection, and output-object identity annotations fail.
 
 An output type can be returned by any `@graph_ql_property` using a direct,
 optional, or collection annotation:

@@ -86,6 +86,32 @@ bootstrap plumbing rather than the application-facing registration API: define
 `GraphQLType` subclasses and import their module before startup schema
 construction.
 
+Native output fields can declare identities with
+`dataclasses.field(metadata={"is_identifier": True})`. The flag must be a
+boolean; missing or `False` metadata preserves existing scalar mapping.
+Marked `int`, `str`, and `UUID` fields use `ID`, including flat homogeneous
+`list[T]`, `set[T]`, and `tuple[T, ...]` collections. Required/optional field
+and element annotations retain their existing nullability: `int` becomes
+`ID!`, `int | None` becomes `ID`, `list[int]` becomes `[ID!]!`, and
+`list[int | None] | None` becomes `[ID]`. Resolver annotations, frozen Python
+values, defaults, and constructors stay native; only GraphQL serializes them
+as identity strings. Field names never imply identity.
+
+Unlike manager-property identity hints, output declarations keep their strict
+annotation rules: fixed tuples, `Annotated`, nested identity collections,
+ambiguous unions, bool/float/object/manager/measurement identities, and
+Graphene scalar annotations are rejected. Invalid flags and unsupported
+identity annotations fail schema generation with a field-specific `TypeError`
+before the generated output type is registered. Unmarked UUID fields remain
+unsupported by the ordinary output scalar allowlist.
+
+This field metadata contract is independent of the owning property's
+`is_identifier` option. Keep an object-returning property unmarked and declare
+the identity fields inside its `GraphQLType`. Output values still have no
+manager inputs or search filters. Opting in changes `Int`/`String` fields to
+`ID` and integer JSON values to strings; regenerate client types and treat
+IDs as opaque strings, preserving significant leading zeros.
+
 ## Identifier scalar contract
 
 Generated ORM primary-key fields and raw foreign-key reference fields use
