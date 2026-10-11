@@ -42,6 +42,23 @@ def _term(unit: object) -> dict[str, Any]:
 def _normalized(value: object) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         _invalid()
+    if value.get("kind") == "fixed_quantity" and set(value) == {
+        "kind",
+        "label",
+        "term",
+    }:
+        label, term = value["label"], value["term"]
+        if (
+            not isinstance(label, str)
+            or not label.strip()
+            or not isinstance(term, Mapping)
+        ):
+            _invalid()
+        return {
+            "kind": "fixed_quantity",
+            "label": label,
+            "term": _term(term.get("unit")),
+        }
     if value.get("kind") == "quantity" and set(value) == {
         "kind",
         "unit_field",
@@ -110,6 +127,11 @@ class FieldUnitContract:
             "unit_field": unit_field,
             "units": {label: _term(unit) for label, unit in units.items()},
         }
+        return cls(json.dumps(value, sort_keys=True, allow_nan=False))
+
+    @classmethod
+    def fixed_quantity(cls, *, unit: str, label: str) -> FieldUnitContract:
+        value = {"kind": "fixed_quantity", "label": label, "term": _term(unit)}
         return cls(json.dumps(value, sort_keys=True, allow_nan=False))
 
     @classmethod

@@ -255,7 +255,24 @@ def _validate_task_record(value: object, path: str = "$") -> PlannedTask:
             valid = requirement.kind == "calculation" and all(
                 source is not None for source in sources
             )
-            if binding.conversion is not None:
+            if binding.cross_query is not None:
+                valid = (
+                    valid
+                    and requirement.operation == "difference"
+                    and len(sources) == 2
+                    and all(
+                        source is not None
+                        and source.kind == "calculation"
+                        and source.operation == "sum"
+                        for source in sources
+                    )
+                    and all(
+                        earlier.get(source) is not None
+                        and earlier[source].kind == "schema"
+                        for source in binding.cross_query.schema_requirement_ids
+                    )
+                )
+            elif binding.conversion is not None:
                 valid = (
                     valid
                     and requirement.operation == "sum_products"

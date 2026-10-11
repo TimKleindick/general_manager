@@ -148,6 +148,7 @@ def test_executor_publishes_full_dynamic_child_contract_without_root_only_rules(
         "spawn_children",
         "calculate",
         "calculate_batch",
+        "calculate_groups",
         "bind_calculation",
         "clarify_selector",
     }

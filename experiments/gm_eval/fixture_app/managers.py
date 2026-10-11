@@ -562,6 +562,9 @@ def _create_fixture() -> None:
     # Explicit application contract migration, independent of seeded records and
     # cases. Numeric field names/descriptions themselves confer no dimensions.
     declared_units = {
+        "ShipmentReturn": {
+            "quantity": FieldUnitContract.fixed_quantity(unit="count", label="pieces")
+        },
         "Shipment": {
             "quantity": FieldUnitContract.quantity(
                 unit_field="unit", units={"pieces": "count"}

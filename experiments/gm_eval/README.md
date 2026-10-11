@@ -50,6 +50,11 @@ not count as exposed managers. Seed variants substitute distractor slots while
 retaining the exact count. Read-only startup, relational integrity, populated
 distractors and bounded calculation inputs are covered by regression tests.
 
+The fixture explicitly sets `READ_ONLY_SYNC_ON_STARTUP=True` so its registered
+hooks install reference data even with production-style `DEBUG=False`. This
+opt-in applies only to the disposable fixture's two seed phases; the application
+startup default continues to follow Django `DEBUG`.
+
 ## Reference conventions
 
 The business clock is 2026-10-03 12:00 UTC. Last year means calendar 2025; last
