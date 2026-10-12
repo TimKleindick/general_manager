@@ -14,6 +14,17 @@ attributes, the default is evaluated and materialized through the normal
 descriptor conversion path. Explicit values, including `None`, suppress it.
 Inherited concrete model classes receive the same behavior.
 
+ORM interface metadata normalizes concrete measurement defaults, including
+strings such as `default="100 mm"`, to validated `Measurement` values. This
+allows generated GraphQL schemas to print SDL and expose introspection defaults
+while preserving the declared unit. Invalid values or incompatible units fail
+during metadata construction using the field's normal storage validation.
+The field declaration and its migration serialization remain unchanged.
+Callable defaults are not evaluated for metadata or schema construction; they
+remain model-initialization defaults and are omitted from GraphQL defaults.
+Partial-update arguments omit all defaults, so an omitted measurement keeps its
+stored value. Explicit `None` remains distinct from omission.
+
 This is a model-initialization default, not a database-side default. The
 default receivers are weakly connected and retained by their live model class,
 so discarded migration-state model classes are not kept alive by global signal

@@ -740,10 +740,24 @@ class MeasurementField(MeasurementFieldBase):
                 does not make exact non-wrapped Pint subclasses part of this
                 field's stable API.
         """
+        measurement, magnitude = self._normalize_value(value)
+        setattr(instance, self.value_attr, magnitude)
+        setattr(
+            instance,
+            self.unit_attr,
+            str(measurement.unit) if measurement is not None else None,
+        )
+
+    def _normalize_value(
+        self, value: object
+    ) -> tuple[Measurement | None, Decimal | None]:
+        """Validate a value for storage or metadata without creating a model instance.
+
+        Return the measurement in its declared unit and its quantized base-unit
+        magnitude. This does not evaluate defaults or run model validators.
+        """
         if value is None:
-            setattr(instance, self.value_attr, None)
-            setattr(instance, self.unit_attr, None)
-            return
+            return None, None
         if isinstance(value, str):
             try:
                 value = Measurement.from_string(value)
@@ -776,8 +790,7 @@ class MeasurementField(MeasurementFieldBase):
                 {self.name: [f"Unit must be compatible with '{self.base_unit}'."]}
             ) from e
 
-        setattr(instance, self.value_attr, self._normalize_base_magnitude(base_mag))
-        setattr(instance, self.unit_attr, str(value.unit))
+        return value, self._normalize_base_magnitude(base_mag)
 
     def validate(
         self,

@@ -155,6 +155,20 @@ def _orm_file_field_kind(
     return None
 
 
+def _field_default(field: DjangoField) -> object:
+    """Normalize concrete measurement defaults without evaluating runtime defaults."""
+    default = field.default
+    if (
+        not isinstance(field, MeasurementField)
+        or default is None
+        or default is models.NOT_PROVIDED
+        or callable(default)
+    ):
+        return default
+    measurement, _ = field._normalize_value(default)
+    return measurement
+
+
 def _to_snake_case(name: str) -> str:
     """Convert a CamelCase class name into snake_case."""
     snake = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
@@ -257,7 +271,7 @@ class _FieldDescriptorBuilder:
                     else not field.null
                 ),
                 is_editable=field.editable,
-                default=field.default,
+                default=_field_default(field),
                 is_derived=False,
                 accessor=_instance_attribute_accessor(field_name),
                 orm_field_kind=orm_field_kind,
@@ -286,7 +300,7 @@ class _FieldDescriptorBuilder:
                     else not field.null and field.default is models.NOT_PROVIDED
                 ),
                 is_editable=field.editable,
-                default=field.default,
+                default=_field_default(field),
                 is_derived=False,
                 accessor=_instance_attribute_accessor(field.name),
                 orm_field_kind=orm_field_kind,
