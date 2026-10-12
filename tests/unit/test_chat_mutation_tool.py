@@ -26,7 +26,9 @@ class _RecordingSchema:
         )
         self.calls: list[dict[str, object]] = []
 
-    def execute(self, query_text: str, context_value=None, variable_values=None):  # type: ignore[no-untyped-def]
+    def execute(
+        self, query_text: str, context_value=None, variable_values=None, middleware=None
+    ):  # type: ignore[no-untyped-def]
         self.calls.append(
             {
                 "query": query_text,

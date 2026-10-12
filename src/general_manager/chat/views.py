@@ -620,6 +620,7 @@ def _build_tool_definitions() -> list[Any]:
 
 def _request_scope(request: HttpRequest) -> dict[str, Any]:
     return {
+        "request": request,
         "user": getattr(request, "user", None),
         "session": getattr(request, "session", None),
         "client": (

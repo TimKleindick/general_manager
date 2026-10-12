@@ -995,10 +995,12 @@ def test_cross_query_rejects_damage_at_admission_execution_and_completion(
             native.get_type("GrossFilterTypeDepth1").fields["eventDate_Gte"].extensions[
                 FILTER_EXTENSION
             ]["operator"] = "gt"
+        graphql_contract.clear_contract_cache()
     elif damage in {"hidden_entity", "hidden_source"}:
         managers[
             "Subject" if damage == "hidden_entity" else "Returned"
         ].chat_exposed = False
+        graphql_contract.clear_contract_cache()
 
     def transform(record):
         if record.evidence_id not in {gross_query, return_query, "gross"}:
@@ -1295,6 +1297,7 @@ def test_cached_query_keeps_original_schema_witness_and_cannot_be_reattested(
     ].extensions[UNIT_EXTENSION] = FieldUnitContract.fixed_quantity(
         unit="kg", label="pieces"
     ).as_mapping()
+    graphql_contract.clear_contract_cache()
     runner.callbacks = replace(
         runner.callbacks,
         execute_tool=lambda *_: pytest.fail("a cache hit must not dispatch"),
@@ -1332,6 +1335,7 @@ def test_query_schema_change_during_dispatch_is_recorded_as_unstable(public_popu
         ].extensions[UNIT_EXTENSION] = FieldUnitContract.quantity(
             unit_field="unitLabel", units={"pieces": "kg"}
         ).as_mapping()
+        graphql_contract.clear_contract_cache()
         return result
 
     runner.callbacks = replace(runner.callbacks, execute_tool=changing)

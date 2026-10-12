@@ -3,12 +3,13 @@
 import json
 import os
 from pathlib import Path
+from copy import deepcopy
 
 import pytest
 
 from general_manager.chat.planned.schema_projection import REFERENCE_VERSION
-from tests.experiments.test_gm_eval_harness import _child
 from tests.experiments.test_unit_conversion_sequence_v50 import PROGRAM
+from tests.utils.native_batch import run_native_programs
 
 
 def program(manager_count, parity):
@@ -85,12 +86,25 @@ def program(manager_count, parity):
     return value
 
 
-@pytest.mark.parametrize("manager_count", [5, 50, 250])
+@pytest.fixture(scope="module")
+def manager_count(request):
+    return request.param
+
+
+@pytest.fixture(scope="module")
+def prepared_observations(manager_count):
+    return run_native_programs(
+        {str(parity): program(manager_count, parity) for parity in (False, True)},
+        manager_count=manager_count,
+    )
+
+
+@pytest.mark.parametrize("manager_count", [5, 50, 250], indirect=True)
 @pytest.mark.parametrize("parity", [False, True])
 def test_native_operational_observations_preserve_full_followup_and_consumer_parity(
-    manager_count, parity
+    manager_count, parity, prepared_observations
 ):
-    result = _child(program(manager_count, parity))
+    result = deepcopy(prepared_observations[str(parity)])
     if directory := os.environ.get("GM_SCHEMA_EVIDENCE_DIR"):
         path = Path(directory)
         path.mkdir(parents=True, exist_ok=True)

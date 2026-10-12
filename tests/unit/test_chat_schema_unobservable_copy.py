@@ -16,7 +16,11 @@ from graphql import (
 )
 
 from general_manager.api.graphql import GraphQL
-from general_manager.chat.graphql_contract import manager_schema
+from general_manager.chat.graphql_contract import (
+    _copy_contract_schema,
+    clear_contract_cache,
+    manager_schema,
+)
 from general_manager.chat.schema_inspection import inspect_manager_schema
 from tests.unit.test_schema_inspection import exposed_schema as _exposed_schema
 
@@ -103,14 +107,24 @@ def test_unobserved_default_serializer_is_never_called(
         GraphQL, "get_schema", lambda: SimpleNamespace(graphql_schema=schema)
     )
     assert_valid_schema(schema)
-    overview = inspect_manager_schema("Part")
-    assert "PrivateConfig" not in overview["type_manifest"]
-    assert calls == []
     if scope == "reference":
-        assert overview["type_manifest"]["Other"] == {
-            "kind": "reference",
-            "manager": "Other",
-        }
+        # Standalone copying remains bounded. Startup compilation separately
+        # observes every exposed manager's own public defaults (tested below).
+        copied = _copy_contract_schema(
+            schema,
+            manager="Part",
+            roots=["partList"],
+            manager_types={
+                "Part": schema.get_type("Part"),
+                "Other": schema.get_type("Other"),
+            },
+            visibility={"Part": True, "Other": True},
+        )
+        assert copied.get_type("Other").fields == {}
+    else:
+        overview = inspect_manager_schema("Part")
+        assert "PrivateConfig" not in overview["type_manifest"]
+    assert calls == []
 
 
 def test_visible_opaque_enum_default_uses_native_name_and_snapshot(
@@ -144,10 +158,12 @@ def test_visible_opaque_enum_default_uses_native_name_and_snapshot(
         "default_graphql": "OPEN",
     }
     argument.default_value = closed
+    clear_contract_cache()
     fresh = inspect_manager_schema("Part", view="full")
     assert fresh["snapshot"] != full["snapshot"]
     assert fresh["root_fields"]["partList"]["arguments"]["state"]["default"] == "CLOSED"
     state.values["LATER"] = GraphQLEnumValue(RLock())
+    clear_contract_cache()
     assert inspect_manager_schema("Part")["snapshot"] != fresh["snapshot"]
     from general_manager.chat.schema_inspection import SchemaInspectionError
 
@@ -183,6 +199,7 @@ def test_visible_opaque_scalar_default_is_serialized_without_string_coercion(
         "default_graphql": '"opaque"',
     }
     scalar.serialize = lambda value: "changed" if value is marker else "wrong_identity"
+    clear_contract_cache()
     fresh = inspect_manager_schema("Part", view="full")
     assert fresh["snapshot"] != full["snapshot"]
     assert (
@@ -196,3 +213,67 @@ def test_wrapper_metadata_is_not_observable_contract_data(exposed_schema):
     original.query_type.fields["partList"].type.application_lock = RLock()
     original.get_type("Part").fields["code"].type.application_lock = RLock()
     assert inspect_manager_schema("Part", view="full") == before
+
+
+def test_shared_compilation_captures_exposed_defaults_once_but_keeps_references(
+    exposed_schema, monkeypatch
+):
+    original, _ = exposed_schema
+    calls = []
+    marker = RLock()
+    scalar = GraphQLScalarType(
+        "ExposedConfig", serialize=lambda value: calls.append(value) or "opaque"
+    )
+    original.get_type("Other").fields["configured"] = GraphQLField(
+        scalar, args={"config": GraphQLArgument(scalar, default_value=marker)}
+    )
+    schema = GraphQLSchema(
+        query=original.query_type, types=[*original.type_map.values(), scalar]
+    )
+    monkeypatch.setattr(
+        GraphQL, "get_schema", lambda: SimpleNamespace(graphql_schema=schema)
+    )
+    overview = inspect_manager_schema("Part")
+    assert calls == [marker]
+    assert overview["type_manifest"]["Other"] == {
+        "kind": "reference",
+        "manager": "Other",
+    }
+    assert "ExposedConfig" not in overview["type_manifest"]
+    own = inspect_manager_schema("Other", view="full")
+    assert calls == [marker]
+    assert own["types"]["Other"]["fields"]["configured"]["arguments"]["config"] == {
+        "type": "ExposedConfig",
+        "default": "opaque",
+        "default_graphql": '"opaque"',
+    }
+
+
+def test_invalid_exposed_default_fails_shared_compilation_atomically(
+    exposed_schema, monkeypatch
+):
+    from general_manager.chat import graphql_contract as contract
+
+    schema, _ = exposed_schema
+    marker = RLock()
+
+    def invalid(value):
+        assert value is marker
+        message = "exposed default serializer failed"
+        raise ValueError(message)
+
+    scalar = GraphQLScalarType("ExposedConfig", serialize=invalid)
+    schema.get_type("Other").fields["configured"] = GraphQLField(
+        scalar, args={"config": GraphQLArgument(scalar, default_value=marker)}
+    )
+    extended = GraphQLSchema(
+        query=schema.query_type, types=[*schema.type_map.values(), scalar]
+    )
+    monkeypatch.setattr(
+        GraphQL, "get_schema", lambda: SimpleNamespace(graphql_schema=extended)
+    )
+    with pytest.raises(ValueError, match="exposed default serializer failed"):
+        inspect_manager_schema("Part")
+    assert extended not in contract._COMPILED
+    scalar.serialize = lambda _value: "opaque"
+    assert inspect_manager_schema("Part")["manager"] == "Part"

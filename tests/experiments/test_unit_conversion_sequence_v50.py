@@ -1,12 +1,13 @@
 """Fresh native unit clarification, schema proof, reads and conversion."""
 
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
 
 import pytest
 
-from tests.experiments.test_gm_eval_harness import _child
+from tests.utils.native_batch import run_native_programs
 
 
 def _save(name, result):
@@ -18,9 +19,11 @@ def _save(name, result):
         )
 
 
-@pytest.mark.parametrize("manager_count", [5, 50, 250])
-def test_native_unit_question_then_source_bound_conversion(manager_count):
-    result = _child(PROGRAM.replace("MANAGER_COUNT", str(manager_count)))
+@pytest.mark.parametrize("manager_count", [5, 50, 250], indirect=True)
+def test_native_unit_question_then_source_bound_conversion(
+    manager_count, prepared_observations
+):
+    result = deepcopy(prepared_observations["False"])
     _save(f"unit-conversion-{manager_count}.json", result)
     assert result["status"] == "infrastructure_check"
     assert result["first_answer"] == "Welche Einheit soll ich verwenden?"
@@ -113,9 +116,10 @@ finally:runtime.close()
 """
 
 
-@pytest.mark.parametrize("manager_count", [5, 50, 250])
-def test_native_unit_conversion_matches_consumer_and_scheduler(manager_count):
-    program = PROGRAM.replace("MANAGER_COUNT", str(manager_count))
+def program(manager_count, parity):
+    value = PROGRAM.replace("MANAGER_COUNT", str(manager_count))
+    if not parity:
+        return value
     original = "report=await run_case(runtime,{'id':'native-unit-conversion','turns':['Welche Gesamtmenge wurde für das Projekt P01 im Jahr 2025 geliefert?','Bitte in Kilogramm.']},make_profile('weak-only',weak_model='gpt-6.1-sol'),factory)"
     replacement = """global turn,stage,seen,final_calc
  from experiments.gm_eval.history_parity import provider_messages
@@ -132,13 +136,33 @@ def test_native_unit_conversion_matches_consumer_and_scheduler(manager_count):
  if compared[0]!=compared[1]:diffs.append({'field':'provider_role_traces'})
  report['unit_parity']={'differences':diffs,'scheduler':report.copy(),'consumer':consumer}
  """
-    assert original in program
-    program = program.replace(original, replacement)
-    program = program.replace(
+    assert original in value
+    value = value.replace(original, replacement)
+    value = value.replace(
         "'source_hashes':report['source_hashes'],",
         "'source_hashes':report['source_hashes'],'parity':report['unit_parity'],",
     )
-    result = _child(program)
+    return value
+
+
+@pytest.fixture(scope="module")
+def manager_count(request):
+    return request.param
+
+
+@pytest.fixture(scope="module")
+def prepared_observations(manager_count):
+    return run_native_programs(
+        {str(parity): program(manager_count, parity) for parity in (False, True)},
+        manager_count=manager_count,
+    )
+
+
+@pytest.mark.parametrize("manager_count", [5, 50, 250], indirect=True)
+def test_native_unit_conversion_matches_consumer_and_scheduler(
+    manager_count, prepared_observations
+):
+    result = deepcopy(prepared_observations["True"])
     _save(f"unit-conversion-parity-{manager_count}.json", result)
     assert result["parity"]["differences"] == []
     assert result["parity"]["consumer"]["status"] == "infrastructure_check"

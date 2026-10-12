@@ -27,3 +27,6 @@ def registered_schema():
 
 def install_registered_schema():
     GraphQL._schema = registered_schema()
+    from general_manager.chat.graphql_contract import compile_read_contract
+
+    compile_read_contract(GraphQL._schema.graphql_schema)

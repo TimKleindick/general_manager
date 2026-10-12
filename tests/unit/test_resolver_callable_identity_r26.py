@@ -13,6 +13,7 @@ from general_manager.api.graphql_resolvers import (
     create_root_list_resolver,
 )
 from general_manager.api.graphql_search import normalize_filter_input
+from general_manager.chat.graphql_contract import clear_contract_cache
 from general_manager.chat.planned.calculation_scope import (
     validate_calculation_binding_evidence,
 )
@@ -115,6 +116,7 @@ def test_wrapping_root_after_calculation_revokes_completion_proof(public_populat
     assert selected_evidence(runner.evidence, "t", ["net"])
     field = public_population[0].graphql_schema.query_type.fields["grossList"]
     field.resolve = _wrapped_subset(field.resolve)
+    clear_contract_cache()
     assert public_population_contract(field, public_population[1]) is None
     with pytest.raises(CalculationError):
         selected_evidence(runner.evidence, "t", ["net"])
@@ -132,6 +134,7 @@ def test_wrapped_root_cannot_authorize_category_lookup(
         if factory_wrapper
         else _wrapped_subset(field.resolve)
     )
+    clear_contract_cache()
     assert public_population_contract(field, GraphQL.manager_registry) is None
     runner = _public_runner(category_schema.manager)
     result, valid = _lookup(runner, category_schema)

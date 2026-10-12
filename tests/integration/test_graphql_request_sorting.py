@@ -320,6 +320,7 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
         self,
     ) -> None:
         from general_manager.api.graphql import GraphQL
+        from general_manager.chat.graphql_contract import clear_contract_cache
         from general_manager.chat.tools import (
             ScopeChatContext,
             execute_chat_tool,
@@ -334,6 +335,7 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
         for manager in managers:
             old = getattr(manager, "chat_exposed", False)
             manager.chat_exposed = True
+            clear_contract_cache()
             try:
                 overview = execute_chat_tool(
                     "get_manager_schema", {"manager": manager.__name__}, context
@@ -372,6 +374,7 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
                 self.assertTrue(result["data"])
             finally:
                 manager.chat_exposed = old
+                clear_contract_cache()
 
     def test_generated_request_list_hydrates_relation_and_sorts_compound_keys(
         self,

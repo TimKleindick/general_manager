@@ -54,19 +54,48 @@ class ChatToolContext(Protocol):
 
 
 class ScopeChatContext:
-    """Adapter that exposes only the attributes chat tools need."""
+    """Keep the current user and native request/ASGI authorization context."""
 
     def __init__(
-        self, *, user: Any, planned_query_timeout_ms: int | None = None
+        self,
+        *,
+        user: Any,
+        planned_query_timeout_ms: int | None = None,
+        scope: Mapping[str, Any] | None = None,
     ) -> None:
         self.user = user
         self.planned_query_timeout_ms = planned_query_timeout_ms
+        self._scope = {} if scope is None else scope
+
+    def __getattr__(self, name: str) -> Any:
+        if not name.startswith("_"):
+            request = self._scope.get("request")
+            if request is not None:
+                try:
+                    return getattr(request, name)
+                except AttributeError:
+                    pass
+            if name in self._scope:
+                return self._scope[name]
+        raise AttributeError(name)
+
+    def graphql_context(self) -> Any:
+        """Preserve HTTP request identity without changing the authenticated user."""
+        request = self._scope.get("request")
+        if request is None:
+            return self
+        if getattr(request, "user", None) is not self.user:
+            fail_read_contract(
+                "GraphQL request and chat scope supply a different user."
+            )
+        return request
 
     @classmethod
     def from_scope(cls, scope: Mapping[str, Any]) -> ScopeChatContext:
         timeout = scope.get("planned_query_timeout_ms")
         return cls(
             user=scope.get("user"),
+            scope=scope,
             planned_query_timeout_ms=(
                 timeout
                 if isinstance(timeout, int) and not isinstance(timeout, bool)
@@ -379,6 +408,53 @@ def _get_authenticated_user(context: ChatToolContext | None) -> Any:
     return user
 
 
+def _execute_graphql(
+    schema: Any,
+    document: str,
+    variables: Mapping[str, Any],
+    context: ChatToolContext | None,
+) -> Any:
+    """Use the HTTP GraphQL middleware builder and its class instantiation rule."""
+    from graphene_django.debug.middleware import DjangoDebugMiddleware
+    from graphene_django.views import instantiate_middleware
+    from general_manager.metrics.graphql import build_graphql_middleware
+
+    middleware = list(instantiate_middleware(build_graphql_middleware()))
+    execution_context = (
+        context.graphql_context() if isinstance(context, ScopeChatContext) else context
+    )
+    if execution_context is None:
+        # Python's omitted context remains anonymous, with a writable middleware
+        # context. Mutation authentication is enforced before this entry point.
+        execution_context = ScopeChatContext(user=None)
+    options: dict[str, Any] = {
+        "variable_values": variables,
+        "context_value": execution_context,
+    }
+    if middleware:
+        options["middleware"] = middleware
+    if not any(isinstance(entry, DjangoDebugMiddleware) for entry in middleware):
+        return schema.execute(document, **options)
+
+    from django.db import connections
+    from graphene_django.debug.sql.tracking import unwrap_cursor
+
+    # DjangoDebug normally ends instrumentation when its debug field resolves.
+    # Structured chat selections do not request that field. End only wrappers
+    # created in this execution, preserving instrumentation owned by an outer call.
+    uninstrumented = tuple(
+        item for item in connections.all() if not hasattr(item, "_graphene_cursor")
+    )
+    previous_debug = getattr(execution_context, "django_debug", None)
+    try:
+        return schema.execute(document, **options)
+    finally:
+        for item in uninstrumented:
+            unwrap_cursor(item)
+        if previous_debug is None and hasattr(execution_context, "django_debug"):
+            del execution_context.django_debug
+
+
 def query(
     *,
     manager: str,
@@ -648,9 +724,7 @@ def query(
                 return execute(sql, params, many, execution_context)
 
             sql_scope.enter_context(connection.execute_wrapper(execute_with_budget))
-        result = schema.execute(
-            query_text, variable_values=variables, context_value=context
-        )
+        result = _execute_graphql(schema, query_text, variables, context)
     errors = getattr(result, "errors", None)
     if errors:
         original_errors = [getattr(error, "original_error", None) for error in errors]
@@ -715,9 +789,7 @@ def mutate(
     query_text, variables = mutation_document(
         runtime_schema(), mutation, input, _camelize
     )
-    result = schema.execute(
-        query_text, variable_values=variables, context_value=context
-    )
+    result = _execute_graphql(schema, query_text, variables, context)
     errors = getattr(result, "errors", None)
     if errors:
         raise ValueError("; ".join(_extract_error_message(error) for error in errors))
