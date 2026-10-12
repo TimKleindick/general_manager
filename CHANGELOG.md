@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.83.1 (2026-10-12)
+
+### Bug Fixes
+
+- Normalize Measurement defaults for ORM schema metadata
+  ([`6394bc3`](https://github.com/TimKleindick/general_manager/commit/6394bc3f33d7a6abab991bffb251030ac22711d8))
+
+
 ## v0.83.0 (2026-10-11)
 
 ### Documentation
