@@ -155,12 +155,27 @@ def exposed(manager: str) -> bool:
     return bool(getattr(GraphQL.manager_registry.get(manager), "chat_exposed", False))
 
 
+def _unsupported_group_type(field_type: Any) -> bool:
+    """Native grouped outputs have no modeled manager-owned chat contract yet."""
+    named = get_named_type(field_type)
+    return (
+        getattr(
+            getattr(named, "graphene_type", None),
+            "_general_manager_group_owner",
+            None,
+        )
+        is not None
+    )
+
+
 def _hidden_type(
     field_type: Any,
     manager_types: Mapping[str, Any],
     visibility: Mapping[str, bool] | None = None,
 ) -> bool:
     named = get_named_type(field_type)
+    if _unsupported_group_type(named):
+        return True
     if visibility is not None:
         return not visibility.get(named.name, True)
     owner = getattr(
@@ -637,6 +652,9 @@ def _compile_read_contract(
         for name, named in original_managers.items()
     }
     for named in original.type_map.values():
+        if _unsupported_group_type(named):
+            visibility[named.name] = False
+            continue
         owner = getattr(
             getattr(named, "graphene_type", None), "_general_manager_filter_owner", None
         )
@@ -823,6 +841,7 @@ def _manager_contract(
             "unions/interfaces/fragments",
             "arbitrary query roots",
             "Python field aliases",
+            "native recursive grouped outputs",
         ],
     }
 
@@ -926,11 +945,21 @@ class ReadCompiler:
             seen.add(name)
             field = named.fields[name]
             target = get_named_type(field.type)
+            if _unsupported_group_type(target):
+                fail_read_contract(
+                    f"Unsupported native recursive grouped output on field {name!r}."
+                )
             if _hidden_type(target, self.manager_types):
                 fail_read_contract(
                     f"Field {name!r} targets a manager that is not chat-exposed."
                 )
             shape = page_shape(target)
+            if shape and _unsupported_group_type(
+                _list_item(target.fields[shape[0]].type)
+            ):
+                fail_read_contract(
+                    f"Unsupported native recursive grouped output on field {name!r}."
+                )
             if shape and _hidden_type(
                 _list_item(target.fields[shape[0]].type), self.manager_types
             ):
