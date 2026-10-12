@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Mapping
 import re
 from typing import Any
 
 
 from general_manager.chat.graphql_contract import (
+    _compiled_index_view,
     compact_index,
     clear_contract_cache,
     manager_schema,
@@ -100,17 +102,20 @@ def get_manager_schema_summary(manager_name: str) -> dict[str, Any] | None:
 
 
 def find_exposed_path(from_manager: str, to_manager: str) -> list[str] | None:
-    index = build_schema_index()
+    index = _compiled_index_view()
     if from_manager not in index or to_manager not in index:
         return None
-    return _find_relational_path(from_manager, to_manager)
+    return _find_relational_path(from_manager, to_manager, index)
 
 
-def _find_relational_path(from_manager: str, to_manager: str) -> list[str] | None:
+def _find_relational_path(
+    from_manager: str,
+    to_manager: str,
+    index: Mapping[str, Mapping[str, Any]],
+) -> list[str] | None:
     """Find a manager path from exposed schema relations, including reverse hops."""
     if from_manager == to_manager:
         return []
-    index = build_schema_index()
     queue: deque[tuple[str, list[str]]] = deque([(from_manager, [])])
     visited = {from_manager}
 

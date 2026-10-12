@@ -1,5 +1,6 @@
 """Unchanged callable identity cannot preserve changed public execution proof."""
 
+from general_manager.chat.graphql_contract import clear_contract_cache
 from copy import deepcopy
 from datetime import date
 from types import FunctionType
@@ -199,6 +200,7 @@ def test_code_drift_revokes_old_and_fresh_complete_cross_population(
                 setattr(self, key, self.get(key))
 
     monkeypatch.setattr(target, "__code__", changed.__code__)
+    clear_contract_cache()
     assert inspect_manager_schema("Gross", view="full")["snapshot"] != before
     _reject_net(*baseline)
     _reject_net(*_setup(public_population))
@@ -234,6 +236,7 @@ def test_same_identifier_coercer_code_revokes_observed_category_membership(
         )
     else:
         monkeypatch.setattr(target, "__code__", changed.__code__)
+    clear_contract_cache()
     assert inspect_manager_schema(schema.manager, view="full")["snapshot"] != before
     calls = len(schema.calls)
     result, valid = _call(

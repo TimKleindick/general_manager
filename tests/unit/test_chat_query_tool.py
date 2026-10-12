@@ -38,7 +38,9 @@ class _RecordingSchema:
     def graphql_schema(self):
         return registered_schema().graphql_schema
 
-    def execute(self, query_text: str, context_value=None, variable_values=None):  # type: ignore[no-untyped-def]
+    def execute(
+        self, query_text: str, context_value=None, variable_values=None, middleware=None
+    ):  # type: ignore[no-untyped-def]
         self.calls.append(
             {
                 "query": " ".join(query_text.split()),
@@ -741,7 +743,9 @@ class ChatQueryToolTests(SimpleTestCase):
         )
         original_execute = schema.execute
 
-        def execute(query_text: str, context_value=None, variable_values=None):  # type: ignore[no-untyped-def]
+        def execute(
+            query_text: str, context_value=None, variable_values=None, middleware=None
+        ):  # type: ignore[no-untyped-def]
             events.append("execute")
             cursor.execute("SELECT query_rows", [])
             return original_execute(

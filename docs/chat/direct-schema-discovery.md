@@ -33,18 +33,42 @@ Tagged overview/detail/full responses carry `inspection_version=3`. Snapshot
 preimages migrate from projection version 2 to 3, so persisted old detail tokens
 cannot authorize this new discovery protocol. The GraphQL read contract remains
 version 2; full native definitions and untagged full Python defaults are unchanged.
-Default, enum or exposure changes still invalidate old detail tokens. Selectors
-fail atomically, and the inspection path captures fresh state on every call.
-Each capture builds only the requested manager's summary. Root capabilities
-are grouped once by their exact native output type, rather than rescanned for
-every catalog manager. All exposure bindings remain in the snapshot, and
-selected definitions still undergo the complete executable-contract checks.
+Selectors fail atomically. The read contract is compiled once after GraphQL
+schema construction and unit metadata attachment, before the executable schema
+is published. Compilation captures all exposure bindings and validates the shared
+public type graph through the existing GraphQL contract encoders. Tool lookups
+export detached manager projections from this immutable generation; mutating an
+export cannot change another observation. Related managers remain bounded
+references even though their permitted definitions share the compiled graph.
+
 Ordinary scalar predicates do not invoke the ID-converter selector; identifier
-predicates retain the declared input and native-type checks. These changes do
-not introduce a schema cache or change the public projection or snapshot format.
-Within one output observation, all getter fields use the same freshly captured
-source signature for their owner. Later observations recompute that signature
-and reject changed inputs or executable meanings.
+predicates retain the declared input and native-type checks. All getter fields
+for one owner use the source signature captured by that schema generation.
+
+Production schema definitions, exposure flags, enums, defaults and executable
+bindings are immutable for the process lifetime. A deployment changing those
+definitions must rebuild the executable schema. In tests, `GraphQL.reset_registry()`
+clears the compiled contracts before fresh manager registration and schema
+construction. A test deliberately changing an already installed native schema
+must call `schema_index.clear_schema_index_cache()` at that explicit rebuild
+boundary before requesting new observations. Tool calls never reset the cache.
+There is no partial compilation success or full-schema fallback.
+
+Each successful compilation adds its generation to the snapshot preimage. An
+explicit rebuild invalidates previous detail tokens and schema evidence even if
+the public definitions are equal. Previous snapshot tokens therefore require a
+new overview and matching detail observations. Workers exchanging tokens must
+construct the same schemas in the same order; ordinary production workers each
+construct one schema at startup. In-place definition mutation without rebuilding
+is unsupported and does not publish new metadata. Request data and authorization
+decisions are never stored in the compiled contract.
+
+Internal relation-path checks read the immutable compiled index directly and use
+one generation for both endpoint membership and the path walk. This avoids
+copying the entire public index for each candidate's anchor-distance check.
+Public `compact_index()` and `build_schema_index()` results remain fresh mutable
+dictionaries and lists. Returned paths are also detached lists. Exposure rules,
+schema snapshots and per-request GraphQL authorization are unchanged.
 
 Structured schema requirements retain their manager, view, selected definition
 set and snapshot bindings. Unspecified legacy requirements still require full
@@ -55,3 +79,17 @@ This is a selective projection, not a full-schema roundtrip. Validation compares
 selected definitions exactly and measures complete discovery → details → actual
 query sequences, including all serialized request sizes. Lossless transport
 codec gm.schema-data/3 remains separate and preserves complete eligible inputs.
+
+Chat queries and confirmed mutations use the configured GraphQL middleware
+builder and class-instantiation rules. HTTP execution receives the actual request
+object, bound to the same user as the chat scope. WebSocket execution receives the
+current user and ASGI scope attributes through `ScopeChatContext`. GraphQL retains
+instance and field authorization on every execution. Schema reuse does not cache
+permission decisions or replace chat's input, evidence or write-confirmation checks.
+
+An omitted Python query context uses a writable `ScopeChatContext(user=None)`;
+it remains anonymous and runs the same configured middleware. Mutation callers
+still need an authenticated context before confirmation or execution. When Django
+debug middleware is enabled, a chat execution removes only SQL instrumentation it
+created, including on GraphQL errors. Existing instrumentation owned by an outer
+execution and the actual HTTP request identity are preserved.

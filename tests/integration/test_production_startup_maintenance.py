@@ -17,6 +17,7 @@ def test_production_discovery_checks_signals_and_graphql_without_maintenance(tmp
         from general_manager import GeneralManager, ReadOnlyInterface, IndexConfig
 
         class Country(GeneralManager):
+            chat_exposed = True
             _data = [{"code": "DE"}]
             class Interface(ReadOnlyInterface):
                 code = models.CharField(max_length=2, unique=True)
@@ -71,6 +72,8 @@ def test_production_discovery_checks_signals_and_graphql_without_maintenance(tmp
             schema = GraphQL.get_schema()
             assert schema is not None
             assert "countryList" in schema.graphql_schema.query_type.fields
+            from general_manager.chat.graphql_contract import _COMPILED
+            assert schema.graphql_schema in _COMPILED
             backend = get_search_backend()
             capability = Country.Interface.require_capability("read_only_management")
             with ExitStack() as stack:

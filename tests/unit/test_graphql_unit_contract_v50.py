@@ -184,6 +184,7 @@ def test_unit_change_invalidates_old_snapshot_and_captured_value_is_immutable(
     schema.get_type("Other").fields["rate"].extensions[UNIT_EXTENSION] = (
         FieldUnitContract.factor(source_unit="count", target_unit="m").as_mapping()
     )
+    contract.clear_contract_cache()
     new = inspect_manager_schema("Other")
     assert old["snapshot"] != new["snapshot"]
     assert old["output_fields"]["rate"]["unit_contract"]["target"]["dimension"] == {
@@ -199,6 +200,7 @@ def test_hidden_related_unit_details_are_never_expanded(unit_schema: Any) -> Non
     _attach(unit_schema)
     old = inspect_manager_schema("Item")
     unit_schema[1]["Other"].chat_exposed = False
+    contract.clear_contract_cache()
     current = inspect_manager_schema("Item")
     assert "other" not in current["output_fields"]
     assert current["snapshot"] != old["snapshot"]

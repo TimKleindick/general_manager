@@ -172,17 +172,17 @@ class ChatSchemaIndexTests(SimpleTestCase):
         assert "MaterialManager" in index
 
     def test_build_schema_index_is_cached_until_explicitly_cleared(self) -> None:
-        """Registry content changes refresh the cache without manual clear."""
+        """An explicit lifecycle reset refreshes detached discovery exports."""
         first = build_schema_index()
         GraphQL.graphql_type_registry.pop("PartManager")
         GraphQL.manager_registry.pop("PartManager")
 
         second = build_schema_index()
-        third = build_schema_index()
-
         assert second is not first
-        assert third is second
-        assert set(second.keys()) == {"MaterialManager"}
+        assert second == first
+        clear_schema_index_cache()
+        third = build_schema_index()
+        assert set(third.keys()) == {"MaterialManager"}
 
     def test_search_managers_matches_name_description_and_fields(self) -> None:
         results = search_manager_summaries("materials density")
