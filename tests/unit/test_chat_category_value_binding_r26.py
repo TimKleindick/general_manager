@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from general_manager.chat.graphql_contract import clear_contract_cache
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
@@ -296,6 +297,7 @@ def test_changed_schema_or_exposure_revokes_actual_value_binding(
         GraphQL._schema = graphene.Schema(query=schema.query_type, auto_camelcase=False)
     else:
         GraphQL.manager_registry[schema.manager].chat_exposed = False
+    clear_contract_cache()
     before = len(schema.calls)
     result, valid = _call(
         runner,
@@ -465,6 +467,7 @@ def test_exposure_change_during_public_query_rejects_category_evidence_and_cache
     def change_after_read(name, args, context):
         result = execute_chat_tool(name, args, context)
         GraphQL.manager_registry[schema.manager].chat_exposed = False
+        clear_contract_cache()
         return result
 
     runner.callbacks = replace(runner.callbacks, execute_tool=change_after_read)
@@ -483,6 +486,7 @@ def test_exposure_change_during_public_query_rejects_category_evidence_and_cache
     assert not valid
     assert len(runner.evidence.records) == (2 if mode == "binding" else 1)
     GraphQL.manager_registry[schema.manager].chat_exposed = True
+    clear_contract_cache()
     before = len(schema.calls)
     retry, valid = _call(
         runner, "query", manager=schema.manager, fields=["family"], **metadata
@@ -604,6 +608,7 @@ def test_arbitrary_root_cannot_supply_category_authority_even_with_generated_inp
         "items": schema.rows,
         "page_info": {"total_count": len(schema.rows)},
     }
+    clear_contract_cache()
     result, valid = _call(
         runner,
         "query",

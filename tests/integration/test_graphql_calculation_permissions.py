@@ -26,6 +26,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                 name = CharField(max_length=100)
 
         class ReportCalculation(GeneralManager):
+            chat_exposed = True
             authorization_checks: ClassVar[list[tuple[int, date]]] = []
             result_evaluations: ClassVar[list[tuple[int, date]]] = []
             permission_constraints: ClassVar[list[PermissionConstraint]] = [
@@ -137,6 +138,25 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                 ],
                 "pageInfo": {"totalCount": 6},
             },
+        )
+
+    def test_chat_uses_the_same_instance_authorization_before_getters(self) -> None:
+        from general_manager.chat.tools import ScopeChatContext, query
+
+        context = ScopeChatContext.from_scope({"user": self.user})
+        result = query(
+            manager="ReportCalculation",
+            fields=["period", "result"],
+            filters={},
+            limit=10,
+            context=context,
+        )
+        self.assertEqual(result["total_count"], 6)
+        self.assertEqual([row["result"] for row in result["data"]], [2, 3, 4, 2, 3, 4])
+        self.assertTrue(self.Calculation.authorization_checks)
+        self.assertTrue(self.Calculation.result_evaluations)
+        self.assertTrue(
+            all(period.month > 1 for _, period in self.Calculation.result_evaluations)
         )
 
     def test_filtered_list_returns_only_instance_authorized_calculations(self) -> None:

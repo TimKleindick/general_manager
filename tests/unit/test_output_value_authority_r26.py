@@ -1,5 +1,6 @@
 """Opt-in evidence follows the executable source getter, not field spelling."""
 
+from general_manager.chat.graphql_contract import clear_contract_cache
 from functools import wraps
 from types import SimpleNamespace
 from typing import ClassVar
@@ -77,6 +78,7 @@ def test_changed_category_getter_cannot_attest_empty_business_population(
         monkeypatch.setattr(field, "resolve", altered)
     else:
         monkeypatch.setattr(field, "resolve", lambda row, _info: row.name)
+    clear_contract_cache()
     ordinary = query(
         manager=schema.manager,
         filters={},
@@ -112,6 +114,7 @@ def test_old_category_lookup_and_details_cannot_survive_getter_change(
     assert valid and observed["data"][0]["family"] == schema.actual
     field = GraphQL._schema.graphql_schema.get_type(schema.manager).fields["family"]
     monkeypatch.setattr(field, "resolve", lambda row, _info: row.name)
+    clear_contract_cache()
     before = len(schema.calls)
     result, valid = _call(
         runner,
@@ -145,6 +148,7 @@ def test_cross_query_revalidates_all_output_source_paths(
     before = inspect_manager_schema(manager, view="full")["snapshot"]
     field = public_population[0].graphql_schema.get_type(type_name).fields[field_name]
     monkeypatch.setattr(field, "resolve", lambda row, _info: getattr(row, attribute))
+    clear_contract_cache()
     assert inspect_manager_schema(manager, view="full")["snapshot"] != before
     _reject_net(runner, runtime, binding)
     _reject_net(*_setup(public_population))
@@ -170,6 +174,7 @@ def test_custom_list_envelope_getter_revokes_common_population(
     monkeypatch.setattr(
         field, "resolve", lambda *args, **kwargs: original(*args, **kwargs)
     )
+    clear_contract_cache()
     assert inspect_manager_schema("Gross", view="full")["snapshot"] != before
     _reject_net(runner, runtime, binding)
 
@@ -294,6 +299,7 @@ def test_real_manager_source_change_invalidates_complete_category_proof(
     else:
         descriptor = vars(manager)["family"]
         monkeypatch.setattr(descriptor, "_attr_name", "name")
+    clear_contract_cache()
     assert inspect_manager_schema(schema.manager, view="full")["snapshot"] != before
     ordinary = query(
         manager=schema.manager,
@@ -422,6 +428,7 @@ def test_shared_measurement_output_keeps_source_and_public_conversion(
                 operation,
                 lambda *args, **kwargs: original_operation(*args, **kwargs),
             )
+        clear_contract_cache()
         changed = inspect_manager_schema(schema.manager, view="full")
         assert changed["snapshot"] != current["snapshot"]
         assert (
@@ -506,6 +513,7 @@ def test_same_output_helper_function_with_changed_code_revokes_old_category(
 
         target = graphql_resolvers._ensure_as_of_compatible
     monkeypatch.setattr(target, "__code__", changed.__code__)
+    clear_contract_cache()
     assert inspect_manager_schema(schema.manager, view="full")["snapshot"] != before
     before_calls = len(schema.calls)
     result, valid = _call(

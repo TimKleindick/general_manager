@@ -118,6 +118,7 @@ def test_schema_changes_invalidate_details_without_cache_bypass(exposed_schema, 
         schema.query_type.fields["partList"].args["pageSize"].default_value = 7
     else:
         other.chat_exposed = False
+    contract.clear_contract_cache()
     with pytest.raises(SchemaInspectionError, match="schema_snapshot_mismatch"):
         inspect_manager_schema(
             "Part", view="detail", types=["Part"], snapshot=old["snapshot"]
@@ -216,6 +217,7 @@ def test_capture_freezes_exposure_definitions_and_defaults_before_serializing(
     assert observed["root_fields"]["partList"]["arguments"]["pageSize"]["default"] == 25
     assert "Other" in observed["types"] and "OtherFilter" in observed["types"]
     assert observed["types"]["State"]["values"] == ["OPEN", "CLOSED"]
+    contract.clear_contract_cache()
     fresh = inspect_manager_schema("Part", view="full")
     assert fresh["snapshot"] != observed["snapshot"]
     assert fresh["root_fields"]["partList"]["arguments"]["pageSize"]["default"] == 9

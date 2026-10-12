@@ -379,8 +379,12 @@ class _Schema:
         )
         self.calls: list[dict[str, object]] = []
 
-    def execute(self, query_text: str, context_value=None, variable_values=None):  # type: ignore[no-untyped-def]
-        self.calls.append({"query": query_text, "context": context_value})
+    def execute(  # type: ignore[no-untyped-def]
+        self, query_text: str, context_value=None, variable_values=None, middleware=None
+    ):
+        self.calls.append(
+            {"query": query_text, "context": context_value, "middleware": middleware}
+        )
         return _Result(data={"createPart": {"success": True}})
 
 

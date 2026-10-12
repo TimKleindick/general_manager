@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from functools import lru_cache
 from copy import deepcopy
+from dataclasses import dataclass
 import hashlib
 import json
+from threading import RLock
+from types import MappingProxyType
 from typing import Any, Never, cast
+from weakref import WeakKeyDictionary
 
 from graphql import (
     GraphQLSchema,
@@ -42,6 +45,55 @@ from general_manager.interface.unit_contract import (
 
 CONTRACT_VERSION = 2
 INSPECTION_VERSION = 3
+
+
+@dataclass(frozen=True)
+class _CompiledContract:
+    """Public metadata belongs to one verified executable-schema generation."""
+
+    index: Mapping[str, Any]
+    contracts: Mapping[str, Any]
+    snapshots: Mapping[str, str]
+
+
+_COMPILED: WeakKeyDictionary[GraphQLSchema, _CompiledContract] = WeakKeyDictionary()
+_COMPILE_LOCK = RLock()
+_COMPILING: set[GraphQLSchema] = set()
+_GENERATION = 0
+_RESET_REVISION = 0
+
+
+def _freeze_public(value: Any, memo: dict[int, Any] | None = None) -> Any:
+    """Freeze JSON contract containers while retaining shared public subtrees."""
+    memo = {} if memo is None else memo
+    if type(value) not in (dict, list):
+        return value
+    if id(value) in memo:
+        return memo[id(value)]
+    if type(value) is dict:
+        target: dict[str, Any] = {}
+        frozen: Any = MappingProxyType(target)
+        memo[id(value)] = frozen
+        target.update({key: _freeze_public(item, memo) for key, item in value.items()})
+    else:
+        frozen = tuple(_freeze_public(item, memo) for item in value)
+        memo[id(value)] = frozen
+    return frozen
+
+
+def _export_public(value: Any, memo: dict[int, Any] | None = None) -> Any:
+    memo = {} if memo is None else memo
+    if not isinstance(value, (Mapping, tuple)):
+        return value
+    if id(value) in memo:
+        return memo[id(value)]
+    result: Any = {} if isinstance(value, Mapping) else []
+    memo[id(value)] = result
+    if isinstance(value, Mapping):
+        result.update({key: _export_public(item, memo) for key, item in value.items()})
+    else:
+        result.extend(_export_public(item, memo) for item in value)
+    return result
 
 
 class ChatReadContractError(ValueError):
@@ -236,28 +288,6 @@ def _relations(
     return relations
 
 
-def _cache_key(schema: GraphQLSchema) -> tuple[Any, ...]:
-    # A runtime schema is immutable after construction. Registry exposure/domain
-    # changes are independently relevant; replacement of graphql_schema invalidates.
-    return (
-        schema,
-        tuple(
-            (name, id(value), exposed(name), getattr(value, "__doc__", ""))
-            for name, value in sorted(GraphQL.manager_registry.items())
-        ),
-        tuple(
-            (name, id(value))
-            for name, value in sorted(GraphQL.graphql_type_registry.items())
-        ),
-    )
-
-
-@lru_cache(maxsize=8)
-def _index_cached(key: tuple[Any, ...]) -> dict[str, dict[str, Any]]:
-    schema = key[0]
-    return _build_index(schema, GraphQL.manager_registry, _manager_types(schema))
-
-
 def _build_index(
     schema: GraphQLSchema,
     registry: Mapping[str, Any],
@@ -321,15 +351,27 @@ def _build_index(
     return dict(sorted(index.items()))
 
 
-def compact_index() -> dict[str, dict[str, Any]]:
+def _compiled_index_view() -> Mapping[str, Mapping[str, Any]]:
+    """Internal readers share one immutable, exposure-filtered generation."""
     schema = getattr(GraphQL.get_schema(), "graphql_schema", None)
     return (
-        _index_cached(_cache_key(schema)) if isinstance(schema, GraphQLSchema) else {}
+        compile_read_contract(schema).index
+        if isinstance(schema, GraphQLSchema)
+        else MappingProxyType({})
     )
 
 
+def compact_index() -> dict[str, dict[str, Any]]:
+    """Public callers receive a detached, mutable index as before."""
+    return cast(dict[str, dict[str, Any]], _export_public(_compiled_index_view()))
+
+
 def clear_contract_cache() -> None:
-    _index_cached.cache_clear()
+    """Explicit schema reset/rebuild boundary; never called for a tool lookup."""
+    global _RESET_REVISION
+    with _COMPILE_LOCK:
+        _COMPILED.clear()
+        _RESET_REVISION += 1
 
 
 def _argument_info(argument: Any) -> dict[str, Any]:
@@ -414,11 +456,13 @@ def _copy_contract_schema(
     manager_types: Mapping[str, Any] | None = None,
     visibility: Mapping[str, bool] | None = None,
     registry: Mapping[str, Any] | None = None,
+    compile_all: bool = False,
 ) -> GraphQLSchema:
     """Freeze observable definitions; never clone private runtime values.
 
-    Production captures only the selected manager's reachable exposed contract.
-    Related managers remain references. Native GraphQL serialization freezes
+    A shared compile captures exposed roots once; manager projections still
+    stop at related-manager references. Standalone captures select one manager.
+    Native GraphQL serialization freezes
     public defaults before later formatting hooks; arbitrary internal enum values,
     custom-scalar state, resolvers and metadata are not copied. The concrete shells
     are an inspection graph and must never execute or validate GraphQL requests.
@@ -429,12 +473,12 @@ def _copy_contract_schema(
     selected: dict[str, tuple[Any, dict[str, Any]]] = {}
     root_fields = (
         {name: schema.query_type.fields[name] for name in roots}
-        if schema.query_type is not None and manager is not None
+        if schema.query_type is not None and (manager is not None or compile_all)
         else {}
     )
     pending = (
         [get_named_type(field.type) for field in root_fields.values()]
-        if manager is not None
+        if manager is not None or compile_all
         else []
     )
     pending.extend(
@@ -447,7 +491,7 @@ def _copy_contract_schema(
         if named.name in selected or _hidden_type(named, manager_types, visibility):
             continue
         fields = {}
-        reference = any(
+        reference = not compile_all and any(
             target is named and name != manager
             for name, target in manager_types.items()
         )
@@ -565,7 +609,7 @@ def _copy_contract_schema(
             name: copy_field(value, input_field=input_field)
             for name, value in field_items
         }
-    if schema.query_type is not None and manager is not None:
+    if schema.query_type is not None and (manager is not None or compile_all):
         memo[id(schema.query_type)].fields = {
             name: copy_field(value, input_field=False)
             for name, value in root_fields.items()
@@ -577,17 +621,10 @@ def _copy_contract_schema(
     return result
 
 
-def capture_manager_contract(manager: str) -> tuple[dict[str, Any] | None, str]:
-    """Capture definitions and exposure once, without ORM/backend reflection.
-
-    Copy GraphQL definitions/defaults so serializers cannot combine later global
-    state with this observation. Visibility is captured separately because the
-    Graphene classes on copied GraphQL types intentionally retain their identity.
-    This inspection path never uses the immutable-schema discovery cache.
-    """
-    original = getattr(GraphQL.get_schema(), "graphql_schema", None)
-    if not isinstance(original, GraphQLSchema):
-        return None, ""
+def _compile_read_contract(
+    original: GraphQLSchema, generation: int
+) -> _CompiledContract:
+    """Compile the shared public graph once, then project bounded manager views."""
     registry = dict(GraphQL.manager_registry)
     type_registry = dict(GraphQL.graphql_type_registry)
     original_managers = _manager_types(original, type_registry)
@@ -605,45 +642,85 @@ def capture_manager_contract(manager: str) -> tuple[dict[str, Any] | None, str]:
         )
         if owner is not None:
             visibility[named.name] = bool(getattr(owner, "chat_exposed", False))
-    summary = _build_index(
-        original,
-        registry,
-        original_managers,
-        visibility,
-        selected_manager=manager,
-    ).get(manager)
+    index = _build_index(original, registry, original_managers, visibility)
     schema = _copy_contract_schema(
         original,
-        manager=manager,
-        roots=summary["roots"] if summary else (),
+        roots=tuple({root for summary in index.values() for root in summary["roots"]}),
         manager_types=original_managers,
         visibility=visibility,
         registry=registry,
+        compile_all=True,
     )
     manager_types = {
         name: schema.get_type(named.name) for name, named in original_managers.items()
     }
-    full = (
-        None
-        if summary is None
-        else _manager_contract(manager, summary, schema, manager_types, visibility)
+    contracts = {}
+    snapshots = {}
+    for manager, summary in index.items():
+        full = _manager_contract(manager, summary, schema, manager_types, visibility)
+        contracts[manager] = full
+        snapshots[manager] = hashlib.sha256(
+            json.dumps(
+                {
+                    "projection_version": INSPECTION_VERSION,
+                    "generation": generation,
+                    "manager": manager,
+                    "contract": full,
+                    "exposure": exposure,
+                    "visibility": visibility,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+    return _CompiledContract(
+        _freeze_public(index), _freeze_public(contracts), MappingProxyType(snapshots)
     )
-    snapshot = hashlib.sha256(
-        json.dumps(
-            {
-                "projection_version": INSPECTION_VERSION,
-                "manager": manager,
-                "contract": full,
-                "exposure": exposure,
-                "visibility": visibility,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode()
-    ).hexdigest()
-    return full, snapshot
+
+
+def compile_read_contract(schema: GraphQLSchema) -> _CompiledContract:
+    """Bind immutable metadata to a finished schema, with atomic publication.
+
+    Startup schemas have deterministic generation order across equivalent workers.
+    Explicit in-process rebuilds require the same coordinated construction order
+    on workers that exchange snapshots; production uses one schema per process.
+    Direct schema fixtures compile on their first lookup through this same path.
+    """
+    global _GENERATION
+    with _COMPILE_LOCK:
+        cached = _COMPILED.get(schema)
+        if cached is not None:
+            return cached
+        if _COMPILING:
+            fail_read_contract("Reentrant schema contract compilation is unsupported.")
+        revision = _RESET_REVISION
+        generation = _GENERATION + 1
+        _COMPILING.add(schema)
+        try:
+            compiled = _compile_read_contract(schema, generation)
+        finally:
+            _COMPILING.remove(schema)
+        if revision != _RESET_REVISION:
+            fail_read_contract("Schema rebuild interrupted contract compilation.")
+        _COMPILED[schema] = compiled
+        _GENERATION = generation
+        return compiled
+
+
+def capture_manager_contract(manager: str) -> tuple[dict[str, Any] | None, str]:
+    """Export one manager from its compiled schema generation, without reflection."""
+    schema = getattr(GraphQL.get_schema(), "graphql_schema", None)
+    if not isinstance(schema, GraphQLSchema):
+        return None, ""
+    compiled = compile_read_contract(schema)
+    full = compiled.contracts.get(manager)
+    return (
+        (None, "")
+        if full is None
+        else (_export_public(full), compiled.snapshots[manager])
+    )
 
 
 def manager_schema(manager: str) -> dict[str, Any] | None:

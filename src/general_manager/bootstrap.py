@@ -614,6 +614,9 @@ def handle_graph_ql(
     attach_unit_contracts(
         schema.graphql_schema, GraphQL.manager_registry, GraphQL.graphql_type_registry
     )
+    from general_manager.chat.graphql_contract import compile_read_contract
+
+    compile_read_contract(schema.graphql_schema)
     GraphQL._schema = schema
     from general_manager.uploads.urls import add_file_upload_urls
 

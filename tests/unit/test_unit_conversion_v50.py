@@ -164,6 +164,10 @@ def _setup(
         )
     if case == "hidden":
         fixture[1]["Other"].chat_exposed = False
+    if case in {"stale", "hidden"}:
+        from general_manager.chat.graphql_contract import clear_contract_cache
+
+        clear_contract_cache()
     return store, binding, operands
 
 
@@ -300,6 +304,9 @@ def test_derived_conversion_rechecks_original_proofs_and_value(
         unit_schema[0].get_type("Other").fields["rate"].extensions[UNIT_EXTENSION] = (
             FieldUnitContract.factor(source_unit="count", target_unit="m").as_mapping()
         )
+        from general_manager.chat.graphql_contract import clear_contract_cache
+
+        clear_contract_cache()
     converted = EvidenceRecord.create(
         converted.evidence_id,
         converted.task_id,

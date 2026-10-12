@@ -59,7 +59,7 @@ from experiments.gm_eval.profiles import make_profile
 from experiments.siwc_eval.provider import payload
 from general_manager.chat.providers.base import DoneEvent,TextChunkEvent,TokenUsage,ToolCallEvent
 from general_manager.chat.planned.schema_projection import logical_messages
-from general_manager.chat.graphql_contract import manager_schema,ChatReadContractError
+from general_manager.chat.graphql_contract import manager_schema,ChatReadContractError,clear_contract_cache
 
 def named(signature): return re.sub(r"[\[\]!]", "", signature)
 def observation(reference, feedback):
@@ -177,6 +177,7 @@ async def run():
  assert reference["types"][reference_name]=={"kind":"reference","manager":"Project"}
  assert runtime.tool("get_manager_schema",{"manager":"Project","view":"detail","types":[target["type"]],"snapshot":old["snapshot"]})["code"]=="schema_snapshot_mismatch"
  runtime.managers["Project"].chat_exposed=False
+ clear_contract_cache()  # Rebuild the immutable contract after changing exposure.
  fresh=runtime.tool("get_manager_schema",{"manager":"Customer"})
  invalid=runtime.tool("get_manager_schema",{"manager":"Customer","view":"detail","types":[old["type"]],"snapshot":old["snapshot"]})
  try:
@@ -188,6 +189,7 @@ async def run():
  assert reference_name not in fresh["type_manifest"]
  assert runtime.tool("get_manager_schema",{"manager":"Project"}) is None
  runtime.managers["Project"].chat_exposed=True
+ clear_contract_cache()
  exact_discovery=runtime.tool("search_managers",{"query":"ProjectCommercial"})
  return {"exact_name_search_probe":{"query":"ProjectCommercial","returned_managers":[row["manager"] for row in exact_discovery],"exact_manager_returned":any(row["manager"]=="ProjectCommercial" for row in exact_discovery)},
          "hidden_relation_rejected":hidden["rejected"],"snapshot_invalidated":invalid.get("code")=="schema_snapshot_mismatch",

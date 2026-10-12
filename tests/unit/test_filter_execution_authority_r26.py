@@ -1,5 +1,6 @@
 """Generated predicate authority follows actual coercion and relation meaning."""
 
+from general_manager.chat.graphql_contract import clear_contract_cache
 from copy import deepcopy
 from datetime import date
 from enum import Enum
@@ -232,6 +233,7 @@ def test_non_id_identity_input_drift_revokes_observed_category_filter(
     else:
         monkeypatch.setattr(family_input, "type", int)
 
+    clear_contract_cache()
     assert inspect_manager_schema(schema.manager, view="full")["snapshot"] != before
     calls = len(schema.calls)
     result, valid = _call(
@@ -429,6 +431,7 @@ def test_changed_coercion_revokes_snapshot_and_calculation_admission(
     else:
         argument = native.query_type.fields["grossList"].args["pageSize"]
         monkeypatch.setattr(argument, "out_name", "page")
+    clear_contract_cache()
     after = inspect_manager_schema("Gross", view="full")
     assert after["snapshot"] != before["snapshot"]
     runner, runtime, binding = existing or _setup(public_population)
@@ -459,6 +462,7 @@ def test_category_business_filter_cannot_bind_changed_execution(
         monkeypatch.setattr(
             scalar, damage, lambda *args, **kwargs: original(*args, **kwargs)
         )
+    clear_contract_cache()
     assert (
         inspect_manager_schema(schema.manager, view="full")["snapshot"]
         != before["snapshot"]
@@ -515,6 +519,7 @@ def test_live_common_relation_lookup_drift_revokes_generated_authority(
         return attributes
 
     monkeypatch.setattr(interface, "get_attribute_types", classmethod(changed))
+    clear_contract_cache()
     assert (
         inspect_manager_schema("Gross", view="full")["snapshot"] != before["snapshot"]
     )
@@ -687,6 +692,7 @@ def test_changed_enum_codec_invalidates_observed_lookup_authority(
         monkeypatch.setattr(
             native, damage, lambda *args, **kwargs: original(*args, **kwargs)
         )
+    clear_contract_cache()
     assert (
         inspect_manager_schema(schema.manager, view="full")["snapshot"]
         != before["snapshot"]
@@ -745,6 +751,7 @@ def test_changed_common_manager_entrypoint_revokes_population_authority(
         return original(**kwargs).filter(amount__lt=200)
 
     monkeypatch.setattr(manager, entrypoint, classmethod(narrowed))
+    clear_contract_cache()
     assert (
         inspect_manager_schema("Gross", view="full")["snapshot"] != before["snapshot"]
     )
@@ -816,6 +823,7 @@ def test_changed_common_normalizer_helper_cannot_attest_subset(
         schema.graphql_schema.query_type.fields[
             "grossList"
         ].resolve = create_root_list_resolver(managers["Gross"])
+    clear_contract_cache()
     assert (
         inspect_manager_schema("Gross", view="full")["snapshot"] != before["snapshot"]
     )
@@ -837,5 +845,6 @@ def test_changed_native_identity_metadata_revokes_captured_predicate_authority(
         return attributes
 
     monkeypatch.setattr(interface, "get_attribute_types", classmethod(changed))
+    clear_contract_cache()
     assert inspect_manager_schema("Gross", view="full")["snapshot"] != before
     _reject_net(*_setup(public_population))

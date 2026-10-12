@@ -12,6 +12,7 @@ import json
 from experiments.gm_eval.runtime import bootstrap
 r=bootstrap(manager_count=10)
 from general_manager.api.graphql import GraphQL
+from general_manager.chat.graphql_contract import clear_contract_cache
 from general_manager.chat.tools import get_manager_schema,ScopeChatContext
 schema=GraphQL.get_schema()
 original=schema.execute
@@ -24,6 +25,7 @@ results={}
 try:
  for hidden in ['Customer','Material']:
   manager=GraphQL.manager_registry[hidden];manager.chat_exposed=False
+  clear_contract_cache()  # Exposure changes require an explicit schema rebuild.
   cases={
    'direct_filter':dict(manager='Project',filters={'customer':{'code':'C01'}},fields=['code']),
    'direct_argument':dict(manager='Project',filters={},arguments={'filter':{'customer':{'code':'C01'}}},fields=['code']),
@@ -44,6 +46,7 @@ try:
    public=original('{'+detail['roots'][0]+'(filter:{customer:{code:"C01"}}){items{code}}}',context_value=ScopeChatContext.from_scope(r.scope))
    results['public']={'data':public.data,'errors':[str(error) for error in public.errors or []]}
   manager.chat_exposed=True
+  clear_contract_cache()
  results['restored']=r.tool('query',dict(manager='Project',filters={'customer':{'code':'C01'}},fields=['code']))
  print('GM_EVAL_RESULT='+json.dumps(results))
 finally:r.close()
