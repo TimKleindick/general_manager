@@ -16,6 +16,23 @@ Follow [CONTRIBUTING.md](CONTRIBUTING.md) for repository-specific contribution, 
 - Install and respect `pre-commit` hooks; run `pre-commit run --all-files` when
   touching many files.
 
+## Existing Responsibilities and Reuse
+
+- Before any implementation, including features, bug fixes, refactoring,
+  optimizations, validations, and checks, inspect the existing GeneralManager
+  code and call paths to identify where that responsibility is already handled
+  and which layer owns it.
+- Reuse or extend the owning implementation instead of duplicating its work.
+  Add a separate check only for a demonstrated gap or a distinct responsibility;
+  document the gap and why the existing implementation does not cover it.
+- For chat operations executed through GraphQL, rely on GraphQL's permission
+  enforcement with the correct user and request context. Verify that execution
+  path and context before relying on it; do not duplicate permission evaluation
+  in chat when GraphQL already performs it.
+- Preserve checks with distinct responsibilities, including input validation,
+  schema and evidence consistency, and write confirmation. Identify their owner
+  and purpose before adding, moving, or removing them.
+
 ## Coding Standards
 
 - Prefer clear, explicit code to clever abstractions. When intent is not
