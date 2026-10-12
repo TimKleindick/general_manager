@@ -121,6 +121,35 @@ def test_optional_none_default_proof_revalidates_replacement_and_restoration():
     assert executable_matches(optional, pin)
 
 
+@pytest.mark.parametrize("optional", [False, True])
+def test_equal_distinct_code_retains_proof_with_fresh_default_checks(optional):
+    if optional:
+
+        def original(value=None):
+            return value
+
+    else:
+
+        def original(value):
+            return value
+
+    current = FunctionType(original.__code__, globals(), argdefs=original.__defaults__)
+    pin = executable_signature(current)
+    equivalent = original.__code__.replace()
+    assert equivalent is not original.__code__
+    assert equivalent == original.__code__
+    current.__code__ = equivalent
+    assert executable_matches(current, pin)
+    current.__defaults__ = ("changed",)
+    assert not executable_matches(current, pin)
+    current.__defaults__ = original.__defaults__
+    assert executable_matches(current, pin)
+    current.__kwdefaults__ = {"changed": None}
+    assert not executable_matches(current, pin)
+    current.__kwdefaults__ = None
+    assert executable_matches(current, pin)
+
+
 def test_frozen_scalar_and_predicate_metadata_returns_detached_public_mappings():
     frozen = {
         "type": "Int",

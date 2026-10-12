@@ -122,5 +122,9 @@ def executable_matches(value: object, signature: object) -> bool:
         and value.__kwdefaults__ is None
         and value.__closure__ is None
     ):
-        return bool(value.__code__ == signature[0])
+        # Immutable code identity already establishes equality. In particular,
+        # Python 3.14's direct equality scans even an identical code object's
+        # instructions and constants; tuple comparison used this shortcut.
+        code = value.__code__
+        return code is signature[0] or bool(code == signature[0])
     return executable_signature(value) == signature
