@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.85.0 (2026-10-12)
+
+### Bug Fixes
+
+- **graphql**: Derive relation pages from item type names
+  ([`0b13b8b`](https://github.com/TimKleindick/general_manager/commit/0b13b8b35b041851d856550356a0e3efcad034aa))
+
+### Breaking Changes
+
+- **graphql**: Relation page type names now use <Manager>TypePage instead of <Manager>Page. Root
+  page names, query fields, arguments and result shapes are retained. Regenerate schema-based
+  clients and update page fragments.
+
+
 ## v0.84.0 (2026-10-12)
 
 ### Bug Fixes
