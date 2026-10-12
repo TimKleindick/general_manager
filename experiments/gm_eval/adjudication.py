@@ -116,6 +116,8 @@ choice may replace it. Never reconstruct omitted numeric results, infer choices
 from available tools, or use an unsupported prior assistant claim as authority.
 Leave unresolved scope absent/unknown. Judge visible_context_carryover independently.
 Selection constraints may assert a single value or a flat list of values.
+Serialize each claim using its declared field schema; array-valued fields remain
+arrays even for a single claimed value. Use a scalar only where the schema allows it.
 Preserve every explicitly claimed list element and its order, including wrong
 values; do not collapse it into a scalar or replace display names with an
 inferred category value. A representable constraint is not necessarily correct.
@@ -415,12 +417,19 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
             "or a null/empty narrowing filter. If the answer asserts unrestricted scope "
             "with no effective filters, use the empty object. Preserve every actual narrowing, "
             "contradiction or unknown extra claimed filter; do not discard it to match a schema. "
-            "Use a scalar for a single claimed value and a flat list for multiple claimed values. "
+            "Follow each constraint field's declared schema: array-valued fields use an array "
+            "even for a single claimed value; use a scalar only where that field permits it. "
             "Preserve list elements and order; never collapse a list to a reference value "
             "or infer category values from display names. "
             "Check the correctness of neutral and explanatory scope statements separately "
             "under answer_supported. Absent scope remains absent, not an invented empty scope."
         )
+        for field in shapes["constraints"].get("properties", {}).values():
+            if field.get("type") == ["array", "null"]:
+                field["description"] = field.get("description", "") + (
+                    " Serialize a present claim as an array even for a single claimed value; "
+                    "preserve all asserted elements and their order."
+                )
     return shapes
 
 

@@ -193,6 +193,150 @@ def exclusion_control():
     return expectation, observed, judgment
 
 
+def family_exclusion_control():
+    expectation, observed, judgment = exclusion_control()
+    calls = observed["trace"]["tool_calls"]
+    materials, projects = calls[1:]
+    materials["arguments"]["fields"].append("family")
+    materials["manager_fields"]["Material"].append("family")
+    for row, family in zip(
+        materials["output"]["data"], ["brass", "copper"], strict=True
+    ):
+        row["family"] = family
+    projects["arguments"]["fields"][3]["materialsList"][0]["items"].append("family")
+    projects["manager_fields"]["Material"].append("family")
+    projects["output"]["data"][0]["materialsList"]["items"][0]["family"] = "brass"
+    observed["facts"]["constraints"].pop("none_materials")
+    observed["facts"]["constraints"]["excluded_material_family"] = "copper"
+    bind_control_trace(observed, judgment)
+    return expectation, observed, judgment
+
+
+def test_family_exclusion_projects_only_complete_selected_absence_evidence():
+    expectation, observed, judgment = family_exclusion_control()
+    before = deepcopy(observed)
+    result = score_turn(
+        expectation,
+        observed,
+        registry=expectation["manager_interfaces"],
+        semantic_judgment=judgment,
+    )
+    assert result["passed"], result
+    assert observed == before
+    assert result["presentation_normalization"]["changes"]
+
+
+def test_family_claim_never_authorizes_dropping_a_contradictory_identity_exclusion():
+    expectation, observed, judgment = family_exclusion_control()
+    expectation["facts"]["constraints"]["excluded_material_family"] = "copper"
+    check = next(
+        check
+        for check in expectation["dimensions"]["R"]["checks"]
+        if check["field"] == "constraints"
+    )
+    check["expected"] = deepcopy(expectation["facts"]["constraints"])
+    observed["facts"]["constraints"]["none_materials"] = [41]
+    result = score_turn(
+        expectation,
+        observed,
+        registry=expectation["manager_interfaces"],
+        semantic_judgment=judgment,
+    )
+    assert result["dimensions"]["R"]["status"] == "fail"
+    assert result["presentation_normalization"]["changes"] == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "included_family",
+        "unknown_family",
+        "wrong_type",
+        "unselected_reference",
+        "unselected_membership",
+        "missing_support",
+        "partial_reference",
+        "partial_relation",
+        "missing_family",
+        "additional_unknown_key",
+        "wrong_result",
+        "stale_binding",
+        "narrowing_relation_default",
+        "failed_semantic_check",
+        "reference_family_conflict",
+        "missing_reference_family",
+        "extra_exclusion_key",
+        "filtered_relation",
+    ],
+)
+def test_family_exclusion_keeps_unproved_or_contradictory_claims(mutation):
+    expectation, observed, judgment = family_exclusion_control()
+    calls = observed["trace"]["tool_calls"]
+    schema, materials, projects = calls
+    actual = observed["facts"]["constraints"]
+    member = projects["output"]["data"][0]["materialsList"]["items"][0]
+    if mutation == "included_family":
+        actual["excluded_material_family"] = "brass"
+    elif mutation == "unknown_family":
+        actual["excluded_material_family"] = "unknown"
+    elif mutation == "wrong_type":
+        actual["excluded_material_family"] = ["copper"]
+    elif mutation == "unselected_reference":
+        materials["arguments"]["fields"].remove("family")
+    elif mutation == "unselected_membership":
+        projects["arguments"]["fields"][3]["materialsList"][0]["items"].remove("family")
+    elif mutation == "missing_support":
+        observed["fact_support"]["constraints"]["evidence_ids"] = []
+    elif mutation == "partial_reference":
+        materials["output"].update(complete=False, has_more=True, total_count=99)
+    elif mutation == "partial_relation":
+        projects["output"]["data"][0]["materialsList"]["pageInfo"]["totalCount"] = 2
+    elif mutation == "missing_family":
+        member.pop("family")
+    elif mutation == "reference_family_conflict":
+        materials["output"]["data"][0]["family"] = "copper"
+    elif mutation == "missing_reference_family":
+        materials["output"]["data"][0].pop("family")
+    elif mutation == "extra_exclusion_key":
+        actual["none_materials"] = [88]
+    elif mutation == "filtered_relation":
+        projects["arguments"]["fields"][3] = {
+            "field": "materialsList",
+            "arguments": {"filter": {"id_Exact": 41}},
+            "fields": [
+                {"items": ["id", "code", "name", "family"]},
+                {"pageInfo": ["totalCount"]},
+            ],
+        }
+    elif mutation == "additional_unknown_key":
+        actual["unverified_scope"] = "anything"
+    elif mutation == "wrong_result":
+        observed["facts"]["result_ids"] = ["OTHER"]
+    elif mutation == "narrowing_relation_default":
+        schema["output"]["types"]["ProjectType"]["fields"]["materialsList"][
+            "arguments"
+        ] = {
+            "filter": {"type": "MaterialFilter", "default": {"family": "brass"}},
+        }
+        schema["output"]["types"]["MaterialFilter"] = {
+            "kind": "input",
+            "fields": {"family": {"type": "String"}},
+        }
+    elif mutation == "failed_semantic_check":
+        judgment["checks"]["answer_supported"]["passed"] = False
+    else:
+        member["family"] = "copper"
+    if mutation != "stale_binding":
+        bind_control_trace(observed, judgment)
+    result = score_turn(
+        expectation,
+        observed,
+        registry=expectation["manager_interfaces"],
+        semantic_judgment=judgment,
+    )
+    assert not result["passed"]
+
+
 def cost_control(alias="actual_net_costs", project_scoped=False):
     facts = {
         "metric": "actual_net_project_cost",

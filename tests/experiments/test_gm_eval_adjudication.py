@@ -27,6 +27,26 @@ def api() -> Any:
     return importlib.import_module(name)
 
 
+def test_constraint_cardinality_instructions_follow_each_declared_shape() -> None:
+    shapes = api().fact_schemas(expectation("E086"))
+    constraints = shapes["constraints"]
+    assert "Use a scalar for a single claimed value" not in constraints["description"]
+    for name in ("supplier_ids", "all_materials"):
+        field = constraints["properties"][name]
+        assert api()._matches_shape(["selected-id"], field)
+        assert not api()._matches_shape("selected-id", field)
+        assert "single" in field["description"] and "array" in field["description"]
+
+
+def test_scalar_constraint_shapes_remain_scalar_or_list_without_value_repair() -> None:
+    shape = api().fact_schemas({"facts": {"constraints": {"status": "chosen"}}})[
+        "constraints"
+    ]["properties"]["status"]
+    assert api()._matches_shape("different-status", shape)
+    assert api()._matches_shape(["different-status", "another-status"], shape)
+    assert not api()._matches_shape({"status": "chosen"}, shape)
+
+
 def expectation(identifier: str = "E004", turn: int = 0) -> dict[str, Any]:
     from experiments.gm_eval.catalog import load_catalog
     from experiments.gm_eval.oracle import expected_turn

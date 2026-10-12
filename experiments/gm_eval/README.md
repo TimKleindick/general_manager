@@ -440,6 +440,21 @@ existing manager/path descriptors to distinguish requested selection targets
 from result members and explanatory entities. Unresolved target IDs stay
 unresolved; explanatory claims remain subject to `answer_supported`.
 
+Constraint serialization follows each declared field schema. Array-valued identity
+constraints remain arrays for a single claimed value; only scalar-compatible
+fields accept scalars. The strict saved-response parser still rejects a scalar
+where the request requires an array. Invalid historical judgments are not repaired.
+
+The existing presentation projection also recognizes the single extra claim
+`excluded_material_family`. It requires a known family from complete, selected,
+fact-bound Material rows and matching selected family values for every member of
+each complete, unfiltered returned Project material relation. Included material
+identities and the exact returned Project population remain checked. Missing,
+partial, stale or contradictory family evidence leaves the extra claim intact;
+unknown keys and mixed identity/family exclusions are never dropped. Raw saved
+extractions and historical scores remain unchanged. Offline controls establish
+this representation rule, not a new live model-quality result.
+
 `build_adjudication_request` retains optional `schema_transport_sources` as
 hash-bound audit proofs for uniquely matched prior schema calls and separate
 verified durable tool metadata. The pure builder and saved-response validation
