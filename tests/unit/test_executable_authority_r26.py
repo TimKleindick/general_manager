@@ -146,7 +146,11 @@ def test_code_drift_revokes_old_and_fresh_complete_cross_population(
         )
 
         def changed_factory(
-            base_getter, fallback_manager_class, filter_normalizer, grouping_validator
+            base_getter,
+            fallback_manager_class,
+            filter_normalizer,
+            grouping_validator,
+            group_sorter,
         ):
             def changed(*args, **kwargs):
                 bindings = (
@@ -154,8 +158,9 @@ def test_code_drift_revokes_old_and_fresh_complete_cross_population(
                     fallback_manager_class,
                     filter_normalizer,
                     grouping_validator,
+                    group_sorter,
                 )
-                assert len(bindings) == 4
+                assert len(bindings) == 5
                 result = globals()["_r26_original_for_contract"](*args, **kwargs)
                 result["items"] = [row for row in result["items"] if row.amount < 200]
                 result["pageInfo"]["total_count"] = len(result["items"])
@@ -163,7 +168,7 @@ def test_code_drift_revokes_old_and_fresh_complete_cross_population(
 
             return changed
 
-        changed = changed_factory(None, None, None, None)
+        changed = changed_factory(None, None, None, None, None)
         assert changed.__code__.co_freevars == target.__code__.co_freevars
         if seam == "factory_code":
 

@@ -20,19 +20,30 @@ unsupported type. Manager references stop expansion and require their target's
 own overview and snapshot. Union support is not added. No ORM reflection or
 backend-specific discovery is introduced.
 
+Recursive grouped output types and pages introduced by native GraphQL 0.84.0
+are currently unsupported by the chat contract. Their actual manager ownership
+is bound by the shared GraphQL type factory. Discovery and details omit these
+outputs, and structured selections reject them atomically before execution.
+This also applies to exposed managers and pages wrapping grouped items: grouped
+outputs must receive a modeled manager-owned contract before chat can advertise
+them. Ordinary entity pages and existing `group_by` queries retain their declared
+contracts. Native GraphQL grouping remains available through native queries.
+
 | Entry point | Omitted view | Explicit detail |
 | --- | --- | --- |
 | Public `get_manager_schema` tool | Protocol 3 overview | Exact observed overview/detail names and snapshot |
 | `execute_chat_tool` Python dispatcher | Protocol 3 overview | Same strict public selector rules |
 | `inspect_manager_schema` Python API | Protocol 3 overview | Exact visible names and snapshot |
 | `tools.get_manager_schema` Python helper | Legacy complete contract | Selective view only with explicit `view` |
-| `graphql_contract.manager_schema` Python helper | Complete native contract | No selective selector |
-| `schema_index.get_manager_schema_summary` Python helper | Complete native contract | No selective selector |
+| `graphql_contract.manager_schema` Python helper | Complete supported native contract | No selective selector |
+| `schema_index.get_manager_schema_summary` Python helper | Complete supported native contract | No selective selector |
 
 Tagged overview/detail/full responses carry `inspection_version=3`. Snapshot
 preimages migrate from projection version 2 to 3, so persisted old detail tokens
 cannot authorize this new discovery protocol. The GraphQL read contract remains
-version 2; full native definitions and untagged full Python defaults are unchanged.
+version 2; supported native definitions and untagged full Python defaults retain
+their existing meaning. Unsupported recursive grouped outputs are omitted from
+both public discovery and complete Python contracts.
 Selectors fail atomically. The read contract is compiled once after GraphQL
 schema construction and unit metadata attachment, before the executable schema
 is published. Compilation captures all exposure bindings and validates the shared
