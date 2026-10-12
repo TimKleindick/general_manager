@@ -93,6 +93,17 @@ def _invalid() -> NoReturn:
 
 
 def _dump(value: Any) -> str:
+    # Scalar keys dominate the repeated size and sharing checks. Use the same
+    # native non-ASCII string encoder without constructing a JSONEncoder for
+    # every key; container and float rendering keep the original JSON path.
+    if type(value) is str:
+        return json.encoder.encode_basestring(value)
+    if value is None:
+        return "null"
+    if type(value) is bool:
+        return "true" if value else "false"
+    if type(value) is int:
+        return str(value)
     return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 

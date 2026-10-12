@@ -5,6 +5,8 @@ from types import FunctionType, MethodType
 from typing import cast
 
 _ENUM_NOT_GIVEN: object = vars(enum)["_not_given"]
+_NONE_LITERAL_SIGNATURE = (type(None), None)
+_ONE_NONE_DEFAULT_SIGNATURE = (tuple, (_NONE_LITERAL_SIGNATURE,))
 
 
 def literal_signature(
@@ -65,17 +67,29 @@ def executable_signature(value: object) -> object | None:
     if not isinstance(value, FunctionType):
         # Native builtins have no mutable Python code/default/closure state.
         return None
-    defaults = literal_signature(value.__defaults__)
-    keywords = literal_signature(value.__kwdefaults__)
+    defaults = (
+        _NONE_LITERAL_SIGNATURE
+        if value.__defaults__ is None
+        else literal_signature(value.__defaults__)
+    )
+    keywords = (
+        _NONE_LITERAL_SIGNATURE
+        if value.__kwdefaults__ is None
+        else literal_signature(value.__kwdefaults__)
+    )
     if defaults is None or keywords is None:
         return None
     try:
-        closure = tuple(
-            (type(cell.cell_contents), cell.cell_contents)
-            if cell.cell_contents is None
-            or type(cell.cell_contents) in (str, int, float, bool)
-            else (type(cell.cell_contents), id(cell.cell_contents))
-            for cell in value.__closure__ or ()
+        closure = (
+            ()
+            if value.__closure__ is None
+            else tuple(
+                (type(cell.cell_contents), cell.cell_contents)
+                if cell.cell_contents is None
+                or type(cell.cell_contents) in (str, int, float, bool)
+                else (type(cell.cell_contents), id(cell.cell_contents))
+                for cell in value.__closure__ or ()
+            )
         )
     except ValueError:
         return None
@@ -84,4 +98,29 @@ def executable_signature(value: object) -> object | None:
 
 def executable_matches(value: object, signature: object) -> bool:
     """A missing bounded signature can never authorize an opt-in proof."""
-    return signature is not None and executable_signature(value) == signature
+    if signature is None:
+        return False
+    # The common scalar helpers have no defaults or captured bindings. Check
+    # their current state directly rather than rebuilding the same literal
+    # tuples millions of times during a schema observation. Every invocation
+    # still observes code, defaults, keyword defaults and closure afresh.
+    if (
+        isinstance(value, FunctionType)
+        and type(signature) is tuple
+        and len(signature) == 4
+        and (
+            (value.__defaults__ is None and signature[1] == _NONE_LITERAL_SIGNATURE)
+            or (
+                type(value.__defaults__) is tuple
+                and len(value.__defaults__) == 1
+                and value.__defaults__[0] is None
+                and signature[1] == _ONE_NONE_DEFAULT_SIGNATURE
+            )
+        )
+        and signature[2] == _NONE_LITERAL_SIGNATURE
+        and signature[3] == ()
+        and value.__kwdefaults__ is None
+        and value.__closure__ is None
+    ):
+        return bool(value.__code__ == signature[0])
+    return executable_signature(value) == signature
