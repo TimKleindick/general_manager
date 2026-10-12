@@ -11,6 +11,7 @@ import re
 from time import perf_counter
 from types import UnionType
 from typing import (
+    Any,
     AsyncIterator,
     Callable,
     ClassVar,
@@ -1838,6 +1839,7 @@ class GraphQL:
                 "pageInfo": graphene.Field(PageInfo, required=True),
             },
         )
+        cast(Any, page_type)._general_manager_group_owner = general_manager_class
         cls._group_page_type_registry[name] = page_type
         return page_type
 
@@ -2034,6 +2036,7 @@ class GraphQL:
             )
 
         group_type = type(f"{name}GroupType", (graphene.ObjectType,), fields)
+        cast(Any, group_type)._general_manager_group_owner = general_manager_class
         cls._group_type_registry[name] = group_type
         return group_type
 
