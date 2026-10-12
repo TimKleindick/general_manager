@@ -2,6 +2,40 @@
 
 <!-- version list -->
 
+## v0.84.0 (2026-10-12)
+
+### Bug Fixes
+
+- Handle grouped annotation and relation edge cases
+  ([`ea6f655`](https://github.com/TimKleindick/general_manager/commit/ea6f65558f96f6b8384de273f332d929fa54ad67))
+
+- **graphql**: Skip entity cache prefetch for grouped pages
+  ([`5130ab7`](https://github.com/TimKleindick/general_manager/commit/5130ab772e1676687d88d7a47adcc163861087eb))
+
+### Chores
+
+- Remove repository workflow plans and specs
+  ([`e7e3f6c`](https://github.com/TimKleindick/general_manager/commit/e7e3f6cd4f1f430fca7f5748c3ccec12684f213a))
+
+### Documentation
+
+- Align grouped GraphQL reference and query examples
+  ([`d8d4b09`](https://github.com/TimKleindick/general_manager/commit/d8d4b09c27da577de8b15a4e68747d09221dcc90))
+
+- Clarify nullable Boolean group aggregation
+  ([`7cfaa4b`](https://github.com/TimKleindick/general_manager/commit/7cfaa4b16b1c5a2a1557cb45d7a204cf2838eb88))
+
+### Features
+
+- Add recursive GraphQL bucket grouping
+  ([`2a2dbad`](https://github.com/TimKleindick/general_manager/commit/2a2dbad6de404e36922fadb106affb1d84758567))
+
+### Testing
+
+- **graphql**: Align grouped identity assertions with ID
+  ([`55597be`](https://github.com/TimKleindick/general_manager/commit/55597be82707ab97a0fbc372d167e5d9a5dafc0b))
+
+
 ## v0.83.1 (2026-10-12)
 
 ### Bug Fixes
