@@ -55,6 +55,23 @@ members before values are read. There is no generated `members` or `count`
 wrapper; retrieve original records through an ordinary filtered list. See the
 [grouping contract](../concepts/graphql/filters_pagination.md#grouping).
 
+## Update relation page type names
+
+Relation lists now share the page type generated for their related manager's
+ordinary root list. The name is `<Manager>TypePage`, derived from its GraphQL
+item type, rather than the former `<Manager>Page` alias. For example, a relation
+to `ProjectType` returns `ProjectTypeTypePage` containing `ProjectTypeType`
+items; `projectList` keeps its `ProjectTypePage` containing `ProjectType` items.
+This separates entity and reference managers whose names differ by `Type`.
+
+Regenerate GraphQL clients and update named or inline fragments on relation
+pages to the canonical page type. Existing operation field names and selections
+such as `items { id name }` do not change. Root page names, pagination and filter
+arguments, native ID scalars, and permissions retain their existing contracts.
+Grouped relation lists use the canonical ordinary related-manager page too;
+aggregate `GroupPage` and `GroupType` names are unchanged. See the
+[page type contract](../api/graphql.md#relation-page-type-names).
+
 ## Check pagination inputs and metadata
 
 Explicit `page` and `pageSize` are positive integers. Supplying either value

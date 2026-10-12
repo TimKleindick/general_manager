@@ -427,7 +427,7 @@ class GraphQLIdentityScalarIntegrationTests(GeneralManagerTransactionTestCase):
             get_named_type(fields["category"].type).name, "IdentityCodeRecordType"
         )
         self.assertEqual(
-            get_named_type(fields["labelsList"].type).name, "IdentityUuidRecordPage"
+            get_named_type(fields["labelsList"].type).name, "IdentityUuidRecordTypePage"
         )
 
     def test_identity_equality_filters_use_id_and_ranges_keep_native_types(

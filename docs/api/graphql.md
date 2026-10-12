@@ -346,6 +346,24 @@ concept](../concepts/graphql/subscriptions.md#signals-and-channels), the [bulk
 notification how-to](../howto/bulk_data_change_notifications.md), and the
 [runnable recipe](../examples/bulk_data_change_notifications.md).
 
+## Relation page type names
+
+Ordinary root lists and relation lists use the same page type for the same
+manager. Its name is the GraphQL item type name followed by `Page`: a manager
+`Project` exposes items of type `ProjectType` through `ProjectTypePage`, and a
+reference manager `ProjectType` exposes items of type `ProjectTypeType` through
+`ProjectTypeTypePage`. Generated relation lists inside grouped outputs use these
+ordinary related-manager pages too.
+
+Relation page names formerly used the manager name followed by `Page`. That
+could assign `ProjectTypePage` both to the root list of `Project` and to a
+relation list of `ProjectType`, binding one field to the wrong item type. Root
+page names and query field names are retained. Regenerate schema-based clients
+and update fragments on a former `<Manager>Page` relation type to
+`<Manager>TypePage`. List arguments, `items`, `pageInfo`, identity scalars and
+authorization retain their contracts. The separate `<Manager>GroupPage` and
+`<Manager>GroupType` aggregate types keep their existing names.
+
 ## Commit-bound websocket delivery
 
 GraphQL ordinary row-level subscription events and RemoteAPI invalidations are

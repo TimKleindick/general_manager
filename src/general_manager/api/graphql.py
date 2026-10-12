@@ -1421,8 +1421,10 @@ class GraphQL:
                     attributes["order_by"] = graphene.Argument(
                         graphene.List(graphene.NonNull(ordering_types.input_type))
                     )
+                # Share the root page for this item type, rather than aliasing
+                # a reference manager XType with the root page of manager X.
                 page_type = GraphQL._get_or_create_page_type(
-                    field_type.__name__ + "Page",
+                    field_type.__name__ + "TypePage",
                     lambda: GraphQL.graphql_type_registry[field_type.__name__],
                 )
                 return graphene.Field(page_type, **attributes)
