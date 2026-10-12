@@ -334,9 +334,33 @@ def clear_contract_cache() -> None:
 
 def _argument_info(argument: Any) -> dict[str, Any]:
     frozen = getattr(argument, "_contract_argument_info", None)
-    return (
-        deepcopy(frozen) if frozen is not None else _serialize_argument_info(argument)
-    )
+    if frozen is None:
+        return _serialize_argument_info(argument)
+    if type(frozen) is dict:
+        predicate = frozen.get("filter_contract")
+        flat_predicate = type(predicate) is dict and all(
+            type(key) is str and type(value) is str for key, value in predicate.items()
+        )
+        if all(
+            type(key) is str
+            and (
+                value is None
+                or type(value) is str
+                or type(value) is int
+                or type(value) is float
+                or type(value) is bool
+                or (key == "filter_contract" and flat_predicate)
+            )
+            for key, value in frozen.items()
+        ):
+            # These public values are immutable. Detach the two mapping levels
+            # without a recursive copy walk for each scalar input field.
+            result = dict(frozen)
+            if flat_predicate and predicate is not None:
+                result["filter_contract"] = dict(predicate)
+            return result
+    # Structured defaults retain the original isolation and alias behavior.
+    return deepcopy(frozen)
 
 
 def _serialize_argument_info(argument: Any) -> dict[str, Any]:
