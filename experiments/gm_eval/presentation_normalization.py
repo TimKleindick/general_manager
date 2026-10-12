@@ -138,8 +138,13 @@ class _Evidence:
     def related(
         self, manager: str, proof: Mapping[str, Any], relation: str
     ) -> list[dict[str, Any]]:
+        return [row for row, _ in self.related_rows(manager, proof, relation)]
+
+    def related_rows(
+        self, manager: str, proof: Mapping[str, Any], relation: str
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         return [
-            row
+            (row, child)
             for row, child in self.rows(list(self.evidence.values()), manager)
             if child["query_call_id"] == proof["query_call_id"]
             and child["row_path"][:3] == [*proof["row_path"], relation]
@@ -287,10 +292,40 @@ def _unfiltered_relation(
 def _exclusion_supported(
     actual: Mapping[str, Any], facts: Mapping[str, Any], sources: _Evidence
 ) -> bool:
-    exclusions = actual.get("none_materials")
-    if not isinstance(exclusions, list) or not exclusions:
+    if "none_materials" in actual and "excluded_material_family" in actual:
+        # Each enumerated projection needs its own proof; neither authorizes the other.
         return False
-    excluded = [sources.code(value, "Material") for value in exclusions]
+    family = actual.get("excluded_material_family")
+    families: dict[str, str] = {}
+    excluded: list[str | None]
+    if "excluded_material_family" in actual:
+        if not isinstance(family, str) or not family:
+            return False
+        references = sources.rows(
+            sources.bound("constraints"), "Material", root_only=True
+        )
+        for row, proof in references:
+            code, observed_family = (
+                sources.code(row.get("id"), "Material"),
+                row.get("family"),
+            )
+            if (
+                code is None
+                or "family" not in proof["selected_fields"]
+                or not isinstance(observed_family, str)
+                or not observed_family
+                or (code in families and families[code] != observed_family)
+            ):
+                return False
+            families[code] = observed_family
+        if family not in families.values():
+            return False
+        excluded = []
+    else:
+        exclusions = actual.get("none_materials")
+        if not isinstance(exclusions, list) or not exclusions:
+            return False
+        excluded = [sources.code(value, "Material") for value in exclusions]
     included = actual.get("all_materials")
     result_ids = facts.get("result_ids")
     if (
@@ -309,7 +344,8 @@ def _exclusion_supported(
     returned = []
     for project, proof in projects:
         code = sources.code(project.get("id"), "Project")
-        materials = sources.related("Material", proof, "materialsList")
+        material_rows = sources.related_rows("Material", proof, "materialsList")
+        materials = [row for row, _ in material_rows]
         call = sources.calls[proof["query_call_id"]]
         if (
             code is None
@@ -324,6 +360,18 @@ def _exclusion_supported(
             any(value is None for value in codes)
             or set(codes) & set(excluded)
             or not set(included) <= set(codes)
+            or (
+                family is not None
+                and any(
+                    "family" not in child["selected_fields"]
+                    or not isinstance(material.get("family"), str)
+                    or not material["family"]
+                    or material["family"] == family
+                    or families.get(sources.code(material.get("id"), "Material") or "")
+                    != material["family"]
+                    for material, child in material_rows
+                )
+            )
         ):
             return False
         returned.append(code)
@@ -612,13 +660,21 @@ def normalize_presentations(
         normalized.get("constraints"),
         targets.get("constraints"),
     )
-    exclusion_candidate = (
-        isinstance(constraints, Mapping)
-        and isinstance(constraint_target, Mapping)
-        and "all_materials" in constraint_target
-        and set(constraints) == set(constraint_target) | {"none_materials"}
-        and "none_materials" not in constraint_target
+    exclusion_key = next(
+        (
+            key
+            for key in ("none_materials", "excluded_material_family")
+            if (
+                isinstance(constraints, Mapping)
+                and isinstance(constraint_target, Mapping)
+                and "all_materials" in constraint_target
+                and set(constraints) == set(constraint_target) | {key}
+                and key not in constraint_target
+            )
+        ),
+        None,
     )
+    exclusion_candidate = exclusion_key is not None
     forecast, forecast_target = normalized.get("forecast"), targets.get("forecast")
     forecast_candidate = (
         isinstance(forecast, Mapping)
@@ -648,12 +704,12 @@ def normalize_presentations(
             }
         )
     if (
-        exclusion_candidate
+        exclusion_key is not None
         and isinstance(constraints, Mapping)
         and _exclusion_supported(constraints, normalized, sources)
     ):
         normalized["constraints"] = {
-            key: value for key, value in constraints.items() if key != "none_materials"
+            key: value for key, value in constraints.items() if key != exclusion_key
         }
         audit["changes"].append(
             {
@@ -661,7 +717,7 @@ def normalize_presentations(
                 "raw_observed": deepcopy(constraints),
                 "normalized_observed": deepcopy(normalized["constraints"]),
                 "supported_extra_claims": {
-                    "none_materials": deepcopy(constraints["none_materials"])
+                    exclusion_key: deepcopy(constraints[exclusion_key])
                 },
             }
         )
