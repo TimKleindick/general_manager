@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.86.1 (2026-10-13)
+
+### Bug Fixes
+
+- Authorize detail subscriptions before evaluation and delivery
+  ([`946da65`](https://github.com/TimKleindick/general_manager/commit/946da65de451c86797f291406415a8304f571235))
+
+
 ## v0.86.0 (2026-10-13)
 
 ### Bug Fixes
