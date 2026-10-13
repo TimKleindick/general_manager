@@ -51,6 +51,9 @@ READ_TOOL_GUIDANCE = (
     'their items/pageInfo wrappers, for example {"materialsList": '
     '[{"items": ["code"]}, {"pageInfo": ["totalCount"]}]}. Nested '
     "arguments use {field, arguments, fields}. Respect advertised filter depth. "
+    "Encode filter values using the observed GraphQL input scalar: Date uses YYYY-MM-DD; "
+    "DateTime uses an ISO 8601 timestamp. Preserve the requested calendar or UTC interval; "
+    "do not turn a Date into a DateTime merely because the scope mentions UTC. "
     "The relation quantifier none is unsupported inside exclude inputs; "
     "use it only in filter inputs that advertise it. "
     "Inspect referenced managers separately when their output type is a reference. "

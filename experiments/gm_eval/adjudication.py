@@ -29,6 +29,7 @@ from .scoring import (
     evidence_trace_digest,
     make_judge_packet,
     score_turn,
+    _physical_interface,
 )
 
 if TYPE_CHECKING:
@@ -295,6 +296,52 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
             shapes[name]["description"] = (
                 "Map year to the aggregate total actually asserted for the requested population. Component/project rows belong to the separate additional_breakdowns_supported semantic check. Do not mix component keys or a multi-year grand total into annual keys. A multi-year total remains a separate claim checked by answer_supported; do not repair wrong totals from tools."
             )
+    if "source_kinds" in shapes:
+        shapes["source_kinds"]["description"] = (
+            "Source kinds asserted for the requested measurements and their stated "
+            "historical basis: actual observations use actual, existing plans use "
+            "existing_plan, and newly derived forecasts use new_forecast. Keep separate "
+            "comparisons outside this measurement scope; explicitly requested secondary "
+            "measurements remain part of the requested result. A negated classification "
+            "such as 'not an existing plan' does not assert that kind. Preserve wrong "
+            "or unknown claimed kinds and missing scope; never fill them from tools."
+        )
+    if "forecast" in shapes:
+        properties = shapes["forecast"].get("properties", {})
+        descriptions = {
+            "status": (
+                "Use available when the answer gives a computed forecast; use "
+                "insufficient_history when it explicitly says missing training history "
+                "prevents the forecast. Preserve a different asserted reason or status; "
+                "do not infer availability from tool values."
+            ),
+            "method": (
+                "Use OLS for an explicitly stated ordinary-least-squares fit. Preserve "
+                "other stated methods; never infer a method from matching numbers."
+            ),
+            "scenario_kind": (
+                "Use sensitivity_not_confidence only when the answer explicitly labels "
+                "the band a sensitivity scenario rather than a statistical confidence "
+                "interval. Preserve a confidence or causal claim; ambiguous or unstated "
+                "classification stays unresolved."
+            ),
+            "missing_years": (
+                "Extract training years the answer identifies as missing. An explicitly "
+                "complete training basis means []; missing or ambiguous coverage is "
+                "unknown, not automatically empty. Never use tool availability as a claim."
+            ),
+            "slope": (
+                "Extract only a slope stated in prose or the answer's formula; never "
+                "calculate an omitted coefficient from historical or forecast values."
+            ),
+            "intercept": (
+                "Extract only an intercept stated in prose or the answer's formula; "
+                "never calculate an omitted coefficient from historical or forecast values."
+            ),
+        }
+        for name, description in descriptions.items():
+            if name in properties:
+                properties[name]["description"] = description
     identities = expectation.get("entity_identity_reference", {})
     fields = identities.get("fields", {})
     # Entity-keyed measurements need meanings, without gold keys or values.
@@ -401,6 +448,16 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
             "Physical unit or currency alone. Keep tax basis and gross/net quantity basis out of "
             "the unit label; evaluate every such asserted qualifier under answer_supported. "
             "Do not repair a wrong currency or unit."
+        )
+    if "provenance" in shapes:
+        shapes["provenance"]["description"] = (
+            "Source attribution for each component actually identified by the answer. "
+            "When an interface category is requested, use the captured interface "
+            "metadata of the eligible manager named by the answer, not a manager name "
+            "or relation path as the interface label. Preserve an explicit contradictory "
+            "interface claim and judge it against the source; never replace it with "
+            "the captured value. A tool call without answer attribution is not a source "
+            "claim. Leave absent attribution or unavailable interface metadata unresolved."
         )
     scope = expectation.get("selection_scope_contract")
     if scope:
@@ -613,6 +670,7 @@ def _tool_observations(
     pending: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     calls: list[dict[str, Any]] = []
     evidence: list[dict[str, Any]] = []
+    captured_interfaces = run.get("registry_interfaces")
     for event in turn["events"]:
         if event.get("type") not in {"tool_call", "tool_result"}:
             continue
@@ -690,17 +748,23 @@ def _tool_observations(
             manager_fields=manager_fields,
             error=False,
         )
-        evidence.extend(
-            {
-                "id": f"{call['id']}/{name}",
-                "manager": name,
-                "fields": names,
-                "origin": "tool",
-                "call_id": call["id"],
-                "source_turn": turn_index,
-            }
-            for name, names in manager_fields.items()
-        )
+        for name, names in manager_fields.items():
+            interface = (
+                _physical_interface(captured_interfaces.get(name))
+                if isinstance(captured_interfaces, Mapping)
+                else None
+            )
+            evidence.append(
+                {
+                    "id": f"{call['id']}/{name}",
+                    "manager": name,
+                    "fields": names,
+                    "origin": "tool",
+                    "call_id": call["id"],
+                    "source_turn": turn_index,
+                    **({"interface_type": interface} if interface is not None else {}),
+                }
+            )
     return calls, evidence
 
 
