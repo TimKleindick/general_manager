@@ -984,6 +984,20 @@ feedback limit and `truncated` flag still apply. Diagnostics neither select a
 source nor repair a binding, and the original admission validator is unchanged.
 Unsupported diagnostic contexts retain their previous error message.
 
+The executor's `last_tool_round` context reports whether the previous tool round
+actually added evidence or requirement links. A valid repeated query or unchanged
+schema observation can return `evidence_or_links_changed=false`; this is workflow
+feedback, not an error or a completion certificate. The executor can inspect the
+current requirements and deferred calculations, gather missing fields, filters or
+pages, or bind and execute a calculation from verified sources. Cached results
+can still link another requirement, and schema reads still recheck current
+snapshots without a cache shortcut. This feedback does not alter validation-cycle
+identity, timeouts, evidence coverage or native GraphQL permissions.
+
+Shared read guidance follows the observed GraphQL input scalar: `Date` uses
+`YYYY-MM-DD`, while `DateTime` uses an ISO 8601 timestamp. Describing a calendar
+interval in UTC does not change a `Date` filter into a `DateTime` filter.
+
 Repeated validation failures terminate only when the same normalized action and
 feedback recur against unchanged structured task, dependency and evidence inputs,
 after that feedback was supplied in a completed provider round. Corrected actions,
@@ -1053,6 +1067,15 @@ HTTP, SSE and WebSocket answers do not automatically append this context, task
 lists, completion criteria or internal evidence IDs. The model may use relevant
 substantive details in its answer. This is a context improvement, not a proven
 fix for any particular model response; live effectiveness remains unmeasured.
+
+For an explicitly requested derived forecast or scenario, synthesis should
+explain the supported method, training coverage and available formula or
+coefficients. It should disclose assumptions needed to extend the result,
+including stable definitions and units when applicable, and explain whether
+external demand, capacity or prices enter the calculation. Unknown input
+coverage remains uncertain. Historical extrapolation and sensitivity scenarios
+do not establish causal demand predictions or statistical confidence. These
+instructions do not supply missing coefficients, history, inputs or evidence.
 
 
 ### Snapshot-bound schema inspection (protocol 3)

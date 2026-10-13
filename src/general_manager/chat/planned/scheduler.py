@@ -555,6 +555,7 @@ def _executor_messages(
     action_validation_error: Mapping[str, object] | None = None,
     dependency_evidence: Sequence[Mapping[str, object]] = (),
     *,
+    last_tool_round: Mapping[str, object] | None = None,
     configured_context: str = "",
     conversation_context: Sequence[Message] = (),
     choice_context: ChoiceContext | None = None,
@@ -651,6 +652,16 @@ def _executor_messages(
         "remain separate evidence; complete with the relevant results. Unlinked "
         "evidence cannot satisfy a requirement: repeat its tool call with the "
         "intended requirement_id to link the cached result. "
+        "last_tool_round reports whether the previous tool round actually added "
+        "evidence or requirement links. A successful read can reuse an unchanged "
+        "result without advancing pending work. When evidence_or_links_changed "
+        "is false, inspect current requirements, task_evidence and deferred_calculations: "
+        "gather the missing fields, filters or pages, use bind_calculation for a "
+        "pending binding, or calculate using already verified sources. Complete "
+        "only when the existing evidence supports every requirement. Reusing "
+        "results to link another requirement and rechecking schema freshness "
+        "remain valid. This feedback is operational guidance, never evidence, "
+        "a tool error or completion authority. "
         + CATEGORY_BINDING_INSTRUCTION
         + READ_TOOL_GUIDANCE
         + " "
@@ -714,6 +725,8 @@ def _executor_messages(
         reference["choice_context"] = choice_context.as_mapping()
     if action_validation_error is not None:
         reference["action_validation_error"] = dict(action_validation_error)
+    if last_tool_round is not None:
+        reference["last_tool_round"] = dict(last_tool_round)
     return [
         *(
             [Message(role="system", content=configured_context)]
@@ -927,6 +940,7 @@ class _TaskRuntime:
     started_at: float | None = None
     tool_history: list[Message] = field(default_factory=list)
     action_validation_error: Mapping[str, object] | None = None
+    last_tool_round: Mapping[str, object] | None = None
     selected_evidence_ids: tuple[str, ...] = ()
     selector_question: SelectorQuestion | None = None
 
@@ -1794,6 +1808,7 @@ class _Runner:
                 runtime.tool_history,
                 runtime.action_validation_error,
                 self._dependency_evidence(runtime),
+                last_tool_round=runtime.last_tool_round,
                 configured_context=self.prepared.configured_context,
                 conversation_context=self.messages,
                 choice_context=self.prepared.choice_context,
@@ -1808,6 +1823,8 @@ class _Runner:
             # Resolver candidate churn is not changed execution evidence. Task
             # bindings, dependency payloads and linked evidence are material.
             reference.pop("manager_candidates", None)
+            # Operational feedback does not change bindings or factual evidence.
+            reference.pop("last_tool_round", None)
             # Evidence IDs alone do not prove equal state.
             runtime.execution_state = json.dumps(reference, sort_keys=True)
             result = await complete_provider_round(
@@ -1906,6 +1923,7 @@ class _Runner:
                 # On cancellation keep only calls with actual completed results;
                 # the cancelled/blocked task cannot issue another provider request.
                 runtime.group_tool_results(history_start)
+            runtime.last_tool_round = {"evidence_or_links_changed": progress}
             if progress or successful or runtime.status == "blocked":
                 return None
             runtime.tool_failure_signature = json.dumps(sorted(failures))

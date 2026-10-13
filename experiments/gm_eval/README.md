@@ -629,6 +629,23 @@ completeness and semantic checks. Unknown/contradictory labels or additional
 claims are rejected. Missing facts, history, schema definitions, coefficients,
 assumptions or evidence are never supplied by the normalizer.
 
+Blind factual extraction now describes the meanings of forecast availability,
+missing training years, an explicitly stated OLS method, sensitivity scenarios
+and asserted coefficients. It never derives an omitted coefficient from other
+values. Source-kind extraction retains the requested measurements and their
+stated historical basis; unrelated comparisons and negated classifications do
+not become additional requested source kinds. Explicitly requested secondary
+measurements remain in scope. The provenance task therefore requires both
+actual shipments and the requested existing-plan revenue source.
+
+Selected source evidence sent to the judge includes captured native interface
+types when available, using the same resolver as scoring. Unselected managers
+and hidden reference classifications are excluded. Manager attribution can be
+classified from this metadata only when the answer actually identifies the
+source; an explicit contradictory interface claim is retained for rejection.
+Missing metadata or attribution stays unresolved. These offline changes do not
+rewrite prior extractions or demonstrate a new model success rate.
+
 Unclear domain requirements are documented separately from representation bugs:
 manager meaning, implicit approval filters, mandatory forecast explanation,
 plan-versus-actual source requirements and optional-versus-required cost

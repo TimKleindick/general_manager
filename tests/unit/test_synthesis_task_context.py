@@ -66,6 +66,22 @@ def test_task_context_uses_real_requirement_links_intersected_with_selection():
     assert "linked-but-unselected" not in json.dumps(data)
 
 
+def test_requested_forecast_synthesis_explains_evidenced_assumptions_without_inventing_them():
+    # R37 forecast answers omitted future-definition and external-driver assumptions.
+    task, _store, selected = context_fixture()
+    messages = synthesis._messages("Explain the derived forecast", (selected,), {})
+    instruction = messages[-2].content
+    assert "stable definitions and units" in instruction
+    assert "external demand, capacity or prices" in instruction
+    assert "state the uncertainty" in instruction
+    assert "formula or coefficients" in instruction
+    ref = json.loads(messages[-1].content.split("=", 1)[1])
+    assert "forecast_assumptions" not in ref
+    assert "no_external_assumptions" not in ref
+    assert selected.payload() == {"data": [1]}
+    assert task.objective not in instruction
+
+
 def test_multiple_tasks_and_synthesis_eligibility_keep_bindings_separate():
     task, store, selected = context_fixture()
     assert hasattr(synthesis, "build_task_context")

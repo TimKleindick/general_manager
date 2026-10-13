@@ -924,6 +924,8 @@ def expected_turn(
         if resolved == "provenance":
             revenues, _ = _revenues(data)
             contract.source("planned_net_revenue", ["ProjectCommercial"])
+            # This request includes plan revenue as well as actual shipments.
+            contract.fact("I", "source_kinds", ["actual", "existing_plan"], "set")
             contract.fact(
                 "C",
                 "planned_revenue",
