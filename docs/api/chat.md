@@ -994,6 +994,19 @@ can still link another requirement, and schema reads still recheck current
 snapshots without a cache shortcut. This feedback does not alter validation-cycle
 identity, timeouts, evidence coverage or native GraphQL permissions.
 
+A successful schema inspection can still be incompatible with its selected
+requirement. The executor's `schema_link_feedback` reports the latest such
+observation for each explicitly named requirement, with its exact evidence ID.
+Compare the declared scope in `task.requirements` with the unchanged observation
+in `task_evidence`: manager, view, type names and snapshot. The actual
+selection stays in internal tool history; it is excluded from backend arguments
+and cache keys. Repeating an incompatible detail inspection with the same
+`requirement_id` cannot satisfy an overview requirement. Choose an explicitly
+compatible inspection under the existing contract or block when required proof
+cannot be gathered. This feedback neither changes schema requirements nor links
+incompatible evidence, and does not introduce a full-schema fallback. Compatible
+detail fragments retain their existing coverage and freshness checks.
+
 Shared read guidance follows the observed GraphQL input scalar: `Date` uses
 `YYYY-MM-DD`, while `DateTime` uses an ISO 8601 timestamp. Describing a calendar
 interval in UTC does not change a `Date` filter into a `DateTime` filter.
