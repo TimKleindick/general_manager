@@ -557,7 +557,7 @@ def project_reference(
             return {"$gm_ref": index}
         return node
 
-    projected = deepcopy(reference)
+    projected = {} if reference_binding is not None else deepcopy(reference)
     for slot, value in zip(packing_slots, values, strict=True):
         _set(projected, slot.path, pack(value))
     result = {
@@ -662,6 +662,26 @@ def _transport_size(projection: dict[str, Any]) -> int:
     return len(json.dumps(_dump(wire)))
 
 
+def _copy_for_rewrite(
+    projection: dict[str, Any], slots: tuple[SchemaSlot, ...]
+) -> dict[str, Any]:
+    """Copy metadata and untouched data, preserving wire key order.
+
+    The caller rebuilds the complete object table and every selected root.
+    Avoid copying those trees only to discard them immediately afterward.
+    """
+    whole_reference = len(slots) == 1 and not slots[0].path
+    shell: dict[str, Any] = {}
+    for key, value in projection.items():
+        if key == "objects":
+            shell[key] = []
+        elif key == "reference" and whole_reference:
+            shell[key] = {}
+        else:
+            shell[key] = value
+    return deepcopy(shell)
+
+
 def _share_small_containers(
     projection: dict[str, Any], slots: tuple[SchemaSlot, ...]
 ) -> dict[str, Any]:
@@ -729,7 +749,7 @@ def _share_small_containers(
                 return {key: rewrite(child) for key, child in node.items()}
             return [rewrite(child) for child in node]
 
-        candidate = deepcopy(projection)
+        candidate = _copy_for_rewrite(projection, slots)
         candidate["objects"] = [json.loads(selected)] + [
             rewrite(node) for node in projection["objects"]
         ]
@@ -815,7 +835,7 @@ def _share_key_shapes(
                 return [rewrite(child) for child in node]
             return node
 
-        candidate = deepcopy(projection)
+        candidate = _copy_for_rewrite(projection, slots)
         candidate["objects"] = [list(selected)] + [
             rewrite(node) for node in projection["objects"]
         ]
@@ -919,7 +939,7 @@ def _share_wide_key_strings(
             return [rewrite(child) for child in node]
         return node
 
-    candidate = deepcopy(projection)
+    candidate = _copy_for_rewrite(projection, slots)
     candidate["objects"] = (
         shared
         + [
@@ -1057,7 +1077,7 @@ def _share_similar_lists(
                             return [shift(child) for child in node]
                         return node
 
-                    candidate = deepcopy(projection)
+                    candidate = _copy_for_rewrite(projection, slots)
                     candidate["objects"] = [
                         shift(node) for node in projection["objects"]
                     ]
