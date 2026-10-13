@@ -153,6 +153,10 @@ cleanup phases to stderr. On timeout, the owning test exposes only these phase
 markers and re-raises the original exception. Both real routes, all parity
 assertions and the 90-second child guard remain unchanged. Phase observations
 diagnose the CI failure; they do not establish its cause or a performance fix.
+Trace sanitation reuses redaction of identical immutable strings within one
+operation or export, including nested JSON references. Mutable containers are
+still detached copies, and the text memo expires after that operation. Redaction
+rules and complete evidence content remain unchanged; each export starts fresh.
 `reporting.case_result` aggregates scored turns without losing failed or missing
 follow-ups; `reporting.summarize` accepts the scorer's dimension records directly.
 

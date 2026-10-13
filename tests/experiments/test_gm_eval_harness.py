@@ -157,6 +157,98 @@ def test_trace_redacts_credentials_inside_text_without_losing_usage():
     )
 
 
+def test_trace_parses_repeated_embedded_json_once_per_sanitize(monkeypatch):
+    from experiments.gm_eval import trace
+
+    body = json.dumps({"input_tokens": 12, "api_key": "private-value"})
+    content = "REFERENCE_DATA=" + body
+    original_loads = json.loads
+    decoded = []
+
+    def observed_loads(value, *args, **kwargs):
+        if value == body:
+            decoded.append(value)
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(trace.json, "loads", observed_loads)
+    source = {"messages": [content, content], "evidence": {"content": content}}
+    result = trace.sanitize(source)
+    expected = 'REFERENCE_DATA={"input_tokens":12}'
+    assert result == {
+        "messages": [expected, expected],
+        "evidence": {"content": expected},
+    }
+    assert source["messages"] == [content, content]
+    assert len(decoded) == 1
+
+
+def test_trace_export_shares_text_work_without_retaining_it(monkeypatch):
+    from experiments.gm_eval import trace
+
+    body = '{ "input_tokens": 12, "api_key": "private-value" }'
+    content = "REFERENCE_DATA=" + body
+    original_loads = json.loads
+    decoded = []
+
+    def observed_loads(value, *args, **kwargs):
+        if value == body:
+            decoded.append(value)
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(trace.json, "loads", observed_loads)
+    recorder = trace.TraceRecorder(
+        calls=[{"request_count": 1, "messages": [content, content]}],
+        events=[{"content": content}],
+    )
+    first = recorder.as_dict()
+    expected = 'REFERENCE_DATA={"input_tokens":12}'
+    assert first["provider_calls"][0]["messages"] == [expected, expected]
+    assert first["events"] == [{"content": expected}]
+    assert first["provider_request_count"] == 1
+    assert len(decoded) == 1
+    first["events"][0]["content"] = "changed detached export"
+    second = recorder.as_dict()
+    assert second["events"] == [{"content": expected}]
+    assert recorder.events == [{"content": content}]
+    assert len(decoded) == 2
+
+
+def test_trace_redacts_unhashable_text_subclasses():
+    from experiments.gm_eval.trace import sanitize
+
+    class UnhashableText(str):
+        __hash__ = None
+
+    source = {"content": UnhashableText('{"input_tokens":12,"password":"private"}')}
+    assert sanitize(source) == {"content": '{"input_tokens":12}'}
+    assert "private" in source["content"]
+
+
+def test_trace_reuses_nested_json_redaction_across_distinct_frames(monkeypatch):
+    from experiments.gm_eval import trace
+
+    body = json.dumps({"input_tokens": 12, "password": "private-value"})
+    frames = [
+        json.dumps({"role": role, "reference": body}) for role in ("read", "answer")
+    ]
+    original_loads = json.loads
+    decoded = []
+
+    def observed_loads(value, *args, **kwargs):
+        if value == body:
+            decoded.append(value)
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(trace.json, "loads", observed_loads)
+    result = trace.sanitize(frames)
+    assert [original_loads(value) for value in result] == [
+        {"role": role, "reference": '{"input_tokens":12}'}
+        for role in ("read", "answer")
+    ]
+    assert frames[0] != result[0]
+    assert len(decoded) == 1
+
+
 def test_generic_provider_usage_is_reported_without_inventing_reasoning(settings):
     from experiments.gm_eval.profiles import ExperimentProvider, bind_provider_factory
     from experiments.gm_eval.trace import TraceRecorder
