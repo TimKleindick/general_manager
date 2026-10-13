@@ -48,7 +48,8 @@ Concrete defaults are normalized to `Measurement` objects and checked for
 compatibility with `base_unit` in ORM interface metadata, retaining the supplied
 unit. The backing-column magnitude is converted separately to `base_unit`.
 Generated GraphQL SDL and introspection can expose a string default such as
-`"0 kWh"` in its supplied unit. Callable defaults are intentionally omitted
+`"0 kilowatt_hour"`, using Pint's canonical unit spelling for `"0 kWh"`.
+Callable defaults are intentionally omitted
 from schema defaults because they are evaluated only during model
 initialization. Partial-update arguments omit defaults: omission preserves the
 stored volume, while explicit `null` clears it when the field is nullable.
