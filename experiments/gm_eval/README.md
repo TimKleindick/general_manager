@@ -647,3 +647,8 @@ supply absent regression details or mandatory assumption disclosures. No saved
 semantic result or business Oracle requirement is changed by representation
 normalization. Explicit malformed failure flags or non-object traces in a saved
 Judge envelope remain measurement failures; the original saved input is kept.
+
+The isolated native parity tests apply every semantic assertion to the complete
+reports inside the child, then transfer only the verified case confirmation.
+The real scheduler and consumer routes and the 90-second guard are unchanged.
+The evaluation API continues to return complete reports and evidence.
