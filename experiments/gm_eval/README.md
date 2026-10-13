@@ -148,6 +148,11 @@ fact. Standalone recommendation customer IDs cover the independently derived
 positive-gap recipients; combined forecast reports retain their selected
 customer scope. These evaluator corrections require new version-bound runs;
 they do not change saved scores or demonstrate better model answers.
+The E100 parity child reports bootstrap, scheduler, consumer, JSON export and
+cleanup phases to stderr. On timeout, the owning test exposes only these phase
+markers and re-raises the original exception. Both real routes, all parity
+assertions and the 90-second child guard remain unchanged. Phase observations
+diagnose the CI failure; they do not establish its cause or a performance fix.
 `reporting.case_result` aggregates scored turns without losing failed or missing
 follow-ups; `reporting.summarize` accepts the scorer's dimension records directly.
 
