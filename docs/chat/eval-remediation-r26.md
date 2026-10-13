@@ -30,6 +30,16 @@ certify the new category or cross-query workflows. Relation predicates must
 retain the same manager namespace at each hop. These checks use the shared
 manager interface rather than backend-specific ORM assumptions.
 
+The generated normal getter attests an identity source only with its exact
+`authorize_manager_collection=False` mode. Its field name and disabled member
+filter are captured together and remain bound to the generated code, defaults,
+and shared permission helpers. Other modes, including non-boolean false-like
+values, do not acquire this proof. Native manager collections keep their own
+GraphQL member permission filtering and do not claim unchanged attribute
+identity. Changing a getter capture revokes its certificate and existing schema
+and query witnesses. Measurement getter certificates retain their separate
+conversion contract.
+
 Arithmetic over different queries uses an explicit, narrow contract described in
 [cross-query calculations](cross-query-calculations.md). It preserves both source
 populations and proves their entity, period, executable unit declaration and
