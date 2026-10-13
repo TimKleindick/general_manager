@@ -805,6 +805,10 @@ def create_filter_options(
 
     filter_fields: dict[str, GrapheneFieldType] = {}
     for attr_name, attr_info in field_type.Interface.get_attribute_types().items():
+        # Native constructor selections do not add a new GraphQL filter language.
+        input_field = getattr(field_type.Interface, "input_fields", {}).get(attr_name)
+        if getattr(input_field, "is_collection", False) is True:
+            continue
         effective_attr_info = _get_filter_relation_info(
             field_type,
             attr_name,

@@ -6,7 +6,8 @@
 its `identification` mapping, and tracks an identification dependency. Public
 constructor inputs are the interface inputs for that manager; constructor
 validation and input-specific errors come from the interface. `identification`
-returns the stored mapping, and `str(manager)`/`repr(manager)` render
+returns the stored mapping (a defensive container copy for managers with typed
+collection inputs), and `str(manager)`/`repr(manager)` render
 `ClassName(**identification)`. Iterating a manager yields declared attributes and
 GraphQL/property values after checking that the manager state is still valid.
 Callable entries in `_attributes` are invoked with `self._interface`; the

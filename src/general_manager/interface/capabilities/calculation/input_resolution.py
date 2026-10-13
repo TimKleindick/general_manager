@@ -13,7 +13,10 @@ if TYPE_CHECKING:  # pragma: no cover
 
 def track_manager_input(value: object) -> None:
     """Replay the identification dependency for a cached manager input."""
-    if isinstance(value, GeneralManager):
+    if isinstance(value, list):
+        for member in value:
+            track_manager_input(member)
+    elif isinstance(value, GeneralManager):
         value.__class__._track_identification_dependency(value.identification)
 
 
@@ -33,7 +36,12 @@ def resolve_calculation_input_value(
     if field_name in resolved_values:
         value = resolved_values[field_name]
         track_manager_input(value)
-        return value
+        return (
+            list(value)
+            if isinstance(value, list)
+            and interface_cls.input_fields[field_name].is_collection
+            else value
+        )
 
     field = interface_cls.input_fields[field_name]
     dependencies = {
@@ -52,4 +60,4 @@ def resolve_calculation_input_value(
     )
     track_manager_input(value)
     resolved_values[field_name] = value
-    return value
+    return list(value) if isinstance(value, list) and field.is_collection else value

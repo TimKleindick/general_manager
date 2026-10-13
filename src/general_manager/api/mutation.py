@@ -180,6 +180,11 @@ def _get_or_create_manager_input_type(
     for input_name, input_field in _manager_input_fields(manager_class).items():
         field_type = input_field.type
         required = input_field.required
+        if get_origin(field_type) is list:
+            fields[input_name] = graphene.InputField(
+                _mutation_input_type(field_type), required=required
+            )
+            continue
         if _is_general_manager_type(field_type):
             if _uses_single_id_input(field_type):
                 fields[input_name] = graphene.ID(required=required)

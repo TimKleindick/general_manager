@@ -10,7 +10,9 @@ from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, DecimalException
-from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast, get_args, get_origin
+
+from django.core.exceptions import ObjectDoesNotExist
 
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement import Measurement
@@ -610,6 +612,30 @@ class DateRangeDomain(InputDomain[date]):
         return value.replace(year=value.year + self.step, month=12, day=31)
 
 
+@dataclass(frozen=True)
+class _NormalizedCollectionValue:
+    """Private pickle payload marking an already-normalized collection value."""
+
+    value: object
+
+
+class InvalidCollectionDeclarationError(TypeError):
+    """Raised for unsupported typed collection declarations."""
+
+    def __init__(self, annotation: object) -> None:
+        super().__init__(
+            f"Unsupported collection input declaration: {annotation}. Use list[T] with a supported scalar or manager and no bounds."
+        )
+
+
+class InvalidCollectionValueError(TypeError):
+    """Report collection shape/conversion failures with a field and index."""
+
+    def __init__(self, name: str, detail: str, index: int | None = None) -> None:
+        location = name if index is None else f"{name}[{index}]"
+        super().__init__(f"Invalid collection value for {location}: {detail}")
+
+
 class Input(Generic[INPUT_TYPE]):
     """Describe an interface input's type, constraints, and dependency metadata.
 
@@ -656,7 +682,36 @@ class Input(Generic[INPUT_TYPE]):
         self.max_value = max_value
         self.validator = validator
         self.normalizer = normalizer
-        self.is_manager = issubclass(type, GeneralManager)
+        origin = get_origin(type)
+        self.is_collection = origin is list
+        self.collection_element_type: builtins.type[object] | None = None
+        if origin is not None:
+            arguments = get_args(type)
+            element = arguments[0] if len(arguments) == 1 else None
+            supported_scalar = element in (
+                str,
+                bool,
+                int,
+                float,
+                Decimal,
+                date,
+                datetime,
+                Measurement,
+            )
+            supported_manager = (
+                isinstance(element, builtins.type)
+                and issubclass(element, GeneralManager)
+                and element is not GeneralManager
+            )
+            if (
+                not self.is_collection
+                or not (supported_scalar or supported_manager)
+                or min_value is not None
+                or max_value is not None
+            ):
+                raise InvalidCollectionDeclarationError(type)
+            self.collection_element_type = element
+        self.is_manager = not self.is_collection and issubclass(type, GeneralManager)
 
         if depends_on is not None:
             self.depends_on = depends_on
@@ -1041,6 +1096,17 @@ class Input(Generic[INPUT_TYPE]):
             dependency_values[dependency_name] = identification[dependency_name]
         return dependency_values
 
+    def validate_collection_type(self, value: object, name: str) -> None:
+        """Validate normalized shape without converting it or running callbacks."""
+        if not isinstance(value, list):
+            raise InvalidCollectionValueError(name, "expected a list")
+        assert self.collection_element_type is not None
+        for index, element in enumerate(value):
+            if element is None or not isinstance(element, self.collection_element_type):
+                raise InvalidCollectionValueError(
+                    name, "unexpected element type", index
+                )
+
     def cast(
         self,
         value: object,
@@ -1074,7 +1140,50 @@ class Input(Generic[INPUT_TYPE]):
             KeyError: If normalization needs a declared dependency that is
                 missing from ``identification``.
         """
+        normalized_snapshot = self.is_collection and isinstance(
+            value, _NormalizedCollectionValue
+        )
+        if normalized_snapshot:
+            value = cast(_NormalizedCollectionValue, value).value
         if value is None:
+            return None
+        if self.is_collection:
+            name = cache_context[1] if cache_context is not None else "input"
+            if not isinstance(value, list):
+                raise InvalidCollectionValueError(name, "expected a list")
+            element_type = self.collection_element_type
+            assert element_type is not None
+            element_field = Input(element_type)
+            converted: list[object] = []
+            for index, element in enumerate(value):
+                if element is None:
+                    raise InvalidCollectionValueError(
+                        name, "null elements are not allowed", index
+                    )
+                if isinstance(element, GeneralManager) and not isinstance(
+                    element, element_type
+                ):
+                    raise InvalidCollectionValueError(
+                        name, "wrong manager class", index
+                    )
+                if isinstance(element, Mapping) and element_field.is_manager:
+                    element = dict(element)
+                try:
+                    converted.append(element_field.cast(element))
+                except (TypeError, ValueError, KeyError, ObjectDoesNotExist) as error:
+                    raise InvalidCollectionValueError(
+                        name, str(error), index
+                    ) from error
+            normalized = (
+                converted
+                if normalized_snapshot
+                else self.normalize(
+                    converted, identification, cache_context=cache_context
+                )
+            )
+            if normalized is not None:
+                self.validate_collection_type(normalized, name)
+                return list(cast(list[object], normalized))
             return None
         if self.type == date:
             if isinstance(value, datetime) and type(value) is not date:
@@ -1127,3 +1236,44 @@ class Input(Generic[INPUT_TYPE]):
             identification,
             cache_context=cache_context,
         )
+
+
+def _prepare_normalized_identification(
+    manager_type: type[GeneralManager],
+    identification: Mapping[str, object],
+) -> dict[str, object]:
+    """Prepare trusted normalized identities for reconstruction, recursively.
+
+    This private boundary preserves collection normalizer results when restoring
+    pickles or materializing bucket rows. Ordinary constructor inputs must not
+    use it: those still require their declared normalization.
+    """
+    fields = getattr(manager_type.Interface, "input_fields", {})
+    prepared: dict[str, object] = {}
+    for name, value in identification.items():
+        field = fields.get(name)
+        if field is None:
+            prepared[name] = value
+            continue
+        if getattr(field, "is_collection", False) is True:
+            if isinstance(value, _NormalizedCollectionValue):
+                prepared[name] = value
+                continue
+            element_type = field.collection_element_type
+            if (
+                isinstance(value, list)
+                and isinstance(element_type, type)
+                and issubclass(element_type, GeneralManager)
+            ):
+                value = [
+                    _prepare_normalized_identification(element_type, element)
+                    if isinstance(element, Mapping)
+                    else element
+                    for element in value
+                ]
+            prepared[name] = _NormalizedCollectionValue(value)
+        elif getattr(field, "is_manager", False) is True and isinstance(value, Mapping):
+            prepared[name] = _prepare_normalized_identification(field.type, value)
+        else:
+            prepared[name] = value
+    return prepared

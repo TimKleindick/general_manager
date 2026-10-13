@@ -129,6 +129,65 @@ Because calculation managers do not persist data, `create`, `update`, and `delet
 
 ## Input helpers
 
+### Typed list inputs
+
+Use `Input(list[T], required=False)` when one calculation consumes a whole
+selection. `T` can be `str`, `bool`, `int`, `float`, `Decimal`, `date`,
+`datetime`, `Measurement`, or a concrete manager class. `typing.List[T]` is
+equivalent. The manager attribute can be annotated `list[T] | None`; express
+descriptor nullability with `required=False` rather than an outer union.
+
+```python
+class SelectionSummary(GeneralManager):
+    employees: list[Employee] | None
+
+    class Interface(CalculationInterface):
+        employees = Input(list[Employee], required=False)
+
+summary = SelectionSummary(employees=[alice, bob])
+same = SelectionSummary(employees_id=[alice.id, bob.id])
+```
+
+Omission and explicit `None` resolve to `None`. `[]` remains an empty list;
+it is also valid for a required input. Applications define what unrestricted
+and empty selections mean. The framework does not replace `None` with `.all()`.
+Lists preserve order and duplicates. Each scalar/member is cast using existing
+input rules; manager members accept manager instances, native IDs, or constructor
+mappings. Composite managers require structured mappings rather than opaque IDs.
+
+The Python container must be a list. Strings, mappings, tuples, sets and
+generators are not implicitly expanded. Null members, nested lists, nullable
+element annotations and arbitrary object element types are unsupported.
+`Input(list)` retains its legacy behavior; adopt the parameterized declaration
+to opt in to typed list behavior.
+
+The `normalizer` and `validator` operate on the entire list, including `[]`,
+with declared dependencies. `None` bypasses callbacks. `cast()` performs
+conversion/normalization; constructor validation additionally applies validators
+and possible-value membership. Use a validator for length/uniqueness constraints;
+`min_value` and `max_value` are scalar-only. `possible_values` describes whole
+selections, for example `[[], [1, 2]]`, not possible members. Membership retains
+the existing `DEBUG`/`VALIDATE_INPUT_VALUES` policy.
+
+Each list is one constructor value and one enumeration candidate. Python exact
+filters bind a complete selection; `values__in=[[1, 2], []]` selects alternatives
+of complete lists. Scalar `__in` is unchanged. Other collection lookups are
+unsupported. Without a domain or explicit selection constraint, a required list
+cannot be enumerated; an optional list contributes only `None`. Generated
+GraphQL detail arguments support collections; this feature does not add collection
+fields to the GraphQL list filter language.
+
+Normalized selections determine identity and cache keys: omission equals `None`,
+but `None`, `[]`, `[a, b]`, `[b, a]` and `[a, a]` are distinct. Equivalent manager
+instances, IDs and identification mappings share identity. Typed input lists and
+public identification containers are defensive copies, so mutating a caller's
+list or an exposed list does not change an existing calculation. Resolved manager
+wrappers remain instance-local and each member contributes dependencies when read.
+Use a new calculation for a different selection.
+
+See the [monthly selection summary cookbook](../../examples/collection_inputs.md)
+for a complete native GraphQL query and the [GraphQL API contract](../../api/graphql.md#typed-calculation-list-arguments).
+
 - Use `required=False` for optional inputs. Calculation metadata and parsing now treat those fields as nullable and default them to `None` when omitted.
 - Use `possible_values` to restrict input choices or provide a callable for dynamic options.
 - Callable or bucket-backed `possible_values` are not resolved during ordinary input casting unless a custom normalizer needs them. They are still resolved when enumerating calculation combinations or validating allowed values.

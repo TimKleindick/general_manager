@@ -28,6 +28,8 @@ class ParsedFilterCriteria(TypedDict, total=False):
 
     filter_kwargs: dict[str, object]
     filter_funcs: list[FilterFunction]
+    candidate_values: list[object]
+    collection_criteria: list[list[object]]
 
 
 ParsedFilters = dict[str, ParsedFilterCriteria]
@@ -62,6 +64,24 @@ class UnknownInputFieldError(ValueError):
         super().__init__(f"Unknown input field '{field_name}' in filter.")
 
 
+class UnsupportedCollectionLookupError(ValueError):
+    """A typed collection supports only complete-selection comparisons."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(
+            f"Typed collection input '{field_name}' supports only exact and in lookups."
+        )
+
+
+class InvalidCollectionAlternativesError(TypeError):
+    """Collection membership requires an outer sequence of selections."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(
+            f"Collection input '{field_name}' in lookup requires a list of complete selections."
+        )
+
+
 def parse_filters(
     filter_kwargs: Mapping[str, object],
     possible_values: InputFieldMap,
@@ -90,6 +110,13 @@ def parse_filters(
     ``Input`` when the value is not already a manager instance. Values that are
     already ``GeneralManager`` instances skip casting. In both cases the final
     downstream value is ``getattr(value, "id", value)``.
+
+    Typed collection inputs compare complete selections with ``exact`` (or no
+    suffix) and ``in`` only. Their ``in`` alternatives are complete lists, and
+    manager collections accept the existing ``_id`` alias. Parsed collection
+    criteria also retain candidate values for domainless enumeration. Element
+    conversion runs here; the calculation bucket normalizes whole selections
+    once their dependency values are available.
 
     Non-manager list and tuple values are cast element-by-element when they are
     not already instances of the configured input type; other non-manager
@@ -128,12 +155,19 @@ def parse_filters(
         id_alias_lookup_prefix = ""
         if field_name not in possible_values and field_name.endswith("_id"):
             alias_field_name = field_name.removesuffix("_id")
-            if alias_field_name in possible_values and issubclass(
-                possible_values[alias_field_name].type,
-                GeneralManager,
-            ):
-                field_name = alias_field_name
-                id_alias_lookup_prefix = "id"
+            alias_input = possible_values.get(alias_field_name)
+            if alias_input is not None:
+                manager_type = (
+                    alias_input.collection_element_type
+                    if alias_input.is_collection
+                    else alias_input.type
+                )
+                if isinstance(manager_type, type) and issubclass(
+                    manager_type, GeneralManager
+                ):
+                    field_name = alias_field_name
+                    if not alias_input.is_collection:
+                        id_alias_lookup_prefix = "id"
         if field_name not in possible_values:
             raise UnknownInputFieldError(field_name)
         input_field = possible_values[field_name]
@@ -146,7 +180,27 @@ def parse_filters(
                 else f"{id_alias_lookup_prefix}__{lookup}"
             )
 
-        if issubclass(input_field.type, GeneralManager):
+        if input_field.is_collection:
+            if lookup not in ("", "exact", "in"):
+                raise UnsupportedCollectionLookupError(field_name)
+            # The bucket normalizes selections with dependency context.
+            # Parsing must not repeatedly run whole-list callbacks.
+            collection_cast = Input(input_field.type).cast
+            if lookup == "in":
+                if not isinstance(value, (list, tuple)):
+                    raise InvalidCollectionAlternativesError(field_name)
+                candidates = [collection_cast(candidate) for candidate in value]
+            else:
+                candidates = [collection_cast(value)]
+            entry = filters.setdefault(field_name, {})
+            # The first positive criterion supplies an enumerable domain when
+            # none was declared. All predicates still intersect that domain.
+            entry.setdefault("candidate_values", candidates)
+            entry.setdefault("collection_criteria", []).append(candidates)
+            _ensure_filter_funcs(filters, field_name).append(
+                create_filter_function("in", candidates)
+            )
+        elif issubclass(input_field.type, GeneralManager):
             # Collect filter keyword arguments for the input field
             if lookup == "":
                 lookup = "id"

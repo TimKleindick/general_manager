@@ -1,5 +1,34 @@
 # GraphQL API
 
+## Typed calculation list arguments
+
+`Input(list[T])` generates a required list with non-null elements;
+`Input(list[T], required=False)` generates a nullable list with non-null elements.
+The descriptor introduces no `default` or `default_factory` option. Optional
+omission and explicit `null` both mean `None`; `[]` remains a valid empty list.
+
+| Input declaration | Detail argument |
+| --- | --- |
+| `values = Input(list[int])` | `values: [Int!]!` |
+| `values = Input(list[int], required=False)` | `values: [Int!]` |
+| `employees = Input(list[Employee], required=False)` | `employeesId: [ID!]` for a single-ID manager |
+
+The existing `<input>_id` convention is retained even for collections, so Python
+`employees_id` becomes `employeesId`. Manager lists use the existing ID mapping
+or, for composite constructors, a list of the generated structured
+`...MutationInput` type. Nested constructor references use the same list mapping.
+IDs retain exact integer/string/UUID identity; supply large integer identities as
+ID strings. Ordinary business integers remain `Int`, not `ID`.
+
+GraphQL applies normal scalar and list coercion, including singleton-to-list
+coercion. Python constructors require an explicit list. Null elements are rejected.
+Generated input-value outputs expose native scalar lists or lists of manager
+objects, with existing permission checks. Existing KPI properties are unchanged.
+Collection constructor arguments do not introduce new GraphQL list-filter fields.
+
+See [typed list semantics](../concepts/interfaces/computed_data_interfaces.md#typed-list-inputs)
+and the [executable summary recipe](../examples/collection_inputs.md).
+
 ::: general_manager.api.graphql.GraphQL
 
 ::: general_manager.api.graphql.MeasurementType

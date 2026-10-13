@@ -92,8 +92,13 @@ def build_identification_arguments(
         # name is independent of the actual primary-key column name.
         is_orm_id = is_orm_identifier_input(manager_class, name)
         required = input_field.required or (for_mutation and is_orm_id)
+        is_collection = getattr(input_field, "is_collection", False) is True
+        element_type = (
+            input_field.collection_element_type if is_collection else input_field.type
+        )
+        assert element_type is not None
         manager_type = resolve_general_manager_type(
-            input_field.type, get_graphql_manager_registry()
+            element_type, get_graphql_manager_registry()
         )
         if manager_type is not None:
             # Reuse custom mutation support for structured/composite manager
@@ -101,16 +106,30 @@ def build_identification_arguments(
             from general_manager.api.mutation import (
                 _build_manager_argument_field,
                 _uses_single_id_input,
+                _get_or_create_manager_input_type,
             )
 
+            if is_collection:
+                reference = (
+                    graphene.ID
+                    if _uses_single_id_input(manager_type)
+                    else _get_or_create_manager_input_type(manager_type)
+                )
+                arguments[f"{name}_id"] = graphene.Argument(
+                    graphene.List(graphene.NonNull(reference)), required=required
+                )
+                continue
             arguments[f"{name}_id"] = (
                 graphene.Argument(graphene.ID, required=required)
                 if _uses_single_id_input(manager_type)
                 else _build_manager_argument_field(manager_type, required=required)
             )
         else:
-            scalar = map_identification_scalar(manager_class, name, input_field.type)
-            arguments[name] = graphene.Argument(scalar, required=required)
+            scalar = map_identification_scalar(manager_class, name, element_type)
+            arguments[name] = graphene.Argument(
+                graphene.List(graphene.NonNull(scalar)) if is_collection else scalar,
+                required=required,
+            )
     return arguments
 
 
