@@ -86,8 +86,16 @@ def test_synthesis_selects_only_trusted_schema_origins_and_roundtrips_every_fiel
     assert codec.logical_messages(transport) == messages
     original = json.loads(logical.content.split("=", 1)[1])
     projection = codec.transport_projection(transport[-1].content)
-    expanded = codec.expand_reference(projection, original, logical.schema_slots)
+    expanded = codec.expand_reference(
+        projection,
+        original,
+        logical.schema_slots,
+        reference_binding=logical.reference_binding,
+    )
     assert expanded == original
+    # The schema-only entry retains its narrower contract independently of the
+    # explicitly bound whole-synthesis transport selected by the producer.
+    projection = codec.project_reference(original, logical.schema_slots)
     assert (
         projection["reference"]["resolved_evidence"][1]
         == original["resolved_evidence"][1]
