@@ -72,6 +72,16 @@ REFERENCE_INSTRUCTION = LEGACY_REFERENCE_INSTRUCTION + (
     "pair keys remain opaque. Reference objects are not valid version-2 wire "
     "values; literal marker keys still use the literal-object escape."
 )
+SYNTHESIS_REFERENCE_VERSION = "gm.reference-data/3"
+SYNTHESIS_REFERENCE_INSTRUCTION = REFERENCE_INSTRUCTION + (
+    " Version 3 additionally binds a complete synthesis request. Its "
+    "synthesis_reference root occurrence identifies the original request by "
+    "its complete logical SHA-256 digest. The value grammar is unchanged from "
+    "version 2. Expand all evidence, provenance, completion context and literal "
+    "history exactly; sharing adds no eligibility, permission or evidence authority."
+)
+_TOKEN_REFERENCE_VERSIONS = {REFERENCE_VERSION, SYNTHESIS_REFERENCE_VERSION}
+_REFERENCE_VERSIONS = {LEGACY_REFERENCE_VERSION, *_TOKEN_REFERENCE_VERSIONS}
 MAX_CHARS = 8_000_000
 MAX_NODES = 250_000
 MAX_DEPTH = 64
@@ -368,6 +378,8 @@ def _reference_binding(
         owner = task.get("task_id") if isinstance(task, dict) else None
     elif binding.scope == "judge":
         owner = reference.get("request_sha256")
+    elif binding.scope == "synthesis":
+        owner = _hash(reference)
     else:
         _invalid()
     if (
@@ -519,6 +531,11 @@ def project_reference(
         values = [prepared]
         packing_slots = (SchemaSlot((), "reference_data", "{}"),)
         version, instruction = REFERENCE_VERSION, REFERENCE_INSTRUCTION
+        if reference_binding.scope == "synthesis":
+            version, instruction = (
+                SYNTHESIS_REFERENCE_VERSION,
+                SYNTHESIS_REFERENCE_INSTRUCTION,
+            )
     counts: Counter[str] = Counter()
 
     def count(value: Any) -> None:
@@ -704,7 +721,7 @@ def _share_small_containers(
     Reference version 2 measures its eventual short tokens before accepting a
     rewrite; otherwise profitable short value strings appear too expensive.
     """
-    value_strings = strings_only and projection["format"] == REFERENCE_VERSION
+    value_strings = strings_only and projection["format"] in _TOKEN_REFERENCE_VERSIONS
     reference_cost = len(json.dumps(_dump("~0") if value_strings else '{"$gm_ref":0}'))
 
     def transport_size(candidate: dict[str, Any]) -> int:
@@ -1179,14 +1196,16 @@ def expand_reference(
         VERSION: INSTRUCTION,
         LEGACY_REFERENCE_VERSION: LEGACY_REFERENCE_INSTRUCTION,
         REFERENCE_VERSION: REFERENCE_INSTRUCTION,
+        SYNTHESIS_REFERENCE_VERSION: SYNTHESIS_REFERENCE_INSTRUCTION,
     }
-    whole_reference = isinstance(version, str) and version in {
-        LEGACY_REFERENCE_VERSION,
-        REFERENCE_VERSION,
-    }
+    whole_reference = isinstance(version, str) and version in _REFERENCE_VERSIONS
     occurrences = _occurrences(slots, values)
     if whole_reference:
         if reference_binding is None:
+            _invalid()
+        if (version == SYNTHESIS_REFERENCE_VERSION) != (
+            reference_binding.scope == "synthesis"
+        ):
             _invalid()
         occurrences.insert(0, _reference_binding(original, reference_binding))
     if (
@@ -1208,7 +1227,7 @@ def expand_reference(
         _invalid()
     markers = (
         _MARKERS
-        if version in {VERSION, LEGACY_REFERENCE_VERSION, REFERENCE_VERSION}
+        if version in {VERSION, *_REFERENCE_VERSIONS}
         else _SHAPE_MARKERS
         if version == SHAPE_VERSION
         else _LEGACY_MARKERS
@@ -1234,7 +1253,7 @@ def expand_reference(
         if work > MAX_NODES or depth > MAX_DEPTH:
             _invalid()
         if (
-            version == REFERENCE_VERSION
+            version in _TOKEN_REFERENCE_VERSIONS
             and isinstance(node, str)
             and node.startswith("~")
         ):
@@ -1253,10 +1272,7 @@ def expand_reference(
                 _invalid()
             return resolve(int(token), upper)
         if isinstance(node, dict):
-            if (
-                version in {VERSION, LEGACY_REFERENCE_VERSION, REFERENCE_VERSION}
-                and "$gm_patch" in node
-            ):
+            if version in {VERSION, *_REFERENCE_VERSIONS} and "$gm_patch" in node:
                 patch = node["$gm_patch"]
                 if (
                     set(node) != {"$gm_patch"}
@@ -1289,8 +1305,7 @@ def expand_reference(
                     _invalid()
                 return result, size
             if (
-                version
-                in {SHAPE_VERSION, VERSION, LEGACY_REFERENCE_VERSION, REFERENCE_VERSION}
+                version in {SHAPE_VERSION, VERSION, *_REFERENCE_VERSIONS}
                 and "$gm_shape" in node
             ):
                 shape = node["$gm_shape"]
@@ -1318,7 +1333,7 @@ def expand_reference(
                 return dict(zip(keys, values_list, strict=True)), size
             if "$gm_ref" in node:
                 index = node["$gm_ref"]
-                if set(node) != {"$gm_ref"} or version == REFERENCE_VERSION:
+                if set(node) != {"$gm_ref"} or version in _TOKEN_REFERENCE_VERSIONS:
                     _invalid()
                 return resolve(index, upper)
             if "$gm_literal" in node:
@@ -1552,6 +1567,8 @@ def reference_message(
         if reference_scope == "executor":
             task = reference.get("task")
             owner = task.get("task_id") if isinstance(task, dict) else None
+        elif reference_scope == "synthesis":
+            owner = _hash(reference)
         else:
             owner = reference.get("request_sha256")
         if not isinstance(owner, str):

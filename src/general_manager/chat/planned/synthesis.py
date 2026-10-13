@@ -458,6 +458,7 @@ def _messages(
             slots,
             ensure_ascii=False,
             prefix="RESOLVED_REFERENCE_DATA=",
+            reference_scope="synthesis",
         ),
     ]
 
