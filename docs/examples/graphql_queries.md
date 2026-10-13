@@ -215,6 +215,12 @@ query ProjectRelations($projectId: ID!) {
 }
 ```
 
+The ordinary root and relation pages use the related manager's item-derived
+page type. A relation to `ProjectType` therefore uses `ProjectTypeTypePage`
+and items of type `ProjectTypeType`; update named fragments and regenerate
+schema-derived clients after the page-type rename. The query field, arguments,
+`items`/`pageInfo` shape, IDs, and permissions are unchanged.
+
 Nested relation filters use the same resolved manager type. A direct relation
 uses a nested object, while a collection relation uses `any` or `none`:
 

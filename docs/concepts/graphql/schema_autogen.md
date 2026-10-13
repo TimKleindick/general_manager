@@ -344,7 +344,11 @@ Groups require `groupBy` and use a distinct grouped item type inside the normal
 page envelope. Grouped singular manager relations become `…List` / `…Groups`
 collections of original managers; these operations can be nested recursively.
 Plain `List[GraphQLType]` fields retain their output shape and gain no query
-arguments or grouping companions. See the
+arguments or grouping companions. Ordinary pages are named from their item
+type: a manager `Project` uses `ProjectTypePage`, and a relation to a manager
+named `ProjectType` uses `ProjectTypeTypePage`. This prevents entity and
+reference managers from sharing a page type; schema clients using relation
+fragments must use the canonical item-derived page name. See the
 [grouping contract](filters_pagination.md#grouping) for aggregate values,
 relation cardinality, permissions, and migration.
 
