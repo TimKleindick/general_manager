@@ -1357,7 +1357,6 @@ def field_value_source(resolver: object) -> tuple[str, str] | None:
         binding is None
         or not executable_matches(resolver, binding[2])
         or resolver.__closure__ is None
-        or tuple(cell.cell_contents for cell in resolver.__closure__) != (binding[0],)
         or resolve_with_read_permission is not _COMMON_VALUE_PERMISSION
         or _ensure_as_of_compatible is not _COMMON_VALUE_AS_OF
         or not all(
@@ -1380,6 +1379,27 @@ def field_value_source(resolver: object) -> tuple[str, str] | None:
             )
         )
     ):
+        return None
+
+    captures = dict(
+        zip(
+            resolver.__code__.co_freevars,
+            (cell.cell_contents for cell in resolver.__closure__),
+            strict=True,
+        )
+    )
+    if binding[1] == "identity":
+        # Member-filtered collections do not attest an unchanged attribute value.
+        if (
+            captures.keys() != {"authorize_manager_collection", "field_name"}
+            or captures["authorize_manager_collection"] is not False
+            or captures["field_name"] != binding[0]
+        ):
+            return None
+    elif binding[1] == "measurement":
+        if captures != {"field_name": binding[0]}:
+            return None
+    else:
         return None
     return binding[:2]
 
@@ -1464,11 +1484,12 @@ def create_normal_resolver(
             resolve_normal,
         )
 
-    _FIELD_RESOLVER_BINDINGS[cast(FunctionType, resolver)] = (
-        field_name,
-        "identity",
-        executable_signature(resolver),
-    )
+    if authorize_manager_collection is False:
+        _FIELD_RESOLVER_BINDINGS[cast(FunctionType, resolver)] = (
+            field_name,
+            "identity",
+            executable_signature(resolver),
+        )
     return resolver
 
 
