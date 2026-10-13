@@ -368,7 +368,11 @@ def initialize_general_manager_classes(
         seen: set[str] = set()
         input_fields = getattr(general_manager_class.Interface, "input_fields", {})
         for attribute_name, attribute in input_fields.items():
-            if isinstance(attribute, Input) and issubclass(attribute.type, _GM):
+            if (
+                isinstance(attribute, Input)
+                and isinstance(attribute.type, type)
+                and issubclass(attribute.type, _GM)
+            ):
                 seen.add(attribute_name)
                 yield attribute_name, attribute.type
 

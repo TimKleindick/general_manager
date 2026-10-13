@@ -888,7 +888,13 @@ class GraphQL:
                 fields[resolver_name] = (
                     cls._create_measurement_resolver(field_name)
                     if safe_issubclass(get_args(field_type)[0], Measurement)
-                    else cls._create_normal_resolver(field_name)
+                    else _create_normal_resolver_fn(
+                        field_name,
+                        authorize_manager_collection=resolve_general_manager_type(
+                            get_args(field_type)[0], cls.manager_registry
+                        )
+                        is not None,
+                    )
                 )
             else:
                 fields[resolver_name] = cls._create_resolver(

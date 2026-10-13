@@ -23,7 +23,9 @@ ID strings. Ordinary business integers remain `Int`, not `ID`.
 GraphQL applies normal scalar and list coercion, including singleton-to-list
 coercion. Python constructors require an explicit list. Null elements are rejected.
 Generated input-value outputs expose native scalar lists or lists of manager
-objects, with existing permission checks. Existing KPI properties are unchanged.
+objects. The owning field retains its read-permission check; manager-list outputs
+omit members denied by their manager-level read gate while preserving the order
+and duplicates of permitted members. Existing KPI properties are unchanged.
 Collection constructor arguments do not introduce new GraphQL list-filter fields.
 
 See [typed list semantics](../concepts/interfaces/computed_data_interfaces.md#typed-list-inputs)
