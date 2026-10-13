@@ -1,6 +1,6 @@
 """Execute generated schemas for native list constructor inputs."""
 
-from typing import ClassVar
+from typing import ClassVar, List
 from datetime import date
 from uuid import UUID
 from unittest.mock import patch
@@ -44,7 +44,7 @@ class GraphQLCollectionInputTests(GeneralManagerTransactionTestCase):
 
         class CollectionRequired(GeneralManager):
             class Interface(CalculationInterface):
-                values = Input(list[int])
+                values = Input(List[int])  # Exercise typing.List compatibility.
 
             Permission = CollectionPublicPermission
 
@@ -86,6 +86,7 @@ class GraphQLCollectionInputTests(GeneralManagerTransactionTestCase):
         cls.Code = CollectionCode
         cls.Token = CollectionUuid
         cls.Employee = CollectionEmployee
+        cls.Summary = CollectionSummary
         cls.general_manager_classes = [
             CollectionEmployee,
             CollectionSummary,
@@ -224,6 +225,40 @@ class GraphQLCollectionInputTests(GeneralManagerTransactionTestCase):
             response.json()["data"]["collectionSummary"],
             {"values": None, "employees": [{"id": "17", "name": None}]},
         )
+
+    def test_collection_output_filters_denied_members_preserving_order_and_duplicates(
+        self,
+    ):
+        class RestrictedEmployeePermission(CollectionPublicPermission):
+            def can_read_instance(self):
+                return self.instance.id != 18
+
+        for identity in [17, 18, 19]:
+            self.Employee.Interface._model.objects.create(
+                pk=identity, name=f"Employee {identity}"
+            )
+        with patch.object(self.Employee, "Permission", RestrictedEmployeePermission):
+            response = self.query(
+                "query($ids: [ID!]) { collectionSummary(employeesId: $ids) { employees { id name } } }",
+                variables={"ids": ["17", "18", "19", "17", "18"]},
+            )
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["collectionSummary"]["employees"],
+            [
+                {"id": "17", "name": "Employee 17"},
+                {"id": "19", "name": "Employee 19"},
+                {"id": "17", "name": "Employee 17"},
+            ],
+        )
+
+    def test_subscription_dependencies_include_typed_manager_members(self):
+        self.Employee.Interface._model.objects.create(pk=17, name="Selected")
+        summary = self.Summary(values=[1], employees_id=[17, 17])
+        dependencies = GraphQL._resolve_subscription_dependencies(
+            self.Summary, summary, None
+        )
+        self.assertEqual(dependencies, [(self.Employee, {"id": 17})])
 
     def test_manager_element_validation(self):
         for argument in ["[null]", '["not-an-integer"]']:

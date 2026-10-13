@@ -348,7 +348,14 @@ def resolve_subscription_dependencies(
     interface_cls = manager_class.Interface
 
     for input_name, input_field in interface_cls.input_fields.items():
-        if not issubclass(input_field.type, GeneralManager):
+        manager_type = (
+            input_field.collection_element_type
+            if getattr(input_field, "is_collection", False) is True
+            else input_field.type
+        )
+        if not isinstance(manager_type, type) or not issubclass(
+            manager_type, GeneralManager
+        ):
             continue
 
         raw_value = instance._interface.identification.get(input_name)
@@ -359,7 +366,6 @@ def resolve_subscription_dependencies(
         for value in values:
             if isinstance(value, GeneralManager):
                 identification = deepcopy(value.identification)
-                manager_type = input_field.type
                 if (
                     manager_type is manager_class
                     and identification == instance.identification
@@ -375,7 +381,6 @@ def resolve_subscription_dependencies(
                 dep_list.append((manager_type, identification))
             elif isinstance(value, dict):
                 identification_dict = deepcopy(cast(Identification, value))
-                manager_type = input_field.type
                 if (
                     manager_type is manager_class
                     and identification_dict == instance.identification

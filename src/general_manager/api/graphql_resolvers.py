@@ -1339,12 +1339,15 @@ def create_measurement_resolver(field_name: str) -> Resolver:
     return resolver
 
 
-def create_normal_resolver(field_name: str) -> Resolver:
+def create_normal_resolver(
+    field_name: str, *, authorize_manager_collection: bool = False
+) -> Resolver:
     """
     Return a resolver for a scalar (non-list, non-Measurement) field.
 
     The generated resolver returns ``None`` when field read permission is denied;
-    otherwise it returns ``getattr(self, field_name)``.
+    otherwise it returns ``getattr(self, field_name)``. Typed manager collections
+    additionally omit members denied by the manager-level read gate.
     """
 
     def resolver(self: GeneralManager, info: GraphQLResolveInfo) -> object:
@@ -1356,11 +1359,18 @@ def create_normal_resolver(field_name: str) -> Resolver:
                 if relation_id is not _NO_GROUPED_RELATION_ID_ALIAS:
                     return relation_id
                 _validate_grouped_field_projection(self, field_name)
-            return project_grouped_field_value(
+            value = project_grouped_field_value(
                 self,
                 field_name,
                 read_grouped_field_value(self, field_name),
             )
+            if authorize_manager_collection and value is not None:
+                return [
+                    member
+                    for member in cast(list[GeneralManager], value)
+                    if can_read_instance_for_user(member, info.context.user)
+                ]
+            return value
 
         return resolve_with_read_permission(
             self,
