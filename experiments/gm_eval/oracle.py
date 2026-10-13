@@ -363,14 +363,19 @@ class _Contract:
                         }
                     )
 
-            for name in ("all_materials", "any_materials", "excluded_materials"):
+            for name, entity in {
+                "all_materials": "Material",
+                "any_materials": "Material",
+                "excluded_materials": "Material",
+                "supplier_ids": "Supplier",
+            }.items():
                 if name in constraints:
                     self.value["entity_identity_reference"].setdefault(
                         "paths", []
                     ).append(
                         {
                             "path": ["constraints", name],
-                            "manager": "Material",
+                            "manager": entity,
                             "shape": "list",
                         }
                     )
@@ -1103,6 +1108,16 @@ def expected_turn(
             _forecast_contract(contract, data, selected_customer)
         if resolved in {"recommend", "final"}:
             _recommendation(contract, data)
+            if resolved == "recommend":
+                # Standalone recommendations address every ranked recipient.
+                # Combined reports retain their separately selected customer.
+                contract.fact(
+                    "R",
+                    "customer_ids",
+                    contract.value["facts"]["recommendation_ids"],
+                    "set",
+                    entity_manager="Customer",
+                )
             contract.measure(
                 "shipped_quantity",
                 "pieces",
