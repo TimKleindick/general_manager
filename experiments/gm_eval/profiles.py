@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 from .trace import TraceRecorder, fingerprint, sanitize
 from general_manager.chat.planned.schema_projection import (
     REFERENCE_VERSION as REFERENCE_TRANSPORT_VERSION,
+    SYNTHESIS_REFERENCE_VERSION as SYNTHESIS_REFERENCE_TRANSPORT_VERSION,
     VERSION as SCHEMA_TRANSPORT_VERSION,
 )
 
@@ -67,7 +68,9 @@ class EvaluationProfile:
             "role": role,
             "profile": self.name,
             "schema_transport_version": self.schema_transport_version,
-            "reference_transport_version": self.reference_transport_version,
+            "reference_transport_version": SYNTHESIS_REFERENCE_TRANSPORT_VERSION
+            if role in {"synthesizer", "fallback"}
+            else self.reference_transport_version,
             "strong": strong,
         }
 
@@ -145,10 +148,15 @@ class ExperimentProvider:
             != SCHEMA_TRANSPORT_VERSION
         ):
             raise ValueError("unsupported_schema_transport_version")
+        reference_version = (
+            SYNTHESIS_REFERENCE_TRANSPORT_VERSION
+            if config is not None and config.get("role") in {"synthesizer", "fallback"}
+            else REFERENCE_TRANSPORT_VERSION
+        )
         if (
             config is not None
-            and config.get("reference_transport_version", REFERENCE_TRANSPORT_VERSION)
-            != REFERENCE_TRANSPORT_VERSION
+            and config.get("reference_transport_version", reference_version)
+            != reference_version
         ):
             raise ValueError("unsupported_reference_transport_version")
         self._config = MappingProxyType(
