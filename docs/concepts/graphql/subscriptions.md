@@ -7,9 +7,9 @@
 For each manager class (e.g. `Project`), GraphQL exposes a subscription field named `on<ManagerClass>Change` (e.g. `onProjectChange`). Multi-word manager names keep their word boundaries in camelCase, such as `TaxCalculation` becoming `onTaxCalculationChange`. The resolver:
 
 1. Validates the identification arguments (e.g. `id`, other interface inputs).
-2. Instantiates the manager and emits an initial `snapshot` event.
-3. Adds the subscription to one or more channel groups.
-4. Listens for change notifications and forwards them as `SubscriptionEvent` payloads.
+2. Instantiates the manager and checks the request user's instance read permission before evaluating selected, readable properties.
+3. Rechecks access, joins the target and dependency channel groups, and emits an authorized `snapshot`.
+4. Rehydrates and authorizes the target before forwarding each change notification. If the target becomes unavailable or unreadable, closes the stream and removes its listeners.
 
 ```graphql
 subscription ($id: ID!) {
@@ -42,7 +42,7 @@ Class-wide subscriptions do not emit an initial `snapshot`, because there is no 
 Each event has two fields:
 
 - `action`: describes what triggered the update (`snapshot`, `update`, `delete`, custom signals).
-- `item`: a fresh manager instance (or `null` if the underlying data can no longer be fetched).
+- `item`: a fresh, readable manager instance. Class-wide aggregate `refresh` events have no identified item and use `null`. A detail stream ends if its target can no longer be hydrated or authorized.
 
 ## WebSocket protocol cookbook
 
@@ -236,7 +236,7 @@ The subscription arguments mirror the interface inputs. For nested managers, the
 
 ## Dependency tracking
 
-When a client subscribes to `on<Manager>Change`, the resolver primes only the GraphQL properties that appear in the `item { … }` selection. The priming step records two sets of dependencies:
+When a client subscribes to `on<Manager>Change`, the resolver first checks `Permission(instance, request_user).can_read_instance()`. It then primes only selected GraphQL properties whose native field read permission succeeds. Denied fields are not evaluated for dependency discovery; their payload resolvers retain normal field masking. Construction, permission checks and priming run in an async-safe worker. The priming step records two sets of dependencies:
 
 - Inputs defined on the interface (standard behaviour).
 - Additional managers accessed inside the requested GraphQL properties.
@@ -284,7 +284,9 @@ subscriber actually needs.
 ## Error handling
 
 - Missing channel layer configuration produces a GraphQL error instructing the operator to configure `CHANNEL_LAYERS`.
-- If instantiating the manager or a dependency fails during an update, the subscription sends an event with `item = null` and the incoming `action`. Clients can use this to show a placeholder while retrying the fetch.
+- Detail subscriptions reject initially unavailable or unreadable targets before property priming or channel registration. The authenticated request user controls authorization, including when calculation inputs contain another account or actor ID.
+- Detail subscriptions recheck instance read permission before snapshot delivery and each subsequent event, including action-only selections and dependency refreshes. Revoked access or an unhydratable target ends the stream without forwarding the queued action, and listeners and channel memberships are cleaned up. A hard deletion therefore closes the detail stream; a soft deletion may produce an event only if the target remains hydratable and readable. Permission-backend errors fail closed and use the normal error/cleanup path.
+- Authorization is evaluated when preparing and delivering events; a stream does not poll permissions independently of incoming events. Clients must subscribe again after a terminated stream if access is restored.
 - Class-wide subscriptions check object-level read permission before yielding
   each ordinary row-level event. If the requesting user cannot read the changed
   object, the event is suppressed entirely so the stream does not reveal hidden

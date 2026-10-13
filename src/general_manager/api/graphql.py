@@ -47,6 +47,7 @@ from general_manager.bucket._materialized_bucket import MaterializedBucket
 from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.bucket.request_bucket import RequestBucket
 from general_manager.bucket.indexing import freeze_bucket_index_value
+from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import (
     Dependency,
 )
@@ -116,6 +117,7 @@ from general_manager.api.graphql_resolvers import (
     apply_pagination as _apply_pagination_fn,
     apply_grouping as _apply_grouping_fn,
     check_read_permission as _check_read_permission_fn,
+    check_read_permission_for_user as _check_read_permission_for_user_fn,
     can_read_instance_for_user as _can_read_instance_for_user_fn,
     create_measurement_resolver as _create_measurement_resolver_fn,
     create_normal_resolver as _create_normal_resolver_fn,
@@ -2392,6 +2394,36 @@ class GraphQL:
         return item if readable else None
 
     @classmethod
+    def _prepare_detail_subscription(
+        cls,
+        manager_class: type[GeneralManager],
+        identification: GraphQLIdentification,
+        user: object,
+        *,
+        property_names: Iterable[str] = (),
+    ) -> tuple[GeneralManager, set[Dependency]] | None:
+        """Hydrate and authorize before priming selected readable properties.
+
+        Call in a worker thread: construction, native permissions and property
+        reads may all access the ORM. Only hydration errors are suppressed;
+        permission-backend and property failures must fail the stream closed.
+        """
+        with DependencyTracker() as dependencies:
+            try:
+                instance, _ = cls._instantiate_manager(manager_class, identification)
+            except SUBSCRIPTION_HYDRATION_ERRORS:
+                return None
+            if not _can_read_instance_for_user_fn(instance, user):
+                return None
+            readable_properties = [
+                name
+                for name in property_names
+                if _check_read_permission_for_user_fn(instance, user, name)
+            ]
+            cls._prime_graphql_properties(instance, readable_properties)
+        return instance, dependencies
+
+    @classmethod
     def _add_subscription_field(
         cls,
         graphene_type: type[graphene.ObjectType],
@@ -2411,7 +2443,7 @@ class GraphQL:
 
         Notes:
         - The subscribe function requires an available channel layer and subscribes the caller to channel groups derived from the instance identification and its resolved dependencies.
-        - The subscribe coroutine yields SubscriptionEvent objects with fields `item` (the current instance or None if it cannot be instantiated) and `action` (a string such as `"snapshot"` or other change actions).
+        - Detail events contain an authorized current instance and an action; unavailable or unreadable targets terminate the detail stream.
         - On termination the subscription cleans up listener tasks and unsubscribes from channel groups.
         """
         manager_field_name = pascal_to_snake(generalManagerClass.__name__)
@@ -2451,26 +2483,29 @@ class GraphQL:
             """
             Stream subscription events for a specific manager instance identified by the provided arguments.
 
-            Yields an initial `SubscriptionEvent` with `action` set to `"snapshot"` containing the current manager instance, then yields `SubscriptionEvent`s for each subsequent action. For subsequent events, `item` will be the re-instantiated manager instance or `None` if instantiation fails. The subscriber is registered on the manager's channel groups (including dependent managers' groups) and the channel subscriptions and background listener are cleaned up when the iterator is closed or cancelled.
-
-            Parameters:
-                identification: Identification fields required to locate the manager instance (maps to the manager's identification signature).
-
-            Returns:
-                AsyncIterator[SubscriptionEvent]: An asynchronous iterator that first yields a snapshot event and then yields update events; each event's `item` is the manager instance or `None` if it could not be instantiated.
+            Authorize the request user before property priming and registration.
+            Recheck access before each event; unavailable or unreadable targets
+            end the iterator without forwarding the queued action. Closing the
+            iterator removes its listeners and channel memberships.
             """
             identification_copy = deepcopy(identification)
             property_names = cls._subscription_property_names(info, generalManagerClass)
+            subscription_user = info.context.user
             try:
-                instance, dependency_records = await asyncio.to_thread(
-                    cls._instantiate_manager,
+                prepared = await asyncio.to_thread(
+                    cls._prepare_detail_subscription,
                     generalManagerClass,
                     identification_copy,
-                    collect_dependencies=True,
+                    subscription_user,
                     property_names=property_names,
                 )
             except Exception as exc:  # pragma: no cover - bubbled to GraphQL
                 raise GraphQLError(str(exc)) from exc
+
+            if prepared is None:
+                message = "Subscription target is unavailable or not readable."
+                raise GraphQLError(message)
+            instance, dependency_records = prepared
 
             try:
                 channel_layer = cast(
@@ -2498,15 +2533,16 @@ class GraphQL:
                 group_names.add(cls._refresh_group_name(dependency_class))
 
             async def event_stream() -> AsyncIterator[SubscriptionEvent]:
-                """
-                Yield subscription events for a manager instance, starting with an initial snapshot followed by subsequent updates.
-
-                Returns:
-                    AsyncIterator[SubscriptionEvent]: An asynchronous iterator that first yields a `SubscriptionEvent` with `action` set to `"snapshot"` and `item` containing the current manager instance (or `None` if instantiation failed). Subsequent yields provide `SubscriptionEvent` values for each received action, where `action` is the action string and `item` is the (re-)instantiated manager or `None` if instantiation failed.
-
-                Notes:
-                    When the iterator is closed or exits, the background listener task is cancelled and the subscription's channel group memberships are discarded.
-                """
+                """Deliver authorized events and clean up on every exit path."""
+                # The iterator may be consumed long after subscribe() returns.
+                prepared = await asyncio.to_thread(
+                    cls._prepare_detail_subscription,
+                    generalManagerClass,
+                    identification_copy,
+                    subscription_user,
+                )
+                if prepared is None:
+                    return
                 channel_name = cast(str, await channel_layer.new_channel())
                 queue: asyncio.Queue[str] = asyncio.Queue[str]()
                 joined_groups = await _join_subscription_groups(
@@ -2523,19 +2559,29 @@ class GraphQL:
                     joined_groups,
                     listener_task,
                 ):
+                    # Group registration awaits I/O; access can change meanwhile.
+                    prepared = await asyncio.to_thread(
+                        cls._prepare_detail_subscription,
+                        generalManagerClass,
+                        identification_copy,
+                        subscription_user,
+                    )
+                    if prepared is None:
+                        return
+                    item, _ = prepared
                     clear_capability_context(info)
-                    yield SubscriptionEvent(item=instance, action="snapshot")
+                    yield SubscriptionEvent(item=item, action="snapshot")
                     while True:
                         action = await queue.get()
-                        try:
-                            item, _ = await asyncio.to_thread(
-                                cls._instantiate_manager,
-                                generalManagerClass,
-                                identification_copy,
-                                property_names=property_names,
-                            )
-                        except SUBSCRIPTION_HYDRATION_ERRORS:
-                            item = None
+                        prepared = await asyncio.to_thread(
+                            cls._prepare_detail_subscription,
+                            generalManagerClass,
+                            identification_copy,
+                            subscription_user,
+                        )
+                        if prepared is None:
+                            return
+                        item, _ = prepared
                         clear_capability_context(info)
                         yield SubscriptionEvent(item=item, action=action)
 
