@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import subprocess
@@ -790,40 +791,10 @@ finally:runtime.close()
         )
 
 
-@pytest.mark.parametrize("case_id", ["E007", "E008", "E009", "E010", "E100", "E101"])
-def test_consumer_parity_has_identical_real_tools_and_history(case_id):
-    result = _child(f"""
-import asyncio, json, sys, time
-from experiments.gm_eval.catalog import load_catalog
-from experiments.gm_eval.runtime import bootstrap
-from experiments.gm_eval import harness
-from experiments.gm_eval.harness import compare_consumer_parity
-from experiments.gm_eval.profiles import make_profile
-case=next(c for c in load_catalog() if c["id"]=={case_id!r})
-started=time.monotonic()
-def phase(name):
- if case["id"]=="E100":
-  print("GM_E100_PHASE "+json.dumps(dict(phase=name,elapsed_seconds=time.monotonic()-started)),file=sys.stderr,flush=True)
-original_run_case=harness.run_case
-async def observed_run_case(*args,**kwargs):
- route=kwargs.get("route","scheduler")
- phase(route+"_begin")
- try:return await original_run_case(*args,**kwargs)
- finally:phase(route+"_end")
-if case["id"]=="E100":harness.run_case=observed_run_case
-phase("bootstrap_begin")
-runtime=bootstrap(manager_count=case["managers"],snapshot=case["snapshot"],variant=case["fixture_variant"])
-phase("bootstrap_end")
-try:
- parity=asyncio.run(compare_consumer_parity(runtime,case,make_profile("weak-only")))
- phase("parity_end")
- print(json.dumps(parity))
- phase("json_end")
-finally:
- phase("runtime_close_begin")
- runtime.close()
- phase("runtime_close_end")
-""")
+def _verified_consumer_parity_receipt(result, case_id):
+    if not __debug__:
+        message = "Native parity checks require enabled Python assertions"
+        raise RuntimeError(message)
     assert result["parity_passed"] is True
     assert result["scheduler"]["status"] in {
         "infrastructure_check",
@@ -861,6 +832,53 @@ finally:
                 assert {"role": "user", "content": second["user"]} in side["turns"][2][
                     "history"
                 ]
+    return {"case_id": case_id, "parity_assertions_passed": True}
+
+
+@pytest.mark.parametrize("case_id", ["E007", "E008", "E009", "E010", "E100", "E101"])
+def test_consumer_parity_has_identical_real_tools_and_history(case_id):
+    result = _child(
+        inspect.getsource(_verified_consumer_parity_receipt)
+        + f"""
+import time
+started=time.monotonic()
+import asyncio, json, sys
+from experiments.gm_eval.catalog import load_catalog
+from experiments.gm_eval.runtime import bootstrap
+from experiments.gm_eval import harness
+from experiments.gm_eval.harness import compare_consumer_parity
+from experiments.gm_eval.profiles import make_profile
+case=next(c for c in load_catalog() if c["id"]=={case_id!r})
+def phase(name):
+ if case["id"]=="E100":
+  print("GM_E100_PHASE "+json.dumps(dict(phase=name,elapsed_seconds=time.monotonic()-started)),file=sys.stderr,flush=True)
+phase("imports_end")
+original_run_case=harness.run_case
+async def observed_run_case(*args,**kwargs):
+ route=kwargs.get("route","scheduler")
+ phase(route+"_begin")
+ try:return await original_run_case(*args,**kwargs)
+ finally:phase(route+"_end")
+if case["id"]=="E100":harness.run_case=observed_run_case
+phase("bootstrap_begin")
+runtime=bootstrap(manager_count=case["managers"],snapshot=case["snapshot"],variant=case["fixture_variant"])
+phase("bootstrap_end")
+try:
+ parity=asyncio.run(compare_consumer_parity(runtime,case,make_profile("weak-only")))
+ phase("parity_end")
+ phase("parity_assertions_begin")
+ receipt=_verified_consumer_parity_receipt(parity,case["id"])
+ phase("parity_assertions_end")
+ del parity
+ print(json.dumps(receipt))
+ phase("json_end")
+finally:
+ phase("runtime_close_begin")
+ runtime.close()
+ phase("runtime_close_end")
+"""
+    )
+    assert result == {"case_id": case_id, "parity_assertions_passed": True}
 
 
 def test_real_readonly_plan_tool_executes_native_contract():
