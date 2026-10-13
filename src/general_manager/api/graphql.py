@@ -835,14 +835,25 @@ class GraphQL:
         graphene_type_name = f"{generalManagerClass.__name__}Type"
         fields: GraphQLFieldMap = {}
 
+        # Only declared typed-list inputs opt into native list output semantics.
+        input_fields = getattr(interface_cls, "input_fields", {})
         # Map Attribute Types to Graphene Fields
-        for field_name, field_info in interface_cls.get_attribute_types().items():
+        for field_name, attribute_info in interface_cls.get_attribute_types().items():
+            field_info: Mapping[str, object] = attribute_info
+            input_field = input_fields.get(field_name)
+            is_collection_input = getattr(input_field, "is_collection", False) is True
+            if is_collection_input:
+                field_info = {**field_info, "is_collection_input": True}
             field_type = field_info["type"]
             resolved_manager_type = resolve_general_manager_type(
                 field_type,
                 cls.manager_registry,
             )
-            resolved_field_type = resolved_manager_type or field_type
+            resolved_field_type = (
+                field_type
+                if is_collection_input
+                else resolved_manager_type or field_type
+            )
             fields[field_name] = cls._map_field_to_graphene_read(
                 resolved_field_type,
                 field_name,
@@ -873,10 +884,16 @@ class GraphQL:
                     )
 
                 fields[resolver_name] = resolve_stored_file
+            elif is_collection_input:
+                fields[resolver_name] = (
+                    cls._create_measurement_resolver(field_name)
+                    if safe_issubclass(get_args(field_type)[0], Measurement)
+                    else cls._create_normal_resolver(field_name)
+                )
             else:
                 fields[resolver_name] = cls._create_resolver(
                     field_name,
-                    resolved_field_type,
+                    cast(type, resolved_field_type),
                 )
             if (
                 field_name.endswith("_list")
@@ -1396,6 +1413,24 @@ class GraphQL:
         Returns:
             object: Graphene field or type configured for the attribute.
         """
+        if field_info and field_info.get("is_collection_input") is True:
+            element = get_args(field_type)[0]
+            manager_element = resolve_general_manager_type(
+                element, GraphQL.manager_registry
+            )
+            if manager_element is not None:
+                return graphene.List(
+                    graphene.NonNull(
+                        lambda: GraphQL.graphql_type_registry[manager_element.__name__]
+                    )
+                )
+            scalar = (
+                MeasurementType
+                if safe_issubclass(element, Measurement)
+                else GraphQL._map_field_to_graphene_base_type(element)
+            )
+            return graphene.List(graphene.NonNull(scalar))
+
         manager_type = resolve_general_manager_type(
             field_type,
             GraphQL.manager_registry,

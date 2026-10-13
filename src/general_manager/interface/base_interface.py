@@ -368,12 +368,40 @@ class InterfaceBase(ABC):
             **kwargs: Named identification values matching the interface's input field names.
         """
         identification = self.parse_input_fields_to_identification(*args, **kwargs)
+        has_collections = any(
+            getattr(field, "is_collection", False) is True
+            for field in self.input_fields.values()
+        )
+        if not has_collections:
+            from general_manager.manager.general_manager import GeneralManager
+
+            has_collections = any(
+                isinstance(value, GeneralManager)
+                and getattr(
+                    value.__dict__.get("_interface"), "_has_collection_inputs", False
+                )
+                is True
+                for value in identification.values()
+            )
+        if has_collections:
+            self._has_collection_inputs = True
+            # Preserve normalized objects before format_identification replaces managers.
+            self._resolved_input_values = {
+                name: list(value) if isinstance(value, list) else value
+                for name, value in identification.items()
+            }
         if len(identification) == 1:
             value = next(iter(identification.values()))
             if value.__class__ in _FORMATLESS_IDENTIFICATION_VALUE_TYPES:
                 self.identification = identification
                 return
         self.identification = self.format_identification(identification)
+        if has_collections:
+            from copy import deepcopy
+
+            for name, field in self.input_fields.items():
+                if getattr(field, "is_collection", False) is True:
+                    self.identification[name] = deepcopy(self.identification[name])
 
     @classmethod
     def set_capability_selection(cls, selection: "CapabilitySelection") -> None:
@@ -1086,7 +1114,9 @@ class InterfaceBase(ABC):
             if input_field.required:
                 raise InvalidInputTypeError(name, type(value), input_field.type)
             return
-        if not isinstance(value, input_field.type):
+        if getattr(input_field, "is_collection", False) is True:
+            input_field.validate_collection_type(value, name)
+        elif not isinstance(value, input_field.type):
             raise InvalidInputTypeError(name, type(value), input_field.type)
         if (
             input_field.min_value is not None or input_field.max_value is not None

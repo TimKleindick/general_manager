@@ -36,10 +36,15 @@ from general_manager.bucket._ordering import (
     validate_ordering_fields,
 )
 from general_manager.bucket.projection import ProjectionRows
-from general_manager.manager.input import Input, InputDomain
+from general_manager.manager.input import (
+    Input,
+    InputDomain,
+    _prepare_normalized_identification,
+)
 from general_manager.utils.filter_parser import (
     FilterFunction,
     ParsedFilters,
+    ParsedFilterCriteria,
     create_filter_function,
     parse_filters,
 )
@@ -240,6 +245,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             parse_filters(group, possible_values) for group in self._exclude_call_groups
         )
 
+        self._normalized_collections: dict[Hashable, object] = {}
         self._data: list[Combination] | None = None
         self._allowed_identifications: list[Combination] | None = None
         self._sort_fields: tuple[str, ...] = ()
@@ -687,7 +693,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         self._ensure_as_of_compatible()
         combinations = self.generate_combinations()
         for combo in combinations:
-            yield self._manager_class(**combo)
+            yield self._construct_manager(combo)
 
     def _project_rows(self, fields: tuple[str, ...]) -> ProjectionRows:
         """Project normalized calculation inputs without manager instances."""
@@ -712,7 +718,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 tuple(
                     resolve_calculation_input_value(
                         interface_class,
-                        identification,
+                        self._normalized_constructor_values(identification),
                         field,
                         resolved_values,
                     )
@@ -803,8 +809,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             or any(len(group) > 1 for group in self._exclude_call_groups)
         )
 
-    @staticmethod
     def _matches_call_group(
+        self,
         manager: GeneralManagerType,
         group: ParsedFilters,
     ) -> bool:
@@ -814,9 +820,19 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 value = getattr(manager, field_name)
             except AttributeError:
                 return False
-            for filter_func in definitions.get("filter_funcs", []):
-                if not filter_func(value):
+            if "collection_criteria" in definitions:
+                dependencies = {
+                    name: getattr(manager, name)
+                    for name in self.input_fields[field_name].depends_on
+                }
+                if not self._collection_matches(
+                    field_name, value, definitions, dependencies
+                ):
                     return False
+            else:
+                for filter_func in definitions.get("filter_funcs", []):
+                    if not filter_func(value):
+                        return False
             for lookup, expected in definitions.get("filter_kwargs", {}).items():
                 identification = getattr(value, "identification", None)
                 lookup_parts = lookup.split("__") if lookup else []
@@ -904,13 +920,56 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             identity_for=lambda combo: combo,
         )
 
+    def _normalize_collection(
+        self, name: str, value: object, context: Combination
+    ) -> object:
+        """Normalize a selection once for each dependency context in this plan."""
+        field = self.input_fields[name]
+        dependencies = {
+            dependency: context[dependency] for dependency in field.depends_on
+        }
+        key = (
+            name,
+            freeze_bucket_index_value(value),
+            freeze_bucket_index_value(dependencies),
+        )
+        if key not in self._normalized_collections:
+            self._normalized_collections[key] = field.cast(
+                value, dependencies, cache_context=(self._manager_class, name)
+            )
+        result = self._normalized_collections[key]
+        return list(result) if isinstance(result, list) else result
+
+    def _collection_matches(
+        self,
+        name: str,
+        value: object,
+        criteria: ParsedFilterCriteria,
+        context: Combination,
+    ) -> bool:
+        """Compare complete normalized selections with normalized alternatives."""
+        return all(
+            any(
+                value == self._normalize_collection(name, candidate, context)
+                for candidate in alternatives
+            )
+            for alternatives in criteria.get("collection_criteria", [])
+        )
+
+    def _normalized_constructor_values(self, combination: Combination) -> Combination:
+        """Mark normalized lists when reconstructing bucket managers or projections."""
+        return _prepare_normalized_identification(self._manager_class, combination)
+
+    def _construct_manager(self, combination: Combination) -> GeneralManagerType:
+        return self._manager_class(**self._normalized_constructor_values(combination))
+
     def _manager_combinations(
         self,
         combinations: list[Combination],
     ) -> list[GeneralManagerType]:
         """Instantiate managers for each raw input-combination dictionary."""
         self._ensure_as_of_compatible()
-        return [self._manager_class(**combo) for combo in combinations]
+        return [self._construct_manager(combo) for combo in combinations]
 
     @staticmethod
     def _manager_identifications(
@@ -1165,16 +1224,56 @@ class CalculationBucket(Bucket[GeneralManagerType]):
             input_name: str = sorted_inputs[index]
             input_field = self.input_fields[input_name]
 
-            possible_values = self.get_possible_values(
-                input_name, input_field, current_combo
-            )
+            field_filters = filters.get(input_name, {})
+            field_excludes = excludes.get(input_name, {})
+            possible_values: Iterable[object] | Bucket[GeneralManager] | None
+            if input_field.is_collection and input_field.possible_values is None:
+                if "candidate_values" in field_filters:
+                    possible_values = field_filters["candidate_values"]
+                elif input_field.required:
+                    raise InvalidPossibleValuesError(input_name)
+                else:
+                    possible_values = [None]
+            else:
+                possible_values = self.get_possible_values(
+                    input_name, input_field, current_combo
+                )
             if possible_values is None:
                 if input_passes_filters(input_name, current_combo):
                     yield from helper(index + 1, current_combo)
                 return
 
-            field_filters = filters.get(input_name, {})
-            field_excludes = excludes.get(input_name, {})
+            if input_field.is_collection:
+                from general_manager.interface.capabilities.calculation.input_resolution import (
+                    resolve_calculation_input_value,
+                )
+
+                resolved_dependencies: Combination = {}
+                for dependency in input_field.depends_on:
+                    resolve_calculation_input_value(
+                        cast(
+                            "type[CalculationInterface]", self._manager_class.Interface
+                        ),
+                        self._normalized_constructor_values(current_combo),
+                        dependency,
+                        resolved_dependencies,
+                    )
+                for raw_value in possible_values:
+                    value = self._normalize_collection(
+                        input_name, raw_value, resolved_dependencies
+                    )
+                    if not self._collection_matches(
+                        input_name, value, field_filters, resolved_dependencies
+                    ):
+                        continue
+                    if field_excludes and self._collection_matches(
+                        input_name, value, field_excludes, resolved_dependencies
+                    ):
+                        continue
+                    current_combo[input_name] = value
+                    yield from helper(index + 1, current_combo)
+                    del current_combo[input_name]
+                return
 
             # use filter_funcs and exclude_funcs to filter possible values
             if isinstance(possible_values, Bucket):
@@ -1197,7 +1296,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                     possible_values = list(possible_values)
 
             for value in possible_values:
-                if not isinstance(value, input_field.type):
+                if not input_field.is_collection and not isinstance(
+                    value, input_field.type
+                ):
                     continue
                 current_combo[input_name] = value
                 yield from helper(index + 1, current_combo)
@@ -1247,7 +1348,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         matching combinations have been found.
         """
         for combo in combinations:
-            manager = self._manager_class(**combo)
+            manager = self._construct_manager(combo)
             if (
                 allowed_identification_keys is not None
                 and freeze_bucket_index_value(manager.identification)
@@ -1371,10 +1472,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
             return MaterializedBucket(
                 self._manager_class,
-                tuple(self._manager_class(**combination) for combination in result),
+                tuple(self._construct_manager(combination) for combination in result),
                 snapshot=self._effective_search_date,
             )
-        return self._manager_class(**result)
+        return self._construct_manager(result)
 
     def __contains__(self, item: GeneralManagerType) -> bool:
         """

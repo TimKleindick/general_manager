@@ -388,9 +388,14 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         """Provide snapshot-preserving pickling support for this manager."""
         effective = _legacy_effective_search_date(self)
+        from general_manager.manager.input import _prepare_normalized_identification
+
+        values = tuple(
+            _prepare_normalized_identification(self.__class__, self.__id).values()
+        )
         return (
             _reconstruct_general_manager,
-            (self.__class__, tuple(self.__id.values()), effective),
+            (self.__class__, values, effective),
         )
 
     def __or__(
@@ -433,6 +438,13 @@ class GeneralManager(metaclass=GeneralManagerMeta):
     @property
     def identification(self) -> dict[str, object]:
         """Return the identification dictionary used to fetch the managed object."""
+        if (
+            getattr(self.__dict__.get("_interface"), "_has_collection_inputs", False)
+            is True
+        ):
+            from copy import deepcopy
+
+            return deepcopy(self.__id)
         return self.__id
 
     @property
@@ -795,8 +807,9 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             )
         return cast(Bucket[Self], cls.Interface.filter())
 
-    @staticmethod
+    @classmethod
     def __parse_identification(
+        cls,
         kwargs: dict[str, object],
     ) -> dict[str, object] | None:
         """
@@ -823,7 +836,17 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
         output: dict[str, object] = {}
         changed = False
+        fields = getattr(getattr(cls, "Interface", None), "input_fields", {})
         for key, value in kwargs.items():
+            input_name = key.split("__", 1)[0]
+            input_field = fields.get(input_name)
+            if input_field is None and input_name.endswith("_id"):
+                input_field = fields.get(input_name[:-3])
+            if getattr(input_field, "is_collection", False) is True:
+                # Collection casting retains resolved manager members; flattening
+                # them here would rerun nested collection normalizers.
+                output[key] = value
+                continue
             if isinstance(value, GeneralManager):
                 output[key] = GeneralManager.__lookup_identifier(value)
                 changed = True

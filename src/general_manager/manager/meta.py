@@ -797,6 +797,16 @@ class GeneralManagerMeta(type):
                         getattr(descriptor_class.Interface, "_interface_type", None)
                         != "excel"
                     )
+                    input_field = getattr(
+                        descriptor_class.Interface, "input_fields", {}
+                    ).get(descriptor_attr_name)
+                    if (
+                        input_field is not None
+                        and getattr(input_field, "is_collection", False) is True
+                    ):
+                        # The input accessor owns its normalized snapshot and replays
+                        # each member dependency while returning defensive copies.
+                        self._cache_values = False
                     self._dependency_tracking_value_class: type | object = (
                         _DESCRIPTOR_DEPENDENCY_TRACKING_CLASS_UNKNOWN
                     )
