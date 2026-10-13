@@ -44,6 +44,14 @@ does supplying the backing attributes directly. The same initialization rule
 applies to subclasses that inherit the field; it is not a database-side
 default.
 
+For ORM interface metadata, concrete `Measurement` and parseable string
+defaults are validated and normalized to the declared unit, so generated
+GraphQL SDL and introspection can expose them. Callable defaults are not
+evaluated during schema construction and are omitted from GraphQL defaults.
+Generated partial-update arguments omit defaults: leaving `weight` out keeps
+the stored value, while explicitly passing `null` clears it when the field is
+nullable.
+
 ## Step 2: Run migrations
 
 ```bash

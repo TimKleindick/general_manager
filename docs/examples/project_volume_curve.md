@@ -44,6 +44,13 @@ paired-column conversion. An explicit `volume=None` or measurement value wins
 over the default. This applies to inherited concrete models as well and does
 not create a database-side default.
 
+Concrete defaults are also normalized and validated in ORM interface metadata,
+so generated GraphQL SDL and introspection can expose a string default such as
+`"0 kWh"` in the declared unit. Callable defaults are intentionally omitted
+from schema defaults because they are evaluated only during model
+initialization. Partial-update arguments omit defaults: omission preserves the
+stored volume, while explicit `null` clears it when the field is nullable.
+
 ```python
 def project_volume_curve(project: Project) -> tuple[tuple[date, Measurement], ...]:
     grouped = (

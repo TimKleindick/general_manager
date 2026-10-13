@@ -52,6 +52,15 @@ The signal handlers that provide this behavior are tied weakly to live model
 classes, so temporary migration-state models can be collected after they are
 discarded instead of being retained by global signal receivers.
 
+When a concrete `MeasurementField` default is a `Measurement` or a parseable
+string, ORM interface metadata normalizes it to a validated `Measurement` in
+the declared unit. Generated GraphQL SDL and introspection can therefore show
+the default without evaluating the field declaration again. Callable defaults
+remain model-initialization behavior and are omitted from schema defaults; the
+field declaration and migration serialization are unchanged. Generated
+partial-update inputs omit defaults, so omission preserves the stored value
+while explicit `None` remains a clear operation.
+
 Assignment clears the backing columns immediately. On a non-nullable field,
 Django validation rejects that cleared value later through the normal
 `null=False` validation path. Saving without model validation relies on the
