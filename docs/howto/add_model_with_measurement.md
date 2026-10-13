@@ -45,9 +45,11 @@ applies to subclasses that inherit the field; it is not a database-side
 default.
 
 For ORM interface metadata, concrete `Measurement` and parseable string
-defaults are validated and normalized to the declared unit, so generated
-GraphQL SDL and introspection can expose them. Callable defaults are not
-evaluated during schema construction and are omitted from GraphQL defaults.
+defaults are normalized to `Measurement` objects and checked for compatibility
+with `base_unit`, retaining the supplied unit. The backing-column magnitude is
+converted separately to `base_unit`. Generated GraphQL SDL and introspection
+can expose these defaults. Callable defaults are not evaluated during schema
+construction and are omitted from GraphQL defaults.
 Generated partial-update arguments omit defaults: leaving `weight` out keeps
 the stored value, while explicitly passing `null` clears it when the field is
 nullable.
