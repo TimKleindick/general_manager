@@ -522,10 +522,13 @@ def project_reference(
     counts: Counter[str] = Counter()
 
     def count(value: Any) -> None:
-        if isinstance(value, (dict, list)):
+        if isinstance(value, (dict, list)) or (
+            reference_binding is not None and isinstance(value, str)
+        ):
             key = _dump(value)
             if len(key) >= 80:
                 counts[key] += 1
+        if isinstance(value, (dict, list)):
             for child in value.values() if isinstance(value, dict) else value:
                 count(child)
 
@@ -535,7 +538,9 @@ def project_reference(
     indices: dict[str, int] = {}
 
     def pack(value: Any) -> Any:
-        if not isinstance(value, (dict, list)):
+        if not isinstance(value, (dict, list)) and not (
+            reference_binding is not None and isinstance(value, str)
+        ):
             return value
         key = _dump(value)
         repeated = counts[key] > 1
@@ -546,8 +551,10 @@ def project_reference(
                 node: Any = {"$gm_literal": [[k, pack(v)] for k, v in value.items()]}
             else:
                 node = {k: pack(v) for k, v in value.items()}
-        else:
+        elif isinstance(value, list):
             node = [pack(child) for child in value]
+        else:
+            node = value
         if repeated:
             index = len(objects)
             if index >= MAX_OBJECTS:
@@ -573,6 +580,7 @@ def project_reference(
     result = _share_wide_key_strings(result, packing_slots)
     result = _share_similar_lists(result, packing_slots)
     if reference_binding is not None:
+        result = _share_small_containers(result, packing_slots, strings_only=True)
         result = _reference_tokens(result)
     # Independent decoding validates binding, backward references and full logical input.
     expand_reference(result, reference, slots, reference_binding=reference_binding)
@@ -683,18 +691,33 @@ def _copy_for_rewrite(
 
 
 def _share_small_containers(
-    projection: dict[str, Any], slots: tuple[SchemaSlot, ...]
+    projection: dict[str, Any],
+    slots: tuple[SchemaSlot, ...],
+    *,
+    strings_only: bool = False,
 ) -> dict[str, Any]:
-    """Pool at most sixteen profitable small, marker-free containers.
+    """Pool at most sixteen profitable small containers or reference value strings.
 
     Work is bounded by the existing node limit and a fixed pass count. Measure
     the entire escaped transport including shifted references and metadata.
-    Literal marker scaffolding is never selected or replaced.
+    Literal marker scaffolding and object keys are never selected or replaced.
+    Reference version 2 measures its eventual short tokens before accepting a
+    rewrite; otherwise profitable short value strings appear too expensive.
     """
+    value_strings = strings_only and projection["format"] == REFERENCE_VERSION
+    reference_cost = len(json.dumps(_dump("~0") if value_strings else '{"$gm_ref":0}'))
+
+    def transport_size(candidate: dict[str, Any]) -> int:
+        return _transport_size(
+            _reference_tokens(candidate) if value_strings else candidate
+        )
+
     for _ in range(MAX_SMALL_POOL_PASSES):
         counts: Counter[str] = Counter()
 
         def count(node: Any, pool_counts: Counter[str] = counts) -> bool:
+            if value_strings and isinstance(node, str):
+                pool_counts[_dump(node)] += 1
             if not isinstance(node, (dict, list)):
                 return True
             if isinstance(node, dict) and "$gm_ref" in node:
@@ -705,7 +728,7 @@ def _share_small_containers(
                 return False
             children = node.values() if isinstance(node, dict) else node
             marker_free = all([count(child) for child in children])
-            if marker_free:
+            if marker_free and not strings_only:
                 key = _dump(node)
                 # Profit is measured after escaping. Even a tiny definition
                 # can be profitable across many manifest entries.
@@ -719,9 +742,7 @@ def _share_small_containers(
             count(_get(projection["reference"], slot.path))
         candidates = [
             (
-                (n - 1) * len(json.dumps(key))
-                - n * len(json.dumps('{"$gm_ref":0}'))
-                - 2,
+                (n - 1) * len(json.dumps(key)) - n * reference_cost - 2,
                 key,
             )
             for key, n in counts.items()
@@ -733,6 +754,8 @@ def _share_small_containers(
         _, selected = max(candidates)
 
         def rewrite(node: Any, selected_key: str = selected) -> Any:
+            if value_strings and isinstance(node, str) and _dump(node) == selected_key:
+                return {"$gm_ref": 0}
             if not isinstance(node, (dict, list)):
                 return node
             if _dump(node) == selected_key:
@@ -740,6 +763,23 @@ def _share_small_containers(
             if isinstance(node, dict):
                 if "$gm_ref" in node:
                     return {"$gm_ref": node["$gm_ref"] + 1}
+                if "$gm_shape" in node:
+                    return {
+                        "$gm_shape": [
+                            node["$gm_shape"][0] + 1,
+                            rewrite(node["$gm_shape"][1]),
+                        ]
+                    }
+                if "$gm_patch" in node:
+                    return {
+                        "$gm_patch": [
+                            node["$gm_patch"][0] + 1,
+                            [
+                                [index, rewrite(value)]
+                                for index, value in node["$gm_patch"][1]
+                            ],
+                        ]
+                    }
                 if "$gm_literal" in node:
                     return {
                         "$gm_literal": [
@@ -759,7 +799,7 @@ def _share_small_containers(
                 slot.path,
                 rewrite(_get(projection["reference"], slot.path)),
             )
-        if _transport_size(candidate) >= _transport_size(projection):
+        if transport_size(candidate) >= transport_size(projection):
             break
         projection = candidate
     return projection

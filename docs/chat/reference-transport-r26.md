@@ -23,6 +23,15 @@ neither schema-only nor bound whole-reference encoding reduces that size.
 The provider's existing full JSON admission guard and all codec limits are
 unchanged. Exact logical and transport hashes are different and both are recorded.
 
+Bound version-2 references also share identical value strings. Repeated long
+strings use the existing backward object table; a final phase shares other
+profitable strings in at most sixteen passes after the structural rewrites.
+Profit is measured on the complete escaped transport using its final short
+tokens. Dictionary keys and literal-object pair keys remain opaque. The
+schema-only encoder retains its existing sharing behavior. This changes only
+wire size: every definition, default, snapshot, provenance value, requirement
+link and calculation result still reconstructs exactly.
+
 Prospective evaluation profiles separately declare
 `schema_transport_version="gm.schema-data/3"` and
 `reference_transport_version="gm.reference-data/2"` in every role configuration.
