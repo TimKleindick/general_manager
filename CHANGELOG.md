@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.86.0 (2026-10-13)
+
+### Bug Fixes
+
+- Authorize collection members and handle generic input types
+  ([`ef9a540`](https://github.com/TimKleindick/general_manager/commit/ef9a5402691be2dc9cbcbee67bfb54c5baafc6ad))
+
+### Documentation
+
+- Clarify measurement default unit preservation
+  ([`dde0305`](https://github.com/TimKleindick/general_manager/commit/dde0305c61ecf5b93aab3f815c64666b193181ff))
+
+- Document recent public API changes
+  ([`6d46d03`](https://github.com/TimKleindick/general_manager/commit/6d46d034793271886b27a9d950b7a1d0b8a2c76a))
+
+- Use canonical measurement unit spelling in SDL example
+  ([`e346710`](https://github.com/TimKleindick/general_manager/commit/e34671088d985606d8eb7f442e4efb5c01d84347))
+
+### Features
+
+- Support native typed collection inputs
+  ([`5ae4faf`](https://github.com/TimKleindick/general_manager/commit/5ae4fafc0529c55a98997024c36f9df44fb36d41))
+
+
 ## v0.85.0 (2026-10-12)
 
 ### Bug Fixes
