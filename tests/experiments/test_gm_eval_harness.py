@@ -195,16 +195,44 @@ def _child(program):
     env = os.environ.copy()
     env.pop("DJANGO_SETTINGS_MODULE", None)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    completed = subprocess.run(  # noqa: S603 -- repository-owned offline test programs
-        [sys.executable, "-B", "-c", program],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=90,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(  # noqa: S603 -- repository-owned offline test programs
+            [sys.executable, "-B", "-c", program],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        stderr = error.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        for line in stderr.splitlines():
+            if line.startswith("GM_E100_PHASE "):
+                print(line, file=sys.stderr, flush=True)
+        raise
     assert completed.returncode == 0, completed.stdout + completed.stderr
     return json.loads(completed.stdout.strip().splitlines()[-1])
+
+
+def test_child_timeout_reports_only_phase_markers_and_preserves_guard(
+    monkeypatch, capsys
+):
+    phase = 'GM_E100_PHASE {"phase":"bootstrap_begin","elapsed_seconds":0.1}'
+    failure = subprocess.TimeoutExpired(
+        "offline-program", 90, stderr=("unrelated stderr\n" + phase + "\n").encode()
+    )
+
+    def expired(*args, **kwargs):
+        assert kwargs["timeout"] == 90
+        raise failure
+
+    monkeypatch.setattr(subprocess, "run", expired)
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        _child("offline-program")
+    assert caught.value is failure
+    assert capsys.readouterr().err == phase + "\n"
 
 
 def test_script_reads_current_reference_before_native_tool_history():
@@ -673,17 +701,36 @@ finally:runtime.close()
 @pytest.mark.parametrize("case_id", ["E007", "E008", "E009", "E010", "E100", "E101"])
 def test_consumer_parity_has_identical_real_tools_and_history(case_id):
     result = _child(f"""
-import asyncio, json
+import asyncio, json, sys, time
 from experiments.gm_eval.catalog import load_catalog
 from experiments.gm_eval.runtime import bootstrap
+from experiments.gm_eval import harness
 from experiments.gm_eval.harness import compare_consumer_parity
 from experiments.gm_eval.profiles import make_profile
 case=next(c for c in load_catalog() if c["id"]=={case_id!r})
+started=time.monotonic()
+def phase(name):
+ if case["id"]=="E100":
+  print("GM_E100_PHASE "+json.dumps(dict(phase=name,elapsed_seconds=time.monotonic()-started)),file=sys.stderr,flush=True)
+original_run_case=harness.run_case
+async def observed_run_case(*args,**kwargs):
+ route=kwargs.get("route","scheduler")
+ phase(route+"_begin")
+ try:return await original_run_case(*args,**kwargs)
+ finally:phase(route+"_end")
+if case["id"]=="E100":harness.run_case=observed_run_case
+phase("bootstrap_begin")
 runtime=bootstrap(manager_count=case["managers"],snapshot=case["snapshot"],variant=case["fixture_variant"])
+phase("bootstrap_end")
 try:
- print(json.dumps(asyncio.run(compare_consumer_parity(runtime,case,make_profile("weak-only")))))
+ parity=asyncio.run(compare_consumer_parity(runtime,case,make_profile("weak-only")))
+ phase("parity_end")
+ print(json.dumps(parity))
+ phase("json_end")
 finally:
+ phase("runtime_close_begin")
  runtime.close()
+ phase("runtime_close_end")
 """)
     assert result["parity_passed"] is True
     assert result["scheduler"]["status"] in {
