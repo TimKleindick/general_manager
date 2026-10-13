@@ -229,6 +229,86 @@ def test_catalog_is_frozen_complete_and_balanced() -> None:
         catalog.validate_catalog(changed)
 
 
+def test_recommendation_customer_scope_covers_all_positive_gap_contacts() -> None:
+    contract = expected("E096")
+    assert contract["facts"]["customer_ids"] == ["C01", "C03"]
+    assert contract["facts"]["recommendation_ids"] == ["C01", "C03"]
+    assert contract["facts"]["ranked_ids"] == ["C01", "C03"]
+    assert set(contract["facts"]["customer_evidence"]) == {"C01", "C02", "C03"}
+
+
+def test_recommendation_customer_scope_changes_with_independent_actuals() -> None:
+    row = case("E096")
+    data = api("seeds").build_seed(
+        snapshot=row["snapshot"], variant=row["fixture_variant"]
+    )
+    projects = {
+        item["code"] for item in data["project"] if item["customer_code"] == "C02"
+    }
+    for shipment in data["shipment"]:
+        if shipment["project_code"] in projects:
+            shipment["quantity"] *= 4
+    contract = api("oracle").expected_turn(row, 0, data)
+    # Four times the declining actuals gives 560 versus a 240 plan in 2031.
+    assert contract["facts"]["gaps"]["C02"] == "320.00"
+    assert contract["facts"]["ranked_ids"] == ["C02", "C01", "C03"]
+    assert contract["facts"]["customer_ids"] == ["C02", "C01", "C03"]
+
+
+def test_recommendation_scope_does_not_replace_combined_forecast_customer() -> None:
+    contract = expected("E100", 1)
+    assert contract["facts"]["customer_ids"] == ["C01"]
+    assert contract["facts"]["recommendation_ids"] == ["C01", "C03"]
+
+
+@pytest.mark.parametrize(
+    ("rows", "fields", "normalized", "status"),
+    [
+        ([{"id": "307", "code": "SUP-N"}], ["id", "code"], "SUP-N", "pass"),
+        ([{"id": "307"}], ["id"], "307", "unscored"),
+        ([{"id": "307", "code": "SUP-N"}], ["id"], "307", "unscored"),
+        ([{"id": "307", "code": "SUP-S"}], ["id", "code"], "SUP-S", "fail"),
+        (
+            [{"id": "307", "code": "SUP-N"}, {"id": "307", "code": "SUP-S"}],
+            ["id", "code"],
+            "307",
+            "unscored",
+        ),
+    ],
+)
+def test_supplier_constraint_identity_requires_selected_unambiguous_rows(
+    rows: list[dict[str, Any]], fields: list[str], normalized: str, status: str
+) -> None:
+    contract = expected("E086")
+    observation, judgment = control(contract)
+    observation["facts"]["constraints"]["supplier_ids"] = ["307"]
+    supplier = next(
+        call
+        for call in observation["trace"]["tool_calls"]
+        if call["managers"] == ["Supplier"]
+    )
+    supplier.update(
+        name="query",
+        root_manager="Supplier",
+        arguments={"manager": "Supplier", "fields": fields},
+        manager_fields={"Supplier": fields},
+        error=False,
+        output={"data": rows, "total_count": len(rows), "has_more": False},
+    )
+    bind_control_trace(observation, judgment)
+    result = score(contract, observation, judgment)
+    facts = result["identity_normalization"]["normalized_facts"]
+    assert facts["constraints"]["supplier_ids"] == [normalized]
+    assert observation["facts"]["constraints"]["supplier_ids"] == ["307"]
+    assert result["dimensions"]["R"]["status"] == status
+    # Correct identity cannot fill an independently absent approval fact.
+    observation["facts"]["constraints"].pop("supplier_approved")
+    missing_approval = score(contract, observation, judgment)
+    assert missing_approval["dimensions"]["R"]["status"] == (
+        "unscored" if status == "unscored" else "fail"
+    )
+
+
 def test_every_catalog_turn_has_explicit_contract() -> None:
     oracle = api("oracle")
     contracts = [

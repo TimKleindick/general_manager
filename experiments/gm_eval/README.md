@@ -142,6 +142,12 @@ no equivalence credit. Unresolved identities in supported typed fields remain
 unscored; proven wrong entities still fail. Nested values inside constraints,
 carryover context and planned-revenue objects retain the prior exact comparison.
 Private identity metadata is excluded from judge inputs.
+Supplier IDs inside selection constraints use the same selected-row identity
+proofs as other declared entity lists. This never supplies an absent approval
+fact. Standalone recommendation customer IDs cover the independently derived
+positive-gap recipients; combined forecast reports retain their selected
+customer scope. These evaluator corrections require new version-bound runs;
+they do not change saved scores or demonstrate better model answers.
 `reporting.case_result` aggregates scored turns without losing failed or missing
 follow-ups; `reporting.summarize` accepts the scorer's dimension records directly.
 
