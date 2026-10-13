@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable
 
 
 _PRIVATE_KEYS = frozenset(
@@ -38,7 +39,7 @@ _SECRET_ASSIGNMENT = re.compile(
 )
 
 
-def _sanitize_text(value: str) -> str:
+def _sanitize_text(value: str, texts: dict[str, str] | None = None) -> str:
     """Redact embedded reference JSON and recognizable credential strings."""
     starts = [position for token in ("{", "[") if (position := value.find(token)) >= 0]
     if starts:
@@ -48,7 +49,7 @@ def _sanitize_text(value: str) -> str:
         except (ValueError, RecursionError):
             pass
         else:
-            cleaned = sanitize(parsed)
+            cleaned = _sanitize(parsed, {} if texts is None else texts)
             if (
                 cleaned == parsed
                 and not _SECRET_TEXT.search(value)
@@ -57,7 +58,7 @@ def _sanitize_text(value: str) -> str:
                 return value
             return _SECRET_ASSIGNMENT.sub(
                 r'\1"[REDACTED]"', _SECRET_TEXT.sub("[REDACTED]", value[:start])
-            ) + json.dumps(sanitize(parsed), separators=(",", ":"), ensure_ascii=False)
+            ) + json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False)
     return _SECRET_ASSIGNMENT.sub(
         r'\1"[REDACTED]"', _SECRET_TEXT.sub("[REDACTED]", value)
     )
@@ -65,16 +66,25 @@ def _sanitize_text(value: str) -> str:
 
 def sanitize(value: Any) -> Any:
     """Keep structured synthetic observations without credentials or wire data."""
+    return _sanitize(value, {})
+
+
+def _sanitize(value: Any, texts: dict[str, str]) -> Any:
+    """Reuse pure text redaction only within this detached observation."""
     if isinstance(value, Mapping):
         return {
-            str(key): sanitize(item)
+            str(key): _sanitize(item, texts)
             for key, item in value.items()
             if str(key).lower() not in _PRIVATE_KEYS
         }
     if isinstance(value, (list, tuple)):
-        return [sanitize(item) for item in value]
+        return [_sanitize(item, texts) for item in value]
     if isinstance(value, str):
-        return _sanitize_text(value)
+        if type(value) is not str:
+            return _sanitize_text(value)
+        if value not in texts:
+            texts[value] = _sanitize_text(value, texts)
+        return texts[value]
     if value is None or isinstance(value, (int, float, bool)):
         return value
     return str(value)
@@ -110,9 +120,13 @@ class TraceRecorder:
 
     def as_dict(self) -> dict[str, Any]:
         strong_calls = [call for call in self.calls if call.get("strong")]
+        # Requests and audit events repeat the same large reference strings.
+        # Strings are immutable; mutable containers are still rebuilt, and the
+        # memo expires with this export instead of retaining raw input text.
+        texts: dict[str, str] = {}
         return {
-            "provider_calls": sanitize(self.calls),
-            "events": sanitize(self.events),
+            "provider_calls": _sanitize(self.calls, texts),
+            "events": _sanitize(self.events, texts),
             "provider_request_count": sum(call["request_count"] for call in self.calls),
             "strong_model_requests": sum(
                 call["request_count"] for call in strong_calls
