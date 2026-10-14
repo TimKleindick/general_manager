@@ -74,6 +74,15 @@ construct one schema at startup. In-place definition mutation without rebuilding
 is unsupported and does not publish new metadata. Request data and authorization
 decisions are never stored in the compiled contract.
 
+During one compilation, manager projections reuse the field selection of each
+named type from the private captured GraphQL graph. Each manager still applies
+its own relation-reference boundary and builds detached public values. The
+field-selection map belongs only to that compilation; a rebuild checks the new
+captured definitions again. Defaults, enums, exposure and snapshot values retain
+their existing semantics. This reduces repeated definition work without caching
+request data or authorization decisions. Timing improvements require separate
+unprofiled measurements under the original limits.
+
 Internal relation-path checks read the immutable compiled index directly and use
 one generation for both endpoint membership and the path walk. This avoids
 copying the entire public index for each candidate's anchor-distance check.
