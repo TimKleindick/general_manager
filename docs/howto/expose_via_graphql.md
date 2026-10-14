@@ -640,9 +640,11 @@ subscription ProjectDetails($id: ID!) {
 GeneralManager checks the request user's instance read permission before it
 evaluates selected properties or registers channel listeners. It checks again
 after deferred channel registration, before the initial `snapshot`, and before
-each later event. If the target is missing or becomes unreadable, the detail
-stream completes without sending a `null` item or the queued action; listener
-and channel-group cleanup still runs. Permission-backend failures use the
+each later event. If the target is missing or unreadable during initial
+subscription setup, setup fails with a GraphQL error before a stream is returned.
+If a later check finds the target missing or unreadable, the detail stream
+completes without sending a `null` item or the queued action; any registered
+listeners and channel groups are cleaned up. Permission-backend failures use the
 normal GraphQL error path. Selected fields continue to use their own read rules,
 so a readable target can still return `null` for a denied field. See the
 [subscription concept](../concepts/graphql/subscriptions.md) and
