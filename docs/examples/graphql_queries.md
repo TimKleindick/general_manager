@@ -335,6 +335,28 @@ the [generated-list how-to](../howto/expose_via_graphql.md#query-generated-lists
 and the [GraphQL API reference](../api/graphql.md#compound-list-sorting) for
 the supported relation paths and error behavior.
 
+## Subscribe to a protected manager instance
+
+Detail subscriptions use the same generated identification arguments as the
+manager's other operations:
+
+```graphql
+subscription ProjectDetails($id: ID!) {
+  onProjectChange(id: $id) {
+    action
+    item { id name }
+  }
+}
+```
+
+The initial target must be readable by the authenticated user. GeneralManager
+checks that permission before evaluating `item` properties, checks again before
+the snapshot is delivered, and rechecks before each queued update. Revoking
+access or deleting the target ends the detail stream after cleanup; it does not
+emit an event with `item: null`. An allowed target can still mask individual
+fields according to their normal read rules. See the [subscription concept](../concepts/graphql/subscriptions.md)
+for dependency and lifecycle details.
+
 ## Subscribe to committed class changes
 
 ```graphql

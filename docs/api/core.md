@@ -387,6 +387,17 @@ Python class objects that `issubclass(type, GeneralManager)` and
 `GeneralManager` subclass; manager instances are instances of that declared
 manager class.
 
+Parameterized `list[T]` and `typing.List[T]` declarations are also supported
+for `T` equal to `str`, `bool`, `int`, `float`, `Decimal`, `date`, `datetime`,
+`Measurement`, or a concrete `GeneralManager` subclass. They represent one
+ordered constructor value, preserve duplicates, and do not add scalar bounds.
+The outer list is required unless `required=False`; elements are always
+non-null. The unparameterized `Input(list)` behavior remains unchanged, and
+unsupported nested/nullable element types, non-list containers, and list bounds
+raise the typed-collection validation errors rather than being expanded or
+coerced implicitly. The typed-collection exception classes live in
+`general_manager.manager.input` and are not additional package-root exports.
+
 `Input.cast(value, identification=None, *, cache_context=None)` converts raw
 values to the configured type and then normalizes them. `None` is returned
 unchanged. `date` and `datetime` inputs accept native values and ISO strings;
@@ -401,6 +412,15 @@ path constructs `manager_type(id=value)` and does not perform a query by itself.
 Mappings, including mappings with an `id` key, are passed as
 `manager_type(**mapping)`; invalid keywords and manager constructors that do not
 accept `id` fail through the constructor's normal exception.
+For a typed collection, `value` must be a Python `list`; each member is cast
+with the existing scalar or manager input rules, then the whole list is passed
+through the normalizer. The owning interface subsequently applies the
+validator, bounds, and possible-value checks. Null members and member
+conversion failures raise `InvalidCollectionValueError` with the input name
+and index. The returned collection and public identification are defensive
+copies. A normalizer may therefore canonicalize an entire selection, while
+`None` bypasses callbacks and `[]` remains a real empty selection. Manager
+elements retain their dependency identities when the list is accessed.
 For every other type, already-matching values pass through normalization and
 non-matching values are converted with `type(value)`. Constructor errors
 propagate unchanged. `Measurement` inputs accept the strings documented for

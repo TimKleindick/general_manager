@@ -325,6 +325,47 @@ same way. This behavior applies when the calculation input metadata omits
 relation descriptors; explicitly declared relation metadata and custom lookup
 prefixes remain authoritative.
 
+## Declare typed calculation collections
+
+Use a parameterized `Input(list[T])` when one calculation input represents an
+ordered selection rather than one independent scalar choice. The declaration
+generates a native GraphQL list and keeps the selection's order and duplicates:
+
+```python
+from general_manager.interface import CalculationInterface
+from general_manager.manager import GeneralManager, Input
+from myapp.managers import Employee
+
+
+class WorkforceSummary(GeneralManager):
+    class Interface(CalculationInterface):
+        employees = Input(list[Employee], required=False)
+        values = Input(list[int], required=False)
+```
+
+The generated detail arguments are `employeesId: [ID!]` and
+`values: [Int!]`. Python construction requires an actual list; manager members
+can be instances, IDs, or constructor mappings. Omission and explicit `null`
+resolve to `None`, while `[]` is an explicit empty selection. GraphQL may apply
+its normal singleton-to-list coercion, but null elements are rejected. Required
+collections use `Input(list[T])` and produce an outer non-null argument.
+
+```graphql
+query Summary($employees: [ID!], $values: [Int!]) {
+  workforceSummary(employeesId: $employees, values: $values) {
+    employees { id name }
+    values
+  }
+}
+```
+
+Use `filter(field=selection)` or `filter(field__in=[selection, ...])` for whole
+selection comparisons; scalar `__in` behavior is unchanged and other collection
+lookups are unsupported. A manager-list output first checks the owning field's
+read permission, then omits members that fail their own manager-level read gate
+without reordering permitted duplicates. The [collection-input cookbook](../examples/collection_inputs.md)
+shows a complete calculation and query.
+
 ## Use measurements and large integers
 
 Interface fields typed as `Measurement` are exposed with `MeasurementScalar` for
@@ -581,6 +622,32 @@ complete data. See the [grouping contract](../concepts/graphql/filters_paginatio
 Legacy wrapper fields are no longer generated: select keys and aggregates
 directly under `items`. Retrieve original records and their count through the
 ordinary list endpoint.
+
+## Subscribe to an authorized manager instance
+
+Use the generated detail subscription with the same identification arguments as
+the manager's query and mutation fields:
+
+```graphql
+subscription ProjectDetails($id: ID!) {
+  onProjectChange(id: $id) {
+    action
+    item { id name }
+  }
+}
+```
+
+GeneralManager checks the request user's instance read permission before it
+evaluates selected properties or registers channel listeners. It checks again
+after deferred channel registration, before the initial `snapshot`, and before
+each later event. If the target is missing or becomes unreadable, the detail
+stream completes without sending a `null` item or the queued action; listener
+and channel-group cleanup still runs. Permission-backend failures use the
+normal GraphQL error path. Selected fields continue to use their own read rules,
+so a readable target can still return `null` for a denied field. See the
+[subscription concept](../concepts/graphql/subscriptions.md) and
+[GraphQL API reference](../api/graphql.md#detail-subscription-authorization)
+for the lifecycle and compatibility contract.
 
 ## Class-wide subscription permission checks
 
