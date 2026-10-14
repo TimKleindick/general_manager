@@ -15,6 +15,7 @@ from django.utils.connection import ConnectionDoesNotExist
 from general_manager.cache.data_change_context import (
     DataChangeTransactionScope,
     authorize_data_change_operation,
+    capture_data_change_outcome,
     own_data_change_transaction,
     record_data_change_phase,
 )
@@ -66,7 +67,9 @@ def data_change(
     clears run-scoped ORM bucket/index caches, emits `pre_data_change`, invokes
     the wrapped callable, then emits `post_data_change` with the changed
     instance, previous instance, action name, identification, and copied
-    `_old_values` payload. Both signals receive a per-call `change_context` and
+    `_old_values` payload. Proven unchanged built-in ORM updates skip only the
+    post-change signal; pre-change preparation and transaction cleanup still run.
+    Both signals receive a per-call `change_context` and
     the manager interface's database alias. ORM-backed signal dispatch and the
     mutation share one transaction. GraphQL warm-up requeue keys collected
     during signal handling are drained only after the outermost active
@@ -252,7 +255,12 @@ def data_change(
                     if is_orm_backed
                     else nullcontext()
                 )
-                with operation_context:
+                with (
+                    operation_context,
+                    capture_data_change_outcome(
+                        getattr(instance_before, "_interface", None)
+                    ) as outcome,
+                ):
                     mutation_started = (
                         perf_counter() if transaction_scope is not None else None
                     )
@@ -282,15 +290,16 @@ def data_change(
                 if identification is None:
                     identification = pre_identification
 
-                post_data_change.send(
-                    sender=sender,
-                    instance=instance,
-                    previous_instance=instance_before,
-                    identification=identification,
-                    action=action,
-                    old_relevant_values=old_relevant_values,
-                    **signal_kwargs,
-                )
+                if not outcome.unchanged:
+                    post_data_change.send(
+                        sender=sender,
+                        instance=instance,
+                        previous_instance=instance_before,
+                        identification=identification,
+                        action=action,
+                        old_relevant_values=old_relevant_values,
+                        **signal_kwargs,
+                    )
                 if instance_before is not None:
                     try:
                         delattr(instance_before, "_old_values")

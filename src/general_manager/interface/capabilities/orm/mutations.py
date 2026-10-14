@@ -11,7 +11,10 @@ from django.contrib.auth import get_user_model
 from django.db import DEFAULT_DB_ALIAS, models, router, transaction
 from django.db.models import NOT_PROVIDED
 
-from general_manager.cache.data_change_context import owns_data_change_transaction
+from general_manager.cache.data_change_context import (
+    mark_data_change_unchanged,
+    owns_data_change_transaction,
+)
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.builtin import BaseCapability
 from general_manager.interface.capabilities.orm_utils.payload_normalizer import (
@@ -20,6 +23,7 @@ from general_manager.interface.capabilities.orm_utils.payload_normalizer import 
 from general_manager.interface.capabilities.orm_utils.update_state import (
     changed_many_to_many,
     is_unchanged_update,
+    record_skipped_update_save,
     track_update,
 )
 from general_manager.interface.utils.database_interface_protocols import (
@@ -225,6 +229,7 @@ class OrmMutationCapability(BaseCapability):
                     object.__setattr__(instance, "changed_by_id", creator_id)
                 instance.full_clean()
                 if is_unchanged_update(instance):
+                    record_skipped_update_save(instance)
                     return instance.pk
                 if batch is not None and database_alias is None:
                     if (
@@ -606,7 +611,7 @@ class OrmUpdateCapability(BaseCapability):
                     changed_many,
                     history_comment,
                     database_alias=database_alias,
-                ):
+                ) as update_state:
                     instance = mutation.assign_simple_attributes(
                         interface_instance.__class__, instance, normalized_simple
                     )
@@ -624,6 +629,32 @@ class OrmUpdateCapability(BaseCapability):
                     history_comment=history_comment,
                 )
             discard_orm_instance_cache(interface_instance.__class__, pk)
+            if update_state is not None and update_state.save_skipped:
+                # A custom wrapper may write after delegating to a built-in
+                # method. Only the complete standard path can prove a no-op.
+                from general_manager.interface.base_interface import InterfaceBase
+
+                standard_methods = (
+                    (interface_instance.update, InterfaceBase.update),
+                    (self.update, OrmUpdateCapability.update),
+                    (
+                        mutation.assign_simple_attributes,
+                        OrmMutationCapability.assign_simple_attributes,
+                    ),
+                    (
+                        mutation.save_with_history,
+                        OrmMutationCapability.save_with_history,
+                    ),
+                    (
+                        mutation.apply_many_to_many,
+                        OrmMutationCapability.apply_many_to_many,
+                    ),
+                )
+                if all(
+                    getattr(method, "__func__", None) is standard
+                    for method, standard in standard_methods
+                ):
+                    mark_data_change_unchanged(interface_instance)
             return {"id": pk}
 
         return call_with_observability(

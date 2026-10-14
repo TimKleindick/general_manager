@@ -190,3 +190,25 @@ def test_copied_context_cannot_retain_stale_transaction_ownership() -> None:
     assert not stale_context.run(
         data_change_context.may_reuse_data_change_transaction, "default"
     )
+
+
+def test_operation_outcome_is_scoped_to_its_interface_and_restored_after_errors():
+    from general_manager.cache.data_change_context import (
+        capture_data_change_outcome,
+        mark_data_change_unchanged,
+    )
+
+    outer, inner = object(), object()
+    mark_data_change_unchanged(outer)
+    with capture_data_change_outcome(outer) as outcome:
+        mark_data_change_unchanged(inner)
+        assert not outcome.unchanged
+        with pytest.raises(ValueError), capture_data_change_outcome(inner) as nested:
+            mark_data_change_unchanged(inner)
+            assert nested.unchanged
+            raise ValueError
+        assert not outcome.unchanged
+        mark_data_change_unchanged(outer)
+        assert outcome.unchanged
+    with capture_data_change_outcome(outer) as fresh:
+        assert not fresh.unchanged

@@ -5,7 +5,9 @@ from typing import ClassVar
 from unittest.mock import patch
 
 from django.core.management import call_command
+from django.db import connection
 from django.db.models import CharField
+from django.test.utils import CaptureQueriesContext
 from django.test import override_settings
 
 from general_manager.interface import DatabaseInterface
@@ -44,8 +46,8 @@ class WorkflowProductionIntegrationTests(GeneralManagerTransactionTestCase):
     def setUpClass(cls) -> None:
         class Project(GeneralManager):
             class Interface(DatabaseInterface):
-                name = CharField(max_length=200)
-                status = CharField(max_length=50)
+                name = CharField(max_length=200, default="Default")
+                status = CharField(max_length=50, default="draft")
 
             class Permission(ManagerBasedPermission):
                 __read__: ClassVar[list[str]] = ["public"]
@@ -171,3 +173,90 @@ class WorkflowProductionIntegrationTests(GeneralManagerTransactionTestCase):
         assert replayed.first() is not None
         assert replayed.first().status == WorkflowOutbox.STATUS_PENDING
         assert replayed.first().attempts == 0
+
+    def test_noop_updates_do_not_persist_or_dispatch_workflow_events(self) -> None:
+        with patch("general_manager.workflow.tasks.publish_outbox_batch.delay"):
+            project = self.Project.create(
+                name="Stable", status="active", ignore_permission=True
+            )
+        event_count = WorkflowEventRecord.objects.count()
+        outbox_count = WorkflowOutbox.objects.count()
+        history_count = project.history.count()
+        for payload in ({"status": "active"}, {}):
+            with self.subTest(payload=payload):
+                with (
+                    patch(
+                        "general_manager.workflow.tasks.publish_outbox_batch.delay"
+                    ) as delay,
+                    CaptureQueriesContext(connection) as queries,
+                ):
+                    project.update(ignore_permission=True, **payload)
+                writes = [
+                    query["sql"]
+                    for query in queries
+                    if query["sql"].lstrip().split()[0]
+                    in {"INSERT", "UPDATE", "DELETE"}
+                ]
+                self.assertEqual(writes, [])
+                self.assertEqual(project.history.count(), history_count)
+                self.assertEqual(WorkflowEventRecord.objects.count(), event_count)
+                self.assertEqual(WorkflowOutbox.objects.count(), outbox_count)
+                delay.assert_not_called()
+
+    def test_real_updates_exclude_internal_workflow_metadata(self) -> None:
+        with patch("general_manager.workflow.tasks.publish_outbox_batch.delay"):
+            project = self.Project.create(
+                name="Metadata", status="draft", ignore_permission=True
+            )
+            project.update(status="active", ignore_permission=True)
+        event = WorkflowEventRecord.objects.filter(
+            event_type="general_manager.manager.updated"
+        ).latest("id")
+        self.assertEqual(set(event.payload["changes"]), {"status"})
+
+    def test_explicit_audit_touch_still_persists_and_dispatches(self) -> None:
+        with patch("general_manager.workflow.tasks.publish_outbox_batch.delay"):
+            project = self.Project.create(
+                name="Touched", status="active", ignore_permission=True
+            )
+        history_count = project.history.count()
+        event_count = WorkflowEventRecord.objects.count()
+        with patch(
+            "general_manager.workflow.tasks.publish_outbox_batch.delay"
+        ) as delay:
+            project.update(history_comment="Verified", ignore_permission=True)
+        self.assertEqual(project.history.count(), history_count + 1)
+        self.assertEqual(WorkflowEventRecord.objects.count(), event_count + 1)
+        delay.assert_called_once()
+
+    def test_default_only_create_still_persists_workflow_event(self) -> None:
+        with patch(
+            "general_manager.workflow.tasks.publish_outbox_batch.delay"
+        ) as delay:
+            project = self.Project.create(ignore_permission=True)
+        self.assertEqual(project.name, "Default")
+        self.assertEqual(WorkflowEventRecord.objects.count(), 1)
+        self.assertEqual(WorkflowOutbox.objects.count(), 1)
+        self.assertEqual(WorkflowEventRecord.objects.get().payload["values"], {})
+        delay.assert_called_once()
+
+    def test_fieldless_update_changed_by_clean_still_persists_workflow_event(
+        self,
+    ) -> None:
+        with patch("general_manager.workflow.tasks.publish_outbox_batch.delay"):
+            project = self.Project.create(ignore_permission=True)
+        event_count = WorkflowEventRecord.objects.count()
+        history_count = project.history.count()
+
+        def clean(instance):
+            instance.status = "active"
+
+        with (
+            patch.object(self.Project.Interface._model, "clean", clean),
+            patch("general_manager.workflow.tasks.publish_outbox_batch.delay") as delay,
+        ):
+            project.update(ignore_permission=True)
+        self.assertEqual(project.status, "active")
+        self.assertEqual(project.history.count(), history_count + 1)
+        self.assertEqual(WorkflowEventRecord.objects.count(), event_count + 1)
+        delay.assert_called_once()

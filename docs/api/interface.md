@@ -747,7 +747,15 @@ For ordinary updates using the base mutation helper, the original concrete
 field values are compared after `full_clean()`. Equal field values and equal
 requested relation sets skip the row save and history insertion. Empty updates
 and implicit actor changes alone are no-ops; a nonempty `history_comment`
-forces an audit entry. Validation and cache invalidation still run. JSON
+forces an audit entry. With the built-in interface/update/mutation methods,
+a confirmed no-op also skips `post_data_change`, preventing workflow/outbox
+creation, search reindex scheduling, and post-change notifications. Permission
+checks, validation, pre-change signals, cache preparation, and transaction
+lifecycle cleanup still run; this is not a guarantee that custom validation or
+pre-change receivers have no side effects. Overridden update, assignment, save,
+or relation methods retain post-change events because their additional effects
+are unknown. Explicit audit comments still emit change events, even without
+field values. JSON
 comparison preserves value types but ignores dictionary order; measurement
 comparison uses both backing columns. Relationship comparisons use stored
 target keys on the relationship's write database and ignore ordering and

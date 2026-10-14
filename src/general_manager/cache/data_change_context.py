@@ -162,3 +162,34 @@ def may_reuse_data_change_transaction(database_alias: str) -> bool:
         and not owner.caller_in_atomic_block
         and is_data_change_operation_authorized(database_alias)
     )
+
+
+@dataclass
+class DataChangeOutcome:
+    """Private per-call outcome; unknown/custom mutations remain changes."""
+
+    interface: object
+    unchanged: bool = False
+
+
+_operation_outcome: ContextVar[DataChangeOutcome | None] = ContextVar(
+    "data_change_operation_outcome", default=None
+)
+
+
+@contextmanager
+def capture_data_change_outcome(interface: object) -> Iterator[DataChangeOutcome]:
+    """Isolate the wrapped operation from pre-signals and nested mutations."""
+    outcome = DataChangeOutcome(interface)
+    token = _operation_outcome.set(outcome)
+    try:
+        yield outcome
+    finally:
+        _operation_outcome.reset(token)
+
+
+def mark_data_change_unchanged(interface: object) -> None:
+    """Accept a proven no-op only for the interface owned by this call."""
+    outcome = _operation_outcome.get()
+    if outcome is not None and outcome.interface is interface:
+        outcome.unchanged = True
