@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.86.3 (2026-10-14)
+
+### Bug Fixes
+
+- Skip unchanged Meilisearch settings updates
+  ([`29dd330`](https://github.com/TimKleindick/general_manager/commit/29dd330a029b7fce1aa521fc42ad2145a7376984))
+
+
 ## v0.86.2 (2026-10-14)
 
 ### Bug Fixes
