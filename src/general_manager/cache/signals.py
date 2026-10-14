@@ -18,6 +18,7 @@ from general_manager.cache.data_change_context import (
     capture_data_change_outcome,
     own_data_change_transaction,
     record_data_change_phase,
+    suspend_data_change_outcome,
 )
 from general_manager.as_of import reject_historical_mutation
 from general_manager.logging import get_logger
@@ -104,6 +105,7 @@ def data_change(
     )
 
     @wraps(decorator_source)
+    @suspend_data_change_outcome()
     def perform_change(*args: P.args, **kwargs: P.kwargs) -> R:
         """
         Emit pre_data_change and post_data_change signals around the wrapped function call.
