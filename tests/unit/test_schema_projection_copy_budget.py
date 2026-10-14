@@ -150,6 +150,36 @@ def test_whole_reference_copies_original_once_and_retains_independent_roundtrip(
     assert codec._dump(reference) == before
 
 
+@pytest.mark.parametrize("whole_reference", [False, True])
+def test_small_pool_rewrite_does_not_serialize_known_ineligible_marker_parents(
+    monkeypatch, whole_reference
+):
+    projection, slots = _rewrite_fixture("small_containers", whole_reference)
+    parent = codec._get(projection["reference"], slots[0].path)
+    original = codec._dump(projection)
+    real_dump = codec._dump
+    parent_dumps = []
+
+    def measured_dump(value):
+        if value is parent:
+            parent_dumps.append(value)
+        return real_dump(value)
+
+    monkeypatch.setattr(codec, "_dump", measured_dump)
+    result = codec._share_small_containers(projection, slots)
+    assert codec._dump(projection) == original
+    assert codec._dump(result) != original, "exercise a profitable rewrite"
+    assert (
+        sha256(codec._dump(result).encode()).hexdigest()
+        == WIRE_HASHES["small_containers", whole_reference]
+    )
+    result["occurrences"][0]["binding"]["owner"].append("bob")
+    result["reference"]["query_evidence"]["rows"][0].append("changed")
+    assert codec._dump(projection) == original
+    # Counting already rejected this parent because it contains reference markers.
+    assert len(parent_dumps) == 0
+
+
 def test_selected_roots_share_ancestors_without_erasing_unselected_aliases():
     payload = {"fields": [{"name": "visible"}]}
     reference = {
