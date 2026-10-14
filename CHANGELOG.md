@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.86.2 (2026-10-14)
+
+### Bug Fixes
+
+- Isolate nested signal mutation outcomes
+  ([`b33cba9`](https://github.com/TimKleindick/general_manager/commit/b33cba9cab68e74589c7655d8157e0ebae9ccda3))
+
+- Suppress change events for unchanged ORM updates
+  ([`ebe625d`](https://github.com/TimKleindick/general_manager/commit/ebe625df0f071f65d5214025128542af3146bee7))
+
+### Documentation
+
+- Distinguish subscription setup errors from stream completion
+  ([`f6835b7`](https://github.com/TimKleindick/general_manager/commit/f6835b7c0b0971b322a4f33a8ce6985caf3c172b))
+
+- Document recent public API changes
+  ([`8ffc608`](https://github.com/TimKleindick/general_manager/commit/8ffc608877829fbccb32db63fbcd8b29b3626f4c))
+
+- Remove unsupported typed collection bounds claim
+  ([`8e9e8c1`](https://github.com/TimKleindick/general_manager/commit/8e9e8c1ac75238d7561ae973f58f7979efd9644e))
+
+
 ## v0.86.1 (2026-10-13)
 
 ### Bug Fixes
