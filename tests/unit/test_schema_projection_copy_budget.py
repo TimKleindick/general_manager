@@ -62,22 +62,36 @@ def test_rewrites_do_not_copy_tables_or_roots_that_they_replace(
     original = codec._dump(projection)
     copied_tables = []
     copied_roots = []
+    copied_selected_roots = []
 
     def measured_copy(value):
         # Measure the real copy operation; every codec rewrite still runs normally.
         if isinstance(value, dict) and {"objects", "reference"} <= value.keys():
             copied_tables.append(len(value["objects"]))
             copied_roots.append(len(value["reference"]))
+            if not whole_reference:
+                copied_selected_roots.append(
+                    len(codec._get(value["reference"], slots[0].path))
+                )
         return deepcopy(value)
 
     monkeypatch.setattr(codec, "deepcopy", measured_copy)
     result = getattr(codec, "_share_" + kind)(projection, slots)
     assert codec._dump(projection) == original
     assert codec._dump(result) != original, "exercise a profitable rewrite"
+    assert (
+        sha256(codec._dump(result).encode()).hexdigest()
+        == WIRE_HASHES[kind, whole_reference]
+    )
+    result["occurrences"][0]["binding"]["owner"].append("bob")
+    result["reference"]["query_evidence"]["rows"][0].append("changed")
+    assert codec._dump(projection) == original
     assert copied_tables, "exercise the candidate copy operation"
     assert sum(copied_tables) == 0
     if whole_reference:
         assert sum(copied_roots) == 0
+    else:
+        assert sum(copied_selected_roots) == 0
 
 
 @pytest.mark.parametrize("whole_reference", [False, True])
@@ -134,6 +148,72 @@ def test_whole_reference_copies_original_once_and_retains_independent_roundtrip(
     before = codec._dump(reference)
     packed["reference"]["evidence"]["rows"][0].append("changed")
     assert codec._dump(reference) == before
+
+
+def test_selected_roots_share_ancestors_without_erasing_unselected_aliases():
+    payload = {"fields": [{"name": "visible"}]}
+    reference = {
+        "task_evidence": [
+            {"kind": "schema", "payload": payload},
+            {"kind": "schema", "payload": payload},
+            {"kind": "query", "payload": payload},
+        ],
+        "query_evidence": {"literal": payload},
+    }
+    projection = {
+        "objects": [payload],
+        "reference": reference,
+        "occurrences": [{"binding": {"owner": ["alice"]}}],
+    }
+    slots = tuple(
+        codec.SchemaSlot(("task_evidence", index, "payload"), "task_schema", "{}")
+        for index in (0, 1)
+    )
+    before = codec._dump(projection)
+    result = codec._copy_for_rewrite(projection, slots)
+    expected = deepcopy(projection)
+    expected["objects"] = []
+    for slot in slots:
+        codec._set(expected["reference"], slot.path, {})
+    assert codec._dump(result) == codec._dump(expected)
+    assert list(result) == list(projection)
+    assert list(result["reference"]) == list(reference)
+    assert list(result["reference"]["task_evidence"][0]) == ["kind", "payload"]
+    for slot in slots:
+        codec._set(result["reference"], slot.path, {"replacement": []})
+    result["reference"]["query_evidence"]["literal"]["fields"].append("changed")
+    result["occurrences"][0]["binding"]["owner"].append("bob")
+    assert codec._dump(projection) == before
+    assert result["reference"]["task_evidence"][0]["payload"] == {"replacement": []}
+    assert result["reference"]["task_evidence"][1]["payload"] == {"replacement": []}
+
+
+@pytest.mark.parametrize("depth", [0, 1, 2])
+def test_subclass_ancestors_keep_existing_copy_semantics(depth):
+    class CustomDict(dict):
+        pass
+
+    class CustomList(list):
+        pass
+
+    projection, slots = _rewrite_fixture("key_shapes", False)
+    reference = projection["reference"]
+    if depth == 0:
+        projection["reference"] = CustomDict(reference)
+    elif depth == 1:
+        reference["task_evidence"] = CustomList(reference["task_evidence"])
+    else:
+        reference["task_evidence"][0] = CustomDict(reference["task_evidence"][0])
+    expected = deepcopy(projection)
+    expected["objects"] = []
+    result = codec._copy_for_rewrite(projection, slots)
+    assert codec._dump(result) == codec._dump(expected)
+    assert type(codec._get(result["reference"], slots[0].path[:depth])) is type(
+        codec._get(projection["reference"], slots[0].path[:depth])
+    )
+    before = codec._dump(projection)
+    codec._get(result["reference"], slots[0].path)["rows"].append("changed")
+    assert codec._dump(projection) == before
 
 
 # Captured from the pre-optimization codec at e6c58fc2; order is part of the wire.

@@ -61,6 +61,14 @@ full-original decoding remain enforced. Final message projection preserves the
 original representation whenever compression would grow it; this does not bypass
 schema selectors, snapshot checks or exposure.
 
+Rewrite candidates copy metadata and untouched reference data independently.
+Their complete object table and every selected root are rebuilt by the rewrite,
+so those replaced trees are omitted from the temporary copy. For selected
+subtrees, only their dictionary/list ancestors are copied first, keyed by path
+to preserve unselected aliases and key order. Container subclasses retain the
+ordinary copy path. Wire bytes, source bindings, escaped-size profit checks,
+codec bounds and independent full-original decoding remain unchanged.
+
 Offline saved Sol requests, rebuilt with the real adjudication builder and Responses
 serializer: E042 turn 2 goes from 221959 historical projected characters to 192892,
 versus 309483 without projection. All real metadata counts against the unchanged
