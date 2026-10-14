@@ -69,6 +69,12 @@ to preserve unselected aliases and key order. Container subclasses retain the
 ordinary copy path. Wire bytes, source bindings, escaped-size profit checks,
 codec bounds and independent full-original decoding remain unchanged.
 
+Small-container pooling reuses the exact candidate keys already established
+while counting within each pass. Source trees remain unchanged during the
+rewrite, so marker-containing and larger containers need no second serialization
+to compare with a selected small candidate. Every pass and later request builds
+new observations; profit, source binding and full-original decoding still run.
+
 Offline saved Sol requests, rebuilt with the real adjudication builder and Responses
 serializer: E042 turn 2 goes from 221959 historical projected characters to 192892,
 versus 309483 without projection. All real metadata counts against the unchanged

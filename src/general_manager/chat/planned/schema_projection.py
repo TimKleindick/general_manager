@@ -772,8 +772,13 @@ def _share_small_containers(
 
     for _ in range(MAX_SMALL_POOL_PASSES):
         counts: Counter[str] = Counter()
+        eligible_keys: dict[int, str] = {}
 
-        def count(node: Any, pool_counts: Counter[str] = counts) -> bool:
+        def count(
+            node: Any,
+            pool_counts: Counter[str] = counts,
+            container_keys: dict[int, str] = eligible_keys,
+        ) -> bool:
             if value_strings and isinstance(node, str):
                 pool_counts[_dump(node)] += 1
             if not isinstance(node, (dict, list)):
@@ -792,6 +797,7 @@ def _share_small_containers(
                 # can be profitable across many manifest entries.
                 if len(key) < 80:
                     pool_counts[key] += 1
+                    container_keys[id(node)] = key
             return marker_free
 
         for node in projection["objects"]:
@@ -811,13 +817,19 @@ def _share_small_containers(
             break
         _, selected = max(candidates)
 
-        def rewrite(node: Any, selected_key: str = selected) -> Any:
+        def rewrite(
+            node: Any,
+            selected_key: str = selected,
+            container_keys: dict[int, str] = eligible_keys,
+        ) -> Any:
             if value_strings and isinstance(node, str) and _dump(node) == selected_key:
                 return {"$gm_ref": 0}
             if not isinstance(node, (dict, list)):
                 return node
             # String-only pooling cannot match a dictionary/list JSON value.
-            if not value_strings and _dump(node) == selected_key:
+            # Counting already identified every eligible container. The source
+            # trees stay unchanged until this pass has built its candidate.
+            if not value_strings and container_keys.get(id(node)) == selected_key:
                 return {"$gm_ref": 0}
             if isinstance(node, dict):
                 if "$gm_ref" in node:
