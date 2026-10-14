@@ -674,8 +674,19 @@ def _compile_read_contract(
     }
     contracts = {}
     snapshots = {}
+    # These fields belong to the private, already captured generation. Shared
+    # input definitions need one exposure/default inspection, while each manager
+    # still builds its own reference boundary and detached public values.
+    fields_by_type: dict[str, dict[str, Any]] = {}
     for manager, summary in index.items():
-        full = _manager_contract(manager, summary, schema, manager_types, visibility)
+        full = _manager_contract(
+            manager,
+            summary,
+            schema,
+            manager_types,
+            visibility,
+            fields_by_type=fields_by_type,
+        )
         contracts[manager] = full
         snapshots[manager] = hashlib.sha256(
             json.dumps(
@@ -752,7 +763,10 @@ def _manager_contract(
     schema: GraphQLSchema,
     manager_types: Mapping[str, Any],
     visibility: Mapping[str, bool],
+    *,
+    fields_by_type: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    fields_by_type = {} if fields_by_type is None else fields_by_type
     assert schema.query_type is not None
     roots = {name: schema.query_type.fields[name] for name in summary["roots"]}
     pending = [get_named_type(field.type) for field in roots.values()]
@@ -785,9 +799,11 @@ def _manager_contract(
                 "kind": "object" if is_object_type(named) else "input",
                 "fields": fields,
             }
-            for name, field in _contract_fields(
-                named, manager_types, visibility
-            ).items():
+            if named.name not in fields_by_type:
+                fields_by_type[named.name] = _contract_fields(
+                    named, manager_types, visibility
+                )
+            for name, field in fields_by_type[named.name].items():
                 target = get_named_type(field.type)
                 fields[name] = (
                     _argument_info(field)
