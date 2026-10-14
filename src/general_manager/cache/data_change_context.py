@@ -178,6 +178,16 @@ _operation_outcome: ContextVar[DataChangeOutcome | None] = ContextVar(
 
 
 @contextmanager
+def suspend_data_change_outcome() -> Iterator[None]:
+    """Keep nested signal/lifecycle receivers outside their parent's outcome."""
+    token = _operation_outcome.set(None)
+    try:
+        yield
+    finally:
+        _operation_outcome.reset(token)
+
+
+@contextmanager
 def capture_data_change_outcome(interface: object) -> Iterator[DataChangeOutcome]:
     """Isolate the wrapped operation from pre-signals and nested mutations."""
     outcome = DataChangeOutcome(interface)

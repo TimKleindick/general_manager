@@ -401,3 +401,36 @@ class NoopUpdateTests(GeneralManagerTransactionTestCase):
             )
         )
         post.assert_not_called()
+
+    def test_nested_signal_receivers_cannot_classify_the_outer_update(self):
+        from general_manager.cache.signals import pre_data_change
+
+        def clean(instance):
+            if instance.name == "Changed":
+                self.target.update(name="Nested change", ignore_permission=True)
+
+        def nested_receiver(**_kwargs):
+            self.record._interface.update(name="Stable")
+
+        for signal in (pre_data_change, post_data_change):
+            with self.subTest(signal=signal):
+                self.record.update(name="Stable", ignore_permission=True)
+                self.target.update(name="first", ignore_permission=True)
+                history_count = self.record.history.count()
+                signal.connect(nested_receiver, sender=self.Target, weak=False)
+                try:
+                    with (
+                        patch.object(self.model, "clean", clean),
+                        patch.object(
+                            post_data_change, "send", wraps=post_data_change.send
+                        ) as post,
+                    ):
+                        self.record.update(name="Changed", ignore_permission=True)
+                finally:
+                    signal.disconnect(nested_receiver, sender=self.Target)
+                self.assertEqual(self.record.name, "Changed")
+                self.assertEqual(self.record.history.count(), history_count + 1)
+                self.assertEqual(
+                    [call.kwargs["sender"] for call in post.call_args_list],
+                    [self.Target, self.Record],
+                )
