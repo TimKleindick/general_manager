@@ -67,6 +67,16 @@ prove a full-schema roundtrip. Historical source coordinates, snapshots and
 evidence links remain independent even when identical schema values share
 storage.
 
+Projection validation reuses the escaped lengths of exact plain strings within
+one validation call. Every logical occurrence still counts toward the original
+node, depth and character limits, including repeated shared containers. A later
+validation recomputes its lengths from the current data. This preserves the
+codec's wire representation and its lossless roundtrip checks while reducing
+repeated serialization of common schema names. The native parity regression
+keeps its original complete dialogues, both routes and 90-second child guard.
+String-only pooling compares string candidates against string values; its
+complete escaped-transport profit checks and reference shifts remain in force.
+
 The Eval Judge now explicitly recognizes actually incurred net project costs and
 preserves the complete typed identities, component scopes and flat multi-value
 constraint claims. A representable claim can still be incorrect. No omitted

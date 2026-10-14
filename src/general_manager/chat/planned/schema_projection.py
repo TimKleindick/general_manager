@@ -129,6 +129,10 @@ def _canonical(value: Any) -> str:
 def _bounded(value: Any, max_chars: int = MAX_CHARS) -> None:
     nodes = 0
     chars = 0
+    # Large references repeat the same schema names across many logical nodes.
+    # Reuse only immutable plain-string lengths within this validation; every
+    # occurrence still consumes the full node, depth and character budgets.
+    string_lengths: dict[str, int] = {}
 
     def walk(node: Any, depth: int) -> None:
         nonlocal nodes, chars
@@ -140,13 +144,26 @@ def _bounded(value: Any, max_chars: int = MAX_CHARS) -> None:
             for key, child in node.items():
                 if not isinstance(key, str):
                     _invalid()
-                chars += len(_dump(key)) + 2
+                if type(key) is str:
+                    key_length = string_lengths.get(key)
+                    if key_length is None:
+                        key_length = len(_dump(key))
+                        string_lengths[key] = key_length
+                else:
+                    key_length = len(_dump(key))
+                chars += key_length + 2
                 walk(child, depth + 1)
         elif isinstance(node, list):
             chars += 2 + len(node)
             for child in node:
                 walk(child, depth + 1)
-        elif node is None or type(node) in {str, int, float, bool}:
+        elif type(node) is str:
+            length = string_lengths.get(node)
+            if length is None:
+                length = len(_dump(node))
+                string_lengths[node] = length
+            chars += length
+        elif node is None or type(node) in {int, float, bool}:
             chars += len(_dump(node))
         else:
             _invalid()
@@ -775,7 +792,8 @@ def _share_small_containers(
                 return {"$gm_ref": 0}
             if not isinstance(node, (dict, list)):
                 return node
-            if _dump(node) == selected_key:
+            # String-only pooling cannot match a dictionary/list JSON value.
+            if not value_strings and _dump(node) == selected_key:
                 return {"$gm_ref": 0}
             if isinstance(node, dict):
                 if "$gm_ref" in node:
