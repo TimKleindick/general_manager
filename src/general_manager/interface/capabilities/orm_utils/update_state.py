@@ -16,10 +16,11 @@ from django.db.models.fields.files import FieldFile
 from general_manager.measurement.measurement_field import MeasurementField
 
 
-@dataclass(frozen=True)
+@dataclass
 class _UpdateState:
     instance: models.Model
     values: dict[str, object]
+    save_skipped: bool = False
 
 
 _update_state: ContextVar[_UpdateState | None] = ContextVar(
@@ -47,7 +48,7 @@ def track_update(
     history_comment: str | None,
     *,
     database_alias: str | None = None,
-) -> Iterator[None]:
+) -> Iterator[_UpdateState | None]:
     """Scope the original row to its save, including nested mutation calls.
 
     The save compares after full_clean(), so validation and changes made by
@@ -85,7 +86,7 @@ def track_update(
             state = _UpdateState(instance, values)
     token = _update_state.set(state)
     try:
-        yield
+        yield state
     finally:
         _update_state.reset(token)
 
@@ -105,6 +106,13 @@ def is_unchanged_update(instance: models.Model) -> bool:
         if _field_value(field, value) != state.values[field.attname]:
             return False
     return True
+
+
+def record_skipped_update_save(instance: models.Model) -> None:
+    """Record the built-in save decision without classifying custom wrappers."""
+    state = _update_state.get()
+    if state is not None and state.instance is instance:
+        state.save_skipped = True
 
 
 def changed_many_to_many(

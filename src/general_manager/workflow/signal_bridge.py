@@ -29,6 +29,8 @@ _WORKFLOW_SIGNAL_BRIDGE_KEY = "WORKFLOW_SIGNAL_BRIDGE"
 _DISPATCH_UID = "general_manager_workflow_signal_bridge"
 
 _RESERVED_KEYS = {
+    "change_context",
+    "database_alias",
     "creator_id",
     "history_comment",
     "identification",
@@ -88,8 +90,8 @@ def _manager_change_to_event(
         for key, value in kwargs.items()
         if key not in _RESERVED_KEYS and not key.startswith("_")
     }
-    if action in {"create", "update"} and not relevant_fields:
-        return None
+    # The mutation outcome controls no-op suppression. Empty input can still
+    # create defaults, change values in clean(), or request an audit touch.
 
     identification = kwargs.get("identification")
     if identification is None:

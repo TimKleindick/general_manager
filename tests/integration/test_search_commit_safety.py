@@ -274,6 +274,42 @@ class SearchCommitSafetyIntegrationTests(GeneralManagerTransactionTestCase):
             self.assertEqual(dispatch.call_args.args[1], "global")
             self.assertEqual(len(dispatch.call_args.args[2]), 1)
 
+    def test_unchanged_update_preserves_search_state_and_skips_dispatch(self) -> None:
+        """Only a real update advances durable search state and enqueues work."""
+        from unittest.mock import patch
+
+        class SearchConfig:
+            indexes = _TEST_SEARCH_CONFIG.indexes
+
+        self.Project.SearchConfig = SearchConfig
+        self.addCleanup(delattr, self.Project, "SearchConfig")
+        with patch(
+            "general_manager.search.invalidation.dispatch_index_manager_batch"
+        ) as dispatch:
+            instance = self.Project.create(name="unchanged", ignore_permission=True)
+            state = SearchIndexState.objects.get(index_name="global")
+            state_query = SearchIndexState.objects.filter(pk=state.pk)
+            initial_state = state_query.values().get()
+            dispatch.reset_mock()
+
+            instance.update(name="unchanged", ignore_permission=True)
+
+            with self.subTest("unchanged search state"):
+                self.assertEqual(state_query.values().get(), initial_state)
+            with self.subTest("no search dispatch"):
+                dispatch.assert_not_called()
+
+            generation_before_change = state_query.get().dirty_generation
+            dispatch.reset_mock()
+            instance.update(name="changed", ignore_permission=True)
+
+            self.assertGreater(
+                state_query.get().dirty_generation, generation_before_change
+            )
+            dispatch.assert_called_once()
+            self.assertEqual(dispatch.call_args.args[1], "global")
+            self.assertEqual(len(dispatch.call_args.args[2]), 1)
+
     def test_unexpected_enqueue_failure_is_suppressed_after_default_commit(
         self,
     ) -> None:

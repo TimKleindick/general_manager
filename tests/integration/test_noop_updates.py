@@ -8,8 +8,11 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import models
+from django.db import connection, models
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
+
+from general_manager.cache.signals import post_data_change
 
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
@@ -113,7 +116,21 @@ class NoopUpdateTests(GeneralManagerTransactionTestCase):
             {"targets_id_list": [str(self.other.id), self.target.id, self.target.id]},
         ):
             with self.subTest(payload=payload):
-                result = self.record.update(ignore_permission=True, **payload)
+                with (
+                    CaptureQueriesContext(connection) as queries,
+                    patch.object(
+                        post_data_change, "send", wraps=post_data_change.send
+                    ) as post,
+                ):
+                    result = self.record.update(ignore_permission=True, **payload)
+                writes = [
+                    query["sql"]
+                    for query in queries
+                    if query["sql"].lstrip().split()[0]
+                    in {"INSERT", "UPDATE", "DELETE"}
+                ]
+                self.assertEqual(writes, [])
+                post.assert_not_called()
                 self.assertIs(result, self.record)
                 self.assertEqual(
                     self.model.objects.values().get(pk=self.record.id), original
@@ -275,3 +292,112 @@ class NoopUpdateTests(GeneralManagerTransactionTestCase):
         self.assertEqual(validate.call_count, 1)
         self.assertTrue(self.record.details["validated"])
         self.assertEqual(self.record.history.count(), count + 1)
+
+    def test_nested_updates_report_only_the_changed_manager(self):
+        def clean(_instance):
+            self.target.update(name="Nested change", ignore_permission=True)
+
+        with (
+            patch.object(self.model, "clean", autospec=True, side_effect=clean),
+            patch.object(post_data_change, "send", wraps=post_data_change.send) as post,
+        ):
+            self.record.update(name="Stable", ignore_permission=True)
+        self.assertEqual(
+            [call.kwargs["sender"] for call in post.call_args_list], [self.Target]
+        )
+
+        with (
+            patch.object(self.model, "clean", autospec=True, side_effect=clean),
+            patch.object(post_data_change, "send", wraps=post_data_change.send) as post,
+        ):
+            self.record.update(name="Changed", ignore_permission=True)
+        self.assertEqual(
+            [call.kwargs["sender"] for call in post.call_args_list], [self.Record]
+        )
+
+    def test_noop_permission_checks_and_transaction_lifecycle_are_preserved(self):
+        from general_manager.cache.signals import (
+            data_change_transaction_finished,
+            pre_data_change,
+        )
+
+        with (
+            patch.object(
+                self.Record.Permission,
+                "check_update_permission",
+                side_effect=PermissionError,
+            ),
+            patch.object(post_data_change, "send", wraps=post_data_change.send) as post,
+        ):
+            with self.assertRaises(PermissionError):
+                self.record.update(name="Stable")
+            post.assert_not_called()
+        with (
+            patch.object(pre_data_change, "send", wraps=pre_data_change.send) as pre,
+            patch.object(
+                data_change_transaction_finished,
+                "send",
+                wraps=data_change_transaction_finished.send,
+            ) as finished,
+            patch.object(post_data_change, "send", wraps=post_data_change.send) as post,
+        ):
+            self.record.update(name="Stable", ignore_permission=True)
+        pre.assert_called_once()
+        finished.assert_called_once()
+        self.assertEqual(finished.call_args.kwargs["outcome"], "committed")
+        self.assertFalse(hasattr(self.record, "_old_values"))
+        post.assert_not_called()
+
+    def test_custom_wrappers_that_write_after_delegation_still_emit_changes(self):
+        from types import MethodType
+
+        mutation = self.Record.Interface.get_capability_handler("orm_mutation")
+        update = self.Record.Interface.get_capability_handler("update")
+        for owner, method_name in (
+            (mutation, "assign_simple_attributes"),
+            (mutation, "save_with_history"),
+            (mutation, "apply_many_to_many"),
+            (update, "update"),
+            (None, "update"),
+        ):
+            with self.subTest(method=method_name):
+                if owner is None:
+                    owner = self.record._interface
+                original = getattr(owner, method_name)
+                quantity = self.record.quantity + 1
+
+                def custom(
+                    _owner, *args, _original=original, _quantity=quantity, **kwargs
+                ):
+                    result = _original(*args, **kwargs)
+                    self.model.objects.filter(pk=self.record.id).update(
+                        quantity=_quantity
+                    )
+                    return result
+
+                with (
+                    patch.object(owner, method_name, MethodType(custom, owner)),
+                    patch.object(
+                        post_data_change, "send", wraps=post_data_change.send
+                    ) as post,
+                ):
+                    self.record.update(name="Stable", ignore_permission=True)
+                self.assertEqual(self.record.quantity, quantity)
+                post.assert_called_once()
+
+    def test_bulk_notification_noop_does_not_emit_changes(self):
+        from general_manager.api import bulk_data_change_notifications
+
+        with (
+            bulk_data_change_notifications(),
+            CaptureQueriesContext(connection) as queries,
+            patch.object(post_data_change, "send", wraps=post_data_change.send) as post,
+        ):
+            self.record.update(name="Stable", ignore_permission=True)
+        self.assertFalse(
+            any(
+                query["sql"].startswith(("INSERT", "UPDATE", "DELETE"))
+                for query in queries
+            )
+        )
+        post.assert_not_called()
