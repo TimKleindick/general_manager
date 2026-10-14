@@ -171,7 +171,10 @@ class MeilisearchBackend:
         Non-iterable setting values and strings/bytes are ignored; iterable
         values such as lists, tuples, and sets are converted to strings. This
         method creates the index with primary key ``id`` if it does not exist
-        and waits for each settings update task to complete before returning.
+        and compares current effective settings before writing changes. Ranking
+        rules and searchable fields retain their order; plain filterable and
+        sortable fields are compared by membership. Each submitted settings
+        task completes before the next update or return.
 
         Raises:
             MeilisearchTaskFailedError: A create-index or settings task fails,
@@ -205,22 +208,30 @@ class MeilisearchBackend:
                 *sorted(shadow_fields - set(filterable_fields)),
             ]
         sortable_fields = self._string_sequence_setting(settings, "sortable_fields")
-        ranking_rules = self._ranking_rules_with_sort_first(index, settings)
-        task = index.update_settings({"rankingRules": ranking_rules})
-        self._wait_for_task(task)
-        if searchable_fields is not None:
-            task = index.update_settings(
-                {"searchableAttributes": list(searchable_fields)}
-            )
+        current = self._as_mapping(index.get_settings())
+        desired = {
+            "rankingRules": self._ranking_rules_with_sort_first(current, settings),
+            "searchableAttributes": searchable_fields,
+            "filterableAttributes": filterable_fields,
+            "sortableAttributes": sortable_fields,
+        }
+        for key, fields in desired.items():
+            if fields is None or self._settings_match(key, current.get(key), fields):
+                continue
+            task = index.update_settings({key: fields})
             self._wait_for_task(task)
-        if filterable_fields is not None:
-            task = index.update_settings(
-                {"filterableAttributes": list(filterable_fields)}
-            )
-            self._wait_for_task(task)
-        if sortable_fields is not None:
-            task = index.update_settings({"sortableAttributes": list(sortable_fields)})
-            self._wait_for_task(task)
+
+    @staticmethod
+    def _settings_match(key: str, current: object, desired: list[str]) -> bool:
+        """Compare ordered rules/search fields and unordered plain field lists."""
+        if not isinstance(current, Sequence) or isinstance(current, (str, bytes)):
+            return False
+        # Structured filter rules have different semantics from plain names.
+        if not all(isinstance(field, str) for field in current):
+            return False
+        if key in {"filterableAttributes", "sortableAttributes"}:
+            return set(current) == set(desired)
+        return list(current) == desired
 
     def upsert(self, index_name: str, documents: Sequence[SearchDocument]) -> None:
         """
@@ -419,7 +430,7 @@ class MeilisearchBackend:
 
     @staticmethod
     def _ranking_rules_with_sort_first(
-        index: _MeilisearchIndex, settings: Mapping[str, object]
+        current: Mapping[str, object], settings: Mapping[str, object]
     ) -> list[str]:
         configured = settings.get("ranking_rules")
         if isinstance(configured, Sequence) and not isinstance(
@@ -427,8 +438,7 @@ class MeilisearchBackend:
         ):
             rules = [str(rule) for rule in configured]
         else:
-            payload = MeilisearchBackend._as_mapping(index.get_settings())
-            raw_rules = payload.get("rankingRules", ())
+            raw_rules = current.get("rankingRules", ())
             rules = (
                 [str(rule) for rule in raw_rules]
                 if isinstance(raw_rules, Sequence)

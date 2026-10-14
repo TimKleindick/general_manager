@@ -30,6 +30,7 @@ class _FakeIndex:
         self.added: list[dict[str, object]] = []
         self.deleted: list[list[str]] = []
         self.settings: list[dict[str, object]] = []
+        self.attributes: dict[str, object] = {}
         self.documents: list[dict[str, object]] = []
         self.search_payloads: list[dict[str, object]] = []
         self.ranking_rules: list[str] = [
@@ -52,12 +53,13 @@ class _FakeIndex:
             dict[str, int]: A simulated task response containing `{"taskUid": 1}`.
         """
         self.settings.append(payload)
+        self.attributes.update(payload)
         if "rankingRules" in payload:
             self.ranking_rules = list(payload["rankingRules"])
         return {"taskUid": 1}
 
     def get_settings(self) -> dict[str, object]:
-        return {"rankingRules": self.ranking_rules}
+        return {**self.attributes, "rankingRules": self.ranking_rules}
 
     def add_documents(self, payload: list[dict[str, object]]) -> dict[str, int]:
         """
@@ -947,3 +949,153 @@ def test_meilisearch_error_helpers() -> None:
 
     exists = _Error("already_exists", 409)
     assert _is_meilisearch_already_exists(exists) is True
+
+
+def test_meilisearch_backend_repeated_settings_create_no_tasks() -> None:
+    index = _FakeIndex()
+    client = _FakeClient(index)
+    backend = MeilisearchBackend(client=client)
+    settings = {
+        "searchable_fields": ["name", "description"],
+        "filterable_fields": ["id", "status"],
+        "sortable_fields": ["name", "date"],
+        "identity_fields": {"Project": {"id": int}},
+    }
+    backend.ensure_index("index", settings)
+    assert len(index.settings) == 4
+    assert any(
+        field.startswith("gm_identity.")
+        for field in index.attributes["filterableAttributes"]
+    )
+    index.settings.clear()
+    client.waited.clear()
+
+    backend.ensure_index("index", settings)
+
+    assert index.settings == []
+    assert client.waited == []
+
+
+@pytest.mark.parametrize(
+    ("setting", "api_key", "ordered"),
+    [
+        ("searchable_fields", "searchableAttributes", True),
+        ("filterable_fields", "filterableAttributes", False),
+        ("sortable_fields", "sortableAttributes", False),
+        ("ranking_rules", "rankingRules", True),
+    ],
+)
+def test_meilisearch_backend_compares_settings_by_semantics(
+    setting: str, api_key: str, ordered: bool
+) -> None:
+    index = _FakeIndex()
+    client = _FakeClient(index)
+    backend = MeilisearchBackend(client=client)
+    backend.ensure_index("index", {setting: ["words", "exactness"]})
+    index.settings.clear()
+    client.waited.clear()
+
+    backend.ensure_index("index", {setting: ["exactness", "words"]})
+
+    expected = ["exactness", "words"]
+    if setting == "ranking_rules":
+        expected.insert(0, "sort")
+    assert index.settings == ([{api_key: expected}] if ordered else [])
+    assert client.waited == ([1] if ordered else [])
+
+    index.settings.clear()
+    backend.ensure_index("index", {setting: []})
+    assert index.settings == [{api_key: ["sort"] if setting == "ranking_rules" else []}]
+
+
+def test_meilisearch_backend_reconciles_external_changes_and_identity_shadows() -> None:
+    index = _FakeIndex()
+    backend = MeilisearchBackend(client=_FakeClient(index))
+    settings = {
+        "filterable_fields": ["id"],
+        "identity_fields": {"Project": {"id": int}},
+    }
+    backend.ensure_index("index", settings)
+    expected = index.attributes["filterableAttributes"]
+    index.attributes["filterableAttributes"] = ["id"]
+    index.settings.clear()
+
+    backend.ensure_index("index", settings)
+
+    assert index.settings == [{"filterableAttributes": expected}]
+
+
+@pytest.mark.parametrize(
+    "current", [None, "name", [{"attributePatterns": ["name"]}], [1]]
+)
+def test_meilisearch_backend_does_not_equate_non_string_settings(
+    current: object,
+) -> None:
+    index = _FakeIndex()
+    index.ranking_rules = ["sort", "words"]
+    index.attributes["filterableAttributes"] = current
+    backend = MeilisearchBackend(client=_FakeClient(index))
+
+    backend.ensure_index("index", {"filterable_fields": ["name"]})
+
+    assert index.settings == [{"filterableAttributes": ["name"]}]
+
+
+def test_meilisearch_backend_settings_read_errors_propagate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    index = _FakeIndex()
+    client = _FakeClient(index)
+    error = RuntimeError("settings unavailable")
+
+    def fail() -> dict[str, object]:
+        raise error
+
+    monkeypatch.setattr(index, "get_settings", fail)
+    with pytest.raises(RuntimeError) as caught:
+        MeilisearchBackend(client=client).ensure_index(
+            "index", {"ranking_rules": ["words"]}
+        )
+    assert caught.value is error
+    assert index.settings == []
+    assert client.waited == []
+
+
+@pytest.mark.parametrize("status", ["failed", "canceled"])
+def test_meilisearch_backend_retries_only_unapplied_settings(status: str) -> None:
+    index = _FakeIndex()
+
+    class DeferredClient(_FakeClient):
+        fail = True
+
+        def wait_for_task(
+            self, task_uid: int, *, timeout_in_ms: int
+        ) -> dict[str, object]:
+            self.waited.append(task_uid)
+            if self.fail and "filterableAttributes" in index.settings[-1]:
+                index.attributes.pop("filterableAttributes", None)
+                return {"status": status, "error": {"message": "rejected"}}
+            return {"status": "succeeded"}
+
+    client = DeferredClient(index)
+    backend = MeilisearchBackend(client=client)
+    settings = {
+        "searchable_fields": ["name"],
+        "filterable_fields": ["id"],
+        "sortable_fields": ["name"],
+    }
+    with pytest.raises(MeilisearchTaskFailedError):
+        backend.ensure_index("index", settings)
+    assert len(index.settings) == len(client.waited) == 3
+    assert "sortableAttributes" not in index.attributes
+    index.settings.clear()
+    client.waited.clear()
+    client.fail = False
+
+    backend.ensure_index("index", settings)
+
+    assert index.settings == [
+        {"filterableAttributes": ["id"]},
+        {"sortableAttributes": ["name"]},
+    ]
+    assert client.waited == [1, 1]
