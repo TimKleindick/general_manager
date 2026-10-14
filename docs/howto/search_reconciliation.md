@@ -49,6 +49,22 @@ duplicates, sort JSON object keys before hashing, and use callable
 `module.qualname` paths when available, falling back to `module.__name__` and
 then `repr`.
 
+## Meilisearch settings reconciliation
+
+`MeilisearchBackend.ensure_index()` reads current index settings on every call
+and submits only changed settings. Ranking rules and searchable fields are
+compared in order; plain filterable and sortable fields are compared by
+membership. Identity shadow fields are included in the desired filterable
+fields. Omitted field settings remain unmanaged; explicit empty lists clear
+them. Each changed setting is still awaited before the next update, and errors
+propagate so a later attempt can reconcile the remaining differences.
+
+This avoids redundant settings tasks; it does not establish a fix for the
+existing-index engine panic reported in [issue #535](https://github.com/TimKleindick/general_manager/issues/535).
+That upgrade case still needs the exact engine/SDK versions, panic trace and
+reproduction data. Settings reconciliation does not automatically replace an
+index or rebuild its documents.
+
 ## Production with Celery Beat
 
 Enable async indexing and reconciliation:
