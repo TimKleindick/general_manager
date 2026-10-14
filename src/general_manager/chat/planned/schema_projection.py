@@ -712,6 +712,28 @@ def _copy_for_rewrite(
     The caller rebuilds the complete object table and every selected root.
     Avoid copying those trees only to discard them immediately afterward.
     """
+
+    def reference_shell(reference: dict[str, Any]) -> dict[str, Any]:
+        if not slots or type(reference) is not dict:
+            return reference
+        # Copy only selected paths' ancestors before omitting their roots.
+        # Key by path: an unselected alias must retain its original data.
+        result = reference.copy()
+        ancestors: dict[tuple[str | int, ...], Any] = {(): result}
+        for slot in slots:
+            for depth in range(1, len(slot.path)):
+                prefix = slot.path[:depth]
+                if prefix not in ancestors:
+                    parent = ancestors[prefix[:-1]]
+                    child = parent[prefix[-1]]
+                    if type(child) not in {dict, list}:
+                        # Preserve ordinary deepcopy semantics for subclasses.
+                        return reference
+                    ancestors[prefix] = child.copy()
+                    parent[prefix[-1]] = ancestors[prefix]
+            ancestors[slot.path[:-1]][slot.path[-1]] = {}
+        return result
+
     whole_reference = len(slots) == 1 and not slots[0].path
     shell: dict[str, Any] = {}
     for key, value in projection.items():
@@ -719,6 +741,8 @@ def _copy_for_rewrite(
             shell[key] = []
         elif key == "reference" and whole_reference:
             shell[key] = {}
+        elif key == "reference":
+            shell[key] = reference_shell(value)
         else:
             shell[key] = value
     return deepcopy(shell)
