@@ -415,7 +415,7 @@ accept `id` fail through the constructor's normal exception.
 For a typed collection, `value` must be a Python `list`; each member is cast
 with the existing scalar or manager input rules, then the whole list is passed
 through the normalizer. The owning interface subsequently applies the
-validator, bounds, and possible-value checks. Null members and member
+validator and possible-value checks. Null members and member
 conversion failures raise `InvalidCollectionValueError` with the input name
 and index. The returned collection and public identification are defensive
 copies. A normalizer may therefore canonicalize an entire selection, while
