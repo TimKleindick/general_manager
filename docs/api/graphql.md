@@ -415,6 +415,40 @@ targets continue. The [RemoteAPI websocket concept](../concepts/interfaces/remot
 explains the event model and the [end-to-end recipe](../examples/remote_manager_interface_end_to_end.md)
 shows the client/server setup.
 
+## Detail subscription authorization
+
+For a registered manager, the generated
+`on<Manager>Change(<identification arguments>)` field returns a
+`<Manager>SubscriptionEvent` async stream. Its existing `action` values and
+`item` selection remain unchanged, but detail delivery is bound to the request
+user:
+
+- **Initial target:** the manager is hydrated and
+  `Permission(instance, request_user).can_read_instance()` is checked before
+  selected-property priming or channel registration. An unavailable or
+  unreadable target produces the GraphQL error
+  `Subscription target is unavailable or not readable.`.
+- **Snapshot and updates:** access is checked again after asynchronous channel
+  registration, before the initial `snapshot`, and before each queued action.
+  Each readable event contains a fresh manager instance. If hydration or access
+  fails after the stream starts, the stream completes without forwarding the
+  action and without emitting `item: null`.
+- **Selected fields:** ordinary field, measurement, and stored-file read rules
+  still apply to the readable instance. A denied nullable field resolves to
+  `null` without evaluating its value; permission or value-access exceptions
+  follow normal GraphQL error handling.
+- **Cleanup and compatibility:** listeners and channel memberships are removed
+  on every completion, revocation, hydration failure, or cancellation. The
+  subscription schema, generated arguments, `SubscriptionEvent` shape, and
+  stable Python exports are unchanged. Authorization is evaluated at the
+  preparation and event boundaries; the stream does not poll independently of
+  incoming events, so clients should resubscribe after termination if access is
+  restored.
+
+See the [subscription concept](../concepts/graphql/subscriptions.md), the
+[protected-instance how-to](../howto/expose_via_graphql.md#subscribe-to-an-authorized-manager-instance),
+and the [runnable query](../examples/graphql_queries.md#subscribe-to-a-protected-manager-instance).
+
 ## Subscription field authorization
 
 Generated subscription payloads retain the existing GraphQL field names and

@@ -87,6 +87,11 @@ the existing `_id` constructor alias; it is not renamed `employeesIds`. Lists
 retain order and duplicates. For required collections use `Input(list[T])`;
 the GraphQL argument then gains outer non-null, but `[]` remains valid.
 
+The owning `employees` field is checked first. If a selected employee fails its
+manager-level read permission, GraphQL omits only that member and preserves the
+order and duplicates of the permitted members. Field-level permissions still
+apply to `id`, `name`, and other selected member fields.
+
 Whole-list validators can enforce application constraints without a new descriptor:
 
 ```python
