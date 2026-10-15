@@ -777,8 +777,11 @@ dependency-cache barrier management and Django signal dispatch. The wrapper
 preserves the wrapped callable's metadata with `functools.wraps`, opens the
 dependency publish barrier before the mutation, clears run-scoped ORM bucket and
 bucket-index snapshots in the active `CalculationRunContext`, emits
-`pre_data_change`, calls the wrapped function, emits `post_data_change`, and
-then closes the barrier. Methods named `create` are treated as class-level
+`pre_data_change`, calls the wrapped function, emits `post_data_change` for a
+confirmed change, and then closes the barrier. Built-in ORM no-op updates still
+run permission, validation, pre-change, cache, and transaction-lifecycle work
+but skip `post_data_change`; custom mutation overrides retain post-change
+events. Methods named `create` are treated as class-level
 creates and use the first positional argument as the Django signal `sender`;
 every other method name is treated as an instance mutation and uses
 `instance.__class__` as `sender`. Raw `classmethod` descriptor objects are

@@ -32,6 +32,42 @@ If other searchable owners include Country values, dirty those managers too:
 read-only ORM synchronization does not emit the lifecycle events that trigger
 related invalidation rules.
 
+## Reconcile Meilisearch settings directly
+
+After configuring `MeilisearchBackend`, callers that own an index can apply its
+settings directly. Repeating the same call reads the effective settings and
+submits no redundant settings tasks; changing an ordered list such as
+`searchable_fields` or a set-like list such as `filterable_fields` submits only
+the affected setting. Identity contracts add the required `gm_identity.*`
+shadow fields to the filterable list.
+
+```python
+import os
+
+from general_manager import MeilisearchBackend
+
+
+backend = MeilisearchBackend(
+    url="http://127.0.0.1:7700",
+    api_key=os.environ.get("MEILISEARCH_API_KEY"),
+)
+settings = {
+    "searchable_fields": ["name", "status"],
+    "filterable_fields": ["type", "status", "id"],
+    "sortable_fields": ["name"],
+    "identity_fields": {"Project": {"id": int}},
+}
+
+backend.ensure_index("global", settings)
+backend.ensure_index("global", settings)  # no settings tasks when unchanged
+```
+
+Omit a searchable, filterable, or sortable setting to leave it unmanaged; pass
+an explicit empty list to clear it. Ranking rules are always normalized with
+`sort` first. Each submitted task completes before the next setting is
+considered, and a read or task failure propagates so the next invocation can
+retry.
+
 For deliberate full backend recovery, an operator can select
 `search_reconcile --once --force`. This can rebuild every configured pair and
 remove stale documents; assess its cost before use. `search_index --reindex`

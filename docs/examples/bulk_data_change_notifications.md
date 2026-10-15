@@ -70,3 +70,24 @@ transaction and does not add the class to
 `transaction_context.changed_classes`. In that case, collect changed class
 names in caller-owned transaction state and consume that state from an
 `on_commit(using=database_alias)` callback registered on the outer transaction.
+
+## Skip redundant refreshes
+
+An unchanged built-in ORM update does not emit `post_data_change`, so it does
+not queue a GraphQL/RemoteAPI refresh, search dispatch, or workflow event. An
+explicit audit touch opts back into persistence and notification:
+
+```python
+def review_project(project: Project) -> None:
+    with bulk_data_change_notifications():
+        project.update(status=project.status, ignore_permission=True)
+        project.update(
+            status=project.status,
+            history_comment="Reviewed without changing fields",
+            ignore_permission=True,
+        )
+```
+
+The first update is a true no-op. The second records history and emits the
+ordinary post-change event even though its field values are equal. Validation,
+pre-change receivers, and transaction cleanup still run for both calls.

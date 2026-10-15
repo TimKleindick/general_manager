@@ -123,6 +123,24 @@ aggregation must instead collect class names in caller-owned transaction state
 and consume them from an `on_commit(using=database_alias)` callback registered
 on that outer transaction.
 
+## Avoid downstream work for no-op updates
+
+Built-in ORM managers compare the validated field values and requested relation
+sets before saving. When an ordinary update is proven unchanged, it performs
+the permission, validation, pre-change, cache, and transaction-lifecycle work
+but emits no `post_data_change`. As a result, this notification context does
+not queue a refresh for that update, and the same no-op does not create search
+reindex work or workflow/outbox records. Custom validation and pre-change
+receivers can still have side effects, and custom mutation overrides retain
+their normal post-change behavior because the framework cannot prove them to be
+no-ops.
+
+Pass a nonempty `history_comment` when an explicit audit touch should persist
+and publish a change event even though the model values are equal. The
+[ORM interface concept](../concepts/interfaces/db_based_interface.md#crud-operations)
+and [runnable recipe](../examples/bulk_data_change_notifications.md#skip-redundant-refreshes)
+show the corresponding write patterns.
+
 For the full callable signature and exception contract, see the
 [GraphQL API reference](../api/graphql.md#bulk-notification-context). The
 [cookbook recipe](../examples/bulk_data_change_notifications.md) is a compact
