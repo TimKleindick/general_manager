@@ -776,7 +776,7 @@ Adapter behavior:
   adapter reads the index's effective settings and skips equivalent writes:
   ranking rules and searchable fields compare in order, while plain
   filterable and sortable fields compare by membership. Identity shadow fields
-  are included in the desired filterable set. Omitted searchable, filterable,
+  are added only for identity names listed in `filterable_fields`. Omitted searchable, filterable,
   and sortable settings stay unmanaged; an explicit empty list clears that
   setting. Ranking rules are always normalized with `sort` first. Each changed
   setting is awaited before the next update or return, and settings-read or

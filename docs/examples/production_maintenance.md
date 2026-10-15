@@ -38,8 +38,8 @@ After configuring `MeilisearchBackend`, callers that own an index can apply its
 settings directly. Repeating the same call reads the effective settings and
 submits no redundant settings tasks; changing an ordered list such as
 `searchable_fields` or a set-like list such as `filterable_fields` submits only
-the affected setting. Identity contracts add the required `gm_identity.*`
-shadow fields to the filterable list.
+the affected setting. Identity contracts add `gm_identity.*` shadow fields
+only for identity names included in `filterable_fields`.
 
 ```python
 import os
