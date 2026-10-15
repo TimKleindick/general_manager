@@ -79,6 +79,14 @@ timestamps unchanged. Permissions and model validation still run; changes made
 by `clean()` are saved. Foreign keys compare their stored identifiers, and
 many-to-many comparisons ignore ordering and duplicate identifiers.
 
+For the built-in interface/update/mutation path, a confirmed no-op also skips
+`post_data_change`, so it does not create workflow/outbox events, search
+reindex work, or post-change notifications. Pre-change signals, cache
+preparation, and transaction lifecycle cleanup still run. Custom mutation
+overrides retain post-change events because their additional writes are not
+known to the framework; pass a nonempty `history_comment` to request an
+explicit audit touch and change event.
+
 A nonempty `history_comment` explicitly requests a new audit entry, even when
 the field values are identical. Measurement fields compare their backing value
 and unit columns. New file uploads and custom writable attributes retain their

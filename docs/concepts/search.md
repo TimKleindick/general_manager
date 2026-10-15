@@ -772,8 +772,15 @@ Adapter behavior:
   `sortable_fields` when those settings are iterable values such as lists,
   tuples, or sets. Strings and bytes are treated as invalid scalar values and
   ignored. Values inside an accepted iterable are converted with `str(...)`.
-  Index creation uses primary key `id`, and index creation/settings updates wait
-  for Meilisearch tasks to finish.
+  Index creation uses primary key `id`. Before submitting settings tasks, the
+  adapter reads the index's effective settings and skips equivalent writes:
+  ranking rules and searchable fields compare in order, while plain
+  filterable and sortable fields compare by membership. Identity shadow fields
+  are included in the desired filterable set. Omitted searchable, filterable,
+  and sortable settings stay unmanaged; an explicit empty list clears that
+  setting. Ranking rules are always normalized with `sort` first. Each changed
+  setting is awaited before the next update or return, and settings-read or
+  task failures propagate so a later call can retry the remaining differences.
 - `upsert(index, [])` still ensures the index exists but does not submit an
   `add_documents` task. Non-empty documents are stored with `id`,
   `gm_document_id`, `type`, `identification`, nested `data`, and non-reserved

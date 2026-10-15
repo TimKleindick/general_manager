@@ -293,6 +293,22 @@ behavior is unchanged. External backend query semantics are unaffected.
 
 ::: general_manager.search.backends.meilisearch.MeilisearchBackend
 
+`MeilisearchBackend.ensure_index(index_name, settings) -> None` creates the
+index with primary key `id` when needed, then reads effective settings before
+submitting changes. Ranking rules and searchable fields compare in order;
+plain filterable and sortable fields compare by membership. Identity contracts
+add `gm_identity.*` shadow fields only for declared filterable identities.
+Omitted searchable, filterable, and sortable setting keys remain unmanaged,
+while explicit empty lists clear their setting; ranking rules are always
+normalized with `sort` first. Each submitted task is awaited before the next
+one. A settings-read, configuration, client, or task failure propagates; a later
+call can retry any settings that were not successfully applied. The method
+accepts the documented
+`index_name: str` and `settings: Mapping[str, object]` parameters and returns
+`None`. Malformed `identity_fields` contracts raise
+`SearchIdentityConfigurationError`; failed, canceled, or timed-out Meilisearch
+tasks raise `MeilisearchTaskFailedError`.
+
 ::: general_manager.search.backends.opensearch.OpenSearchBackend
 
 ::: general_manager.search.backends.typesense.TypesenseBackend
