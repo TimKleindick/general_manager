@@ -306,8 +306,10 @@ call can retry any settings that were not successfully applied. The method
 accepts the documented
 `index_name: str` and `settings: Mapping[str, object]` parameters and returns
 `None`. Malformed `identity_fields` contracts raise
-`SearchIdentityConfigurationError`; failed, canceled, or timed-out Meilisearch
-tasks raise `MeilisearchTaskFailedError`.
+`SearchIdentityConfigurationError`; failed or canceled task results and
+timeouts in the fallback `get_task()` polling loop raise
+`MeilisearchTaskFailedError`. Exceptions from the client's `wait_for_task()`
+method, including its timeout errors, propagate unchanged.
 
 ::: general_manager.search.backends.opensearch.OpenSearchBackend
 
