@@ -16,6 +16,7 @@ import re
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from .reporting import DIMENSIONS
+from .catalog import validate_reference_version
 from .semantic_contracts import (
     ADJUDICATION_SCHEMA_VERSION,
     RANKING_COVERAGE,
@@ -284,6 +285,26 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
         str(name): _shape(str(name), value)
         for name, value in expectation["facts"].items()
     }
+    revised = expectation.get("schema_version") == "1.11"
+    if revised:
+        for field, components in expectation.get("fact_components", {}).items():
+            shapes[field] = {
+                "type": ["object", "null"],
+                "properties": {
+                    name: {
+                        "type": ["number", "string", "null"],
+                        "description": meaning
+                        + " Never calculate an omitted component from tools or other components.",
+                    }
+                    for name, meaning in components.items()
+                },
+                "additionalProperties": True,
+                "description": (
+                    "Map the answer's asserted measurement components, not entity identities. "
+                    "Preserve missing, extra, wrong and contradictory component claims. "
+                    "Do not infer omitted values from tools or arithmetic."
+                ),
+            }
     if "clarification_topics" in shapes:
         shapes["clarification_topics"] = {
             "type": ["array", "null"],
@@ -342,6 +363,33 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
         for name, description in descriptions.items():
             if name in properties:
                 properties[name]["description"] = description
+        if revised:
+            shapes["forecast"]["description"] = (
+                "Extract the forecast claims for the requested measurement. A separately "
+                "labelled existing-plan comparison is not a forecast component; its claims "
+                "remain subject to answer_supported. Preserve plans actually mislabelled as "
+                "forecasts, contradictory claims and other unsupported additions."
+            )
+            # Availability in Gold must not restrict which incorrect claims
+            # the Judge can faithfully represent for the independent scorer.
+            properties["values"] = {}
+            properties["scenario"] = {}
+            properties["values"]["description"] = (
+                "When the answer explicitly cannot produce a forecast and asserts no forecast values, "
+                "use null, not a map of years to null. Preserve numerical values actually asserted, "
+                "even if they contradict an insufficient-history statement. Never fill missing "
+                "forecasts from existing plans, tools or expected values."
+            )
+            properties["scenario"]["description"] = (
+                "Extract scenario values actually asserted. An explicitly unavailable forecast "
+                "with no scenario values uses null; never infer a band from tools or percentages. "
+                "Preserve an asserted numerical or contradictory scenario."
+            )
+            for name in ("slope", "intercept"):
+                properties[name]["description"] += (
+                    " An explicitly unavailable forecast with no asserted coefficient uses null. "
+                    "Preserve coefficients actually asserted, even when contradictory."
+                )
     identities = expectation.get("entity_identity_reference", {})
     fields = identities.get("fields", {})
     # Entity-keyed measurements need meanings, without gold keys or values.
@@ -419,6 +467,8 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
             ),
         }
     for name in ("result_ids", "ranked_ids", "values"):
+        if revised and name == "values" and name not in fields:
+            continue
         if name in shapes:
             shapes[name]["description"] = shapes[name].get("description", "") + (
                 " Include only entities asserted as members of the requested result; "
@@ -1246,9 +1296,11 @@ def _candidate_failures(
 
 def _request_digest(request: Mapping[str, Any]) -> str:
     keys = ["packet", "observation", "candidate_failure_flags", "candidate_status"]
-    # Optional builder proofs are audit-only. Legacy request digests stay valid.
-    if "schema_transport_sources" in request:
-        keys.append("schema_transport_sources")
+    # Bind optional proofs and extraction semantics only when present, retaining
+    # the exact digest inputs of historical markerless requests.
+    for name in ("schema_transport_sources", "reference_version"):
+        if name in request:
+            keys.append(name)
     return _digest({key: request.get(key) for key in keys})
 
 
@@ -1675,6 +1727,8 @@ def build_adjudication_request(
         "observation": observation,
         "model_performance_measured": run.get("model_performance_measured") is True,
     }
+    if expectation.get("schema_version") == "1.11":
+        request["reference_version"] = "1.11"
     schema_sources = _schema_history_sources(run, turn_index, schema, history)
     if schema_sources:
         request["schema_transport_sources"] = schema_sources
@@ -1699,6 +1753,8 @@ def _validate_request(request: Mapping[str, Any]) -> None:
         != sha256(str(packet.get("answer")).encode("utf-8")).hexdigest()
     ):
         _invalid("stale_adjudication_request")
+    if "reference_version" in request:
+        validate_reference_version(request["reference_version"])
     trace = observation.get("trace", {})
     if request.get("schema_version") in {"1.3", "1.4", "1.5"}:
         context = {
@@ -1946,6 +2002,11 @@ def parse_adjudication_response(
             extraction={
                 "status": "validated",
                 "adjudication_schema_version": request["schema_version"],
+                **(
+                    {"reference_version": request["reference_version"]}
+                    if "reference_version" in request
+                    else {}
+                ),
                 "origin": "external",
                 "validator": judge_id,
                 "answer_sha256": packet["answer_sha256"],

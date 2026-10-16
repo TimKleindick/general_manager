@@ -51,7 +51,7 @@ def test_explicit_source_requests_remain_strict(question):
 
 
 def test_reference_version_keeps_explicit_and_legacy_policy():
-    assert catalog.REFERENCE_VERSION == "1.10"
+    assert catalog.REFERENCE_VERSION == "1.11"
     assert expected("E098")["citation_policy"] == "visible_required"
     assert expected("E100", 1)["citation_policy"] == "visible_required"
     legacy = expected("E001")
@@ -93,6 +93,7 @@ def test_unit_normalization_is_only_for_unit_field_and_new_references():
     legacy = deepcopy(contract)
     legacy.pop("unit_normalization", None)
     legacy["schema_version"] = "1.4"
+    observation["extraction"].pop("reference_version", None)
     assert score(legacy, observation, judgment)["dimensions"]["C"]["status"] == "fail"
 
 

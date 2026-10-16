@@ -83,6 +83,7 @@ from general_manager.chat.planned.planner import (
 )
 from general_manager.chat.planned.choice_context import ChoiceContext
 from general_manager.chat.planned.category_binding import (
+    CategoryBindingError,
     INSTRUCTION as CATEGORY_BINDING_INSTRUCTION,
     QUERY_PROPERTIES as CATEGORY_QUERY_PROPERTIES,
     validate_category_query,
@@ -1328,8 +1329,10 @@ class _Runner:
                 backend_args = validate_category_query(
                     backend_args, self.evidence, runtime.task.task_id
                 )
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError) as error:
                 result = {"status": "error", "code": "invalid_category_binding"}
+                if isinstance(error, CategoryBindingError) and error.reason is not None:
+                    result["reason"] = error.reason
                 runtime.remember_tool_result(call, result)
                 return result, False
         try:
@@ -1465,8 +1468,10 @@ class _Runner:
                     runtime.task.task_id,
                     query_schema_witness,
                 )
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError) as error:
                 result = {"status": "error", "code": "invalid_category_binding"}
+                if isinstance(error, CategoryBindingError) and error.reason is not None:
+                    result["reason"] = error.reason
         runtime.remember_tool_result(feedback_call, result)
         await self.emit(
             planned_tool_result_event(runtime.task.task_id, call.id, call.name, result)

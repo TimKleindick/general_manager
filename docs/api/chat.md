@@ -1146,6 +1146,26 @@ binding retain full-inspection semantics. Prose descriptions never select scope.
 `schema_complete` means a full contract was returned; `query.complete` describes
 data population coverage. Selective projection intentionally does not round-trip
 to the full schema. The v24 reference codec remains the separate lossless codec.
+
+Planned category reads retain `code="invalid_category_binding"` when evidence
+or a filter binding is invalid. Known public contract failures also carry a
+stable `reason`:
+
+- `schema_evidence_not_linked`: the same-task schema observation has no link to
+  a declared schema requirement. Use a compatible linked inspection; repeating
+  an incompatible detail selector does not create that link.
+- `filter_input_definition_not_observed`: the selected schema proof does not
+  contain the current executable filter input definitions.
+- `invalid_filter_path`: a binding path must include `filters` or the actual
+  `arguments`/filter-argument prefix before its selectors.
+
+A linked overview can support a complete unfiltered category lookup. A later
+business filter also needs the observed output and input definitions. An
+explicit full inspection can satisfy an overview requirement; this is not an
+automatic fallback. These reasons are operational feedback, never query
+evidence or completion authority. Unknown, wrong-task and wrong-kind sources
+retain generic rejection. All permission, exposure, freshness, population and
+typed-value checks still apply.
 Measure complete discovery → details → query exchanges, including cumulative
 request characters, when comparing model input size.
 
