@@ -31,10 +31,13 @@ from general_manager.chat.planned.contract import (
 from general_manager.chat.planned.models import ValidatedPlan
 from general_manager.chat.planned.choice_context import (
     CHOICE_INSTRUCTION,
+    DEFINITION_CHOICE_INSTRUCTION,
     ChoiceContext,
     choice_questions,
     envelope_schema,
     validate_choices,
+    definition_source,
+    with_user_source,
 )
 from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
@@ -170,6 +173,7 @@ def _validate_response(
     requested_write: bool,
     messages: list[Message],
     user_text: str,
+    configured_context: str = "",
 ) -> tuple[ValidatedPlan, ChoiceContext | None]:
     if result.tool_calls:
         _invalid_response(
@@ -180,8 +184,13 @@ def _validate_response(
     payload = _parse_object(result.text)
     plan_payload: object = payload
     choices = None
-    if not requested_write and choice_questions(messages):
-        choices = validate_choices(payload, messages, user_text=user_text)
+    if not requested_write and (choice_questions(messages) or configured_context):
+        choices = validate_choices(
+            payload,
+            messages,
+            user_text=user_text,
+            configured_context=configured_context,
+        )
         plan_payload = payload["plan"]
     plan = validate_plan(plan_payload)
     if requested_write and plan.intent != "mutation":
@@ -276,9 +285,18 @@ def _request_messages(
     questions = (
         () if _is_requested_write(user_text) else choice_questions(visible_history)
     )
-    if questions:
+    definition_context = (
+        configured_context if not _is_requested_write(user_text) else ""
+    )
+    if questions or definition_context:
         reference["choice_questions"] = list(questions)
-        reference["required_json_schema"] = envelope_schema(_PLAN_SCHEMA, questions)
+        reference["required_json_schema"] = envelope_schema(
+            _PLAN_SCHEMA, questions, configured_context=definition_context
+        )
+    if definition_context:
+        reference["application_definition_source"] = definition_source(
+            definition_context
+        )
     if rejection is not None:
         reference["previous_rejection"] = rejection
     result = [
@@ -291,6 +309,8 @@ def _request_messages(
     ]
     if questions:
         result.append(Message(role="system", content=CHOICE_INSTRUCTION))
+    if definition_context:
+        result.append(Message(role="system", content=DEFINITION_CHOICE_INSTRUCTION))
     if correction or rejection is not None:
         result.append(
             Message(
@@ -366,6 +386,9 @@ async def plan_request(
         for message in messages
         if not (message.role == "system" and message.content == configured_context)
     ]
+    if configured_context and not requested_write:
+        choice_messages = with_user_source(choice_messages, user_text)
+        messages = choice_messages
     attempts = (("planner", False), ("planner", True), ("fallback", False))
     total_usage = TokenUsage()
     attempt_usages: list[TokenUsage] = []
@@ -428,7 +451,7 @@ async def plan_request(
         )
         try:
             plan, choices = _validate_response(
-                result, requested_write, choice_messages, user_text
+                result, requested_write, choice_messages, user_text, configured_context
             )
         except PlanValidationError as exc:
             rejection = {

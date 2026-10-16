@@ -689,7 +689,7 @@ def expected_turn(
             "period",
             {"start": f"{year}-01-01", "end_exclusive": f"{year + 1}-01-01"},
         )
-        if reference_version in {"1.12", "1.13"} and case["id"] == "E116":
+        if reference_version in {"1.12", "1.13", "1.14"} and case["id"] == "E116":
             # This question requests a summary, not the explicit WBS grouping
             # requested by E117/E118. Its total must not depend on WBS metadata.
             contract.fact(
@@ -842,10 +842,18 @@ def expected_turn(
             )
             constraints = {"owner_customer": customer, "approved": True}
         elif resolved == "supplier_path":
+            # Reference 1.14 follows the actual question: supplier approval is
+            # not an implied selection predicate. Prior references stay exact.
+            require_approved = reference_version != "1.14"
+            if reference_version == "1.14":
+                require_approved = case.get("supplier_approval_required", False)
+                if type(require_approved) is not bool:
+                    message = "Supplier approval declaration must be a boolean"
+                    raise ValueError(message)
             suppliers = {
                 row["code"]
                 for row in data["supplier"]
-                if row["name"] == "Nord" and row["approved"]
+                if row["name"] == "Nord" and (not require_approved or row["approved"])
             }
             parts = {
                 row["code"] for row in data["part"] if row["supplier_code"] in suppliers
@@ -857,11 +865,12 @@ def expected_turn(
             }
             identifiers = sorted(set(_projects(data, materials={copper})) & supplied)
             contract.source(
-                "approved_supplier_parts", ["Supplier", "Part", "ProjectPart"]
+                "approved_supplier_parts" if require_approved else "supplier_parts",
+                ["Supplier", "Part", "ProjectPart"],
             )
             constraints = {
                 "supplier_ids": sorted(suppliers),
-                "supplier_approved": True,
+                **({"supplier_approved": True} if require_approved else {}),
                 "all_materials": [copper],
             }
         else:
@@ -885,7 +894,7 @@ def expected_turn(
             identifiers = _projects(
                 data, customer=selected_customer, materials=materials
             )
-            if resolved == "brass" and reference_version in {"1.12", "1.13"}:
+            if resolved == "brass" and reference_version in {"1.12", "1.13", "1.14"}:
                 identifiers = [
                     code
                     for code in identifiers
@@ -914,7 +923,7 @@ def expected_turn(
             contract.fact(
                 "R", "material_ids", sorted(materials), "set", entity_manager="Material"
             )
-            if reference_version == "1.13":
+            if reference_version in {"1.13", "1.14"}:
                 # Positive target identities are distinct from independently
                 # required exclusions of the same manager type.
                 contract.value["entity_identity_reference"]["fields"]["material_ids"][
@@ -962,7 +971,12 @@ def expected_turn(
             values,
             entity_manager=None if resolved == "returns" else "Project",
         )
-        if resolved == "returns" and reference_version in {"1.11", "1.12", "1.13"}:
+        if resolved == "returns" and reference_version in {
+            "1.11",
+            "1.12",
+            "1.13",
+            "1.14",
+        }:
             contract.value["fact_components"] = {
                 "values": {
                     "gross": "Quantity shipped before returns, as asserted in the answer.",

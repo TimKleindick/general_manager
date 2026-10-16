@@ -43,6 +43,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=MANAGER_COUNT,snapshot='RANK',variant='weight',seed=17)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
+from experiments.gm_eval.scripted import contextual_probe_plan
 from experiments.siwc_eval.provider import payload
 from general_manager.chat.providers.base import DoneEvent,TextChunkEvent,TokenUsage,ToolCallEvent
 from general_manager.chat.planned.schema_projection import logical_messages
@@ -70,6 +71,7 @@ def factory(config):
      qs=ref['choice_questions'];assert len(qs)==1 and qs[0]['topic']=='unit'
      history=ref['conversation_context'];latest=max(i for i,m in enumerate(history) if m['role']=='user')
      value={'plan':value,'choices':[{'question_id':qs[0]['question_id'],'state':'answered','applicability':'same_scope','user_quotes':[{'index':latest,'quote':'Kilogramm'}]}],'clarification_requests':[]};seen=True
+    value=contextual_probe_plan(value,ref,clarification_topics=('unit',) if turn==1 else ())
     event=TextChunkEvent(json.dumps(value))
    elif 'resolved_evidence' in ref:
     if turn==1:event=TextChunkEvent(json.dumps({'clarification':{'language':'de','requirements':['unit']}}))

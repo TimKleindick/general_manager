@@ -63,6 +63,38 @@ CALCULATION_EVIDENCE_RULE = (
 _MAX_DIAGNOSTIC_CHARACTERS = 1024
 
 
+def executor_action_examples() -> list[dict[str, object]]:
+    """Serialize nested bindings from their owning types, with explicit placeholders."""
+    from general_manager.chat.planned.models import (
+        CalculationBinding,
+        ConversionBinding,
+    )
+
+    return [
+        {
+            "action": "bind_calculation",
+            "requirement_id": "calculation_requirement_id",
+            "binding": CalculationBinding(
+                source_requirement_ids=("query_requirement_id",),
+                value_path=("quantity_field",),
+                unit_path=("unit_field",),
+                conversion=ConversionBinding(
+                    factor_path=("relation_field", "factor_field"),
+                    factor_identity_path=("relation_field", "identity_field"),
+                    schema_requirement_ids=(
+                        "source_schema_requirement_id",
+                        "factor_schema_requirement_id",
+                    ),
+                    schema_evidence_ids=(
+                        "source_schema_evidence_id",
+                        "factor_schema_evidence_id",
+                    ),
+                ),
+            ).as_mapping(),
+        }
+    ]
+
+
 def executor_action_schema() -> dict[str, Any]:
     """Publish existing action and child rules without changing their validators."""
     child = deepcopy(cast(dict[str, Any], PLAN_SCHEMA)["properties"]["tasks"]["items"])

@@ -1093,7 +1093,8 @@ def score_turn(
         and (
             extraction.get("reference_version") == expectation.get("schema_version")
             if "reference_version" in extraction
-            else expectation.get("schema_version") not in {"1.11", "1.12", "1.13"}
+            else expectation.get("schema_version")
+            not in {"1.11", "1.12", "1.13", "1.14"}
         )
         and isinstance(extraction.get("validator"), str)
         and bool(extraction.get("validator"))
@@ -1653,7 +1654,9 @@ def score_turn(
         "unit_normalization": unit_audit,
         "designation_normalization": designation_audit,
         "selection_scope": scope_audit,
-        "evaluation_revision": "measurement-contracts-7"
+        "evaluation_revision": "measurement-contracts-8"
+        if expectation.get("schema_version") == "1.14"
+        else "measurement-contracts-7"
         if expectation.get("schema_version") == "1.13"
         else "measurement-contracts-6"
         if expectation.get("schema_version") == "1.12"
