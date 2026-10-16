@@ -285,7 +285,7 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
         str(name): _shape(str(name), value)
         for name, value in expectation["facts"].items()
     }
-    revised = expectation.get("schema_version") in {"1.11", "1.12", "1.13"}
+    revised = expectation.get("schema_version") in {"1.11", "1.12", "1.13", "1.14"}
     if revised:
         for field, components in expectation.get("fact_components", {}).items():
             shapes[field] = {
@@ -426,7 +426,7 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
             if path["manager"] == manager and path["path"][0] == "constraints"
         ]
         explicit_targets = (
-            expectation.get("schema_version") == "1.13"
+            expectation.get("schema_version") in {"1.13", "1.14"}
             and "selection_target_paths" in descriptor
         )
         if explicit_targets:
@@ -1762,7 +1762,7 @@ def build_adjudication_request(
         "observation": observation,
         "model_performance_measured": run.get("model_performance_measured") is True,
     }
-    if expectation.get("schema_version") in {"1.11", "1.12", "1.13"}:
+    if expectation.get("schema_version") in {"1.11", "1.12", "1.13", "1.14"}:
         request["reference_version"] = expectation["schema_version"]
     schema_sources = _schema_history_sources(run, turn_index, schema, history)
     if schema_sources:

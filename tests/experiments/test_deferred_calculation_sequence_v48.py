@@ -42,6 +42,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=MANAGER_COUNT)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
+from experiments.gm_eval.scripted import contextual_probe_plan
 from experiments.siwc_eval.provider import payload
 from general_manager.chat.providers.base import DoneEvent,TextChunkEvent,TokenUsage,ToolCallEvent
 from general_manager.chat.planned.schema_projection import logical_messages
@@ -67,6 +68,7 @@ def factory(config):
                       {"requirement_id":"rows","kind":"query","description":"Read all exposed shipment quantities and actual units","operation":None},
                       {"requirement_id":"total","kind":"calculation","description":"Sum the complete observed quantity in pieces","operation":"sum","binding":None}],
       "completion_criteria":["schema","rows","total"],"routing_features":["requires_calculation"]}]}
+    response=contextual_probe_plan(response,ref)
     event=TextChunkEvent(json.dumps(response))
    elif "resolved_evidence" in ref:
     event=TextChunkEvent(json.dumps({"answer":"The complete verified quantity sum is available in pieces.","evidence_ids":[e["evidence_id"] for e in ref["resolved_evidence"]]}))

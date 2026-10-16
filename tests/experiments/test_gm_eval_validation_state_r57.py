@@ -26,7 +26,13 @@ def test_saved_syntax_pair_keeps_invalid_json_and_exact_runtime_state_digest():
     assert data["actions"][0] == data["actions"][1]
     parsed, feedback = scheduler._parse_action_with_feedback(data["actions"][0])
     assert parsed is None and feedback["code"] == "invalid_action_json"
-    assert repeated["action_validation_error"] == feedback
+    historical_feedback = repeated["action_validation_error"]
+    assert {key: feedback[key] for key in historical_feedback} == historical_feedback
+    assert set(feedback) - set(historical_feedback) == {"detail"}
+    assert (
+        feedback["detail"]
+        == "Expecting ',' delimiter (line 1, column 426, position 425)."
+    )
     assert (
         sha256(data["actions"][0].encode()).hexdigest()
         == data["validation_cycle"]["action_sha256"]

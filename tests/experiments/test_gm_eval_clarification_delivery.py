@@ -25,6 +25,7 @@ from general_manager.chat.providers.base import ToolCallEvent
 case=dict(next(c for c in load_catalog() if c["id"]=="E001"))
 case["turns"]=["Which customer is most important?"]
 plan={"intent":"read","tasks":[{"task_id":"task_1","objective":"Inspect Customer schema to ground the missing criterion and time period.","depends_on":[],"requirements":[{"requirement_id":"customer_schema","kind":"schema","description":"Inspect Customer schema only.","operation":None}],"completion_criteria":["customer_schema"],"routing_features":[]}]}
+plan={"plan":plan,"choices":[],"definition_bindings":[],"clarification_requests":[{"topic":topic,"question_id":None,"scope_quote":{"index":1,"quote":case["turns"][0]}} for topic in ("criterion","horizon")]}
 question=json.dumps({"clarification":{"language":config["language"],"requirements":["criterion","horizon"]}})
 executor=[ToolCallEvent("schema", "get_manager_schema", {"manager":"Customer","view":"full","requirement_id":"customer_schema"}),json.dumps({"action":"complete","evidence_ids":["task_1:schema:1"]})]
 responses={"planner":[json.dumps(plan)],"executor":list(executor),"executor":list(executor),"synthesizer":[json.dumps({"answer":"P02 wins with42 EUR?","evidence_ids":[]}) if config["fallback"] else question],"fallback":[question]}

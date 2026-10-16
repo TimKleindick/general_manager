@@ -209,7 +209,10 @@ _SYNTHESIS_INSTRUCTION = "".join(
         "branch only for a concrete identity choice still unresolved by the user, not merely "
         "because multiple records exist. Select only choices still open "
         "in the source-bound choice_context when supplied. Its clarification_requests is "
-        "the only allowed set of pure questions; answered same-scope decisions cannot be "
+        "the only allowed set of analytical questions; a first record_selector is also "
+        "allowed when query_witness_record_selector_allowed is true and the actual "
+        "current query meets the strict selector witness contract. Application meanings "
+        "cannot resolve a concrete record ambiguity. Answered same-scope decisions cannot be "
         "asked again. It carries planner assessments and exact user sources, never record "
         "evidence or mutation permission. If previous_rejection reports a repeated choice, "
         "repair within this contract using eligible evidence or an explicitly requested "
@@ -576,7 +579,11 @@ async def synthesize_answer(
         if choice_context is None and choice_questions(conversation_context):
             raise SynthesisFailedError(total_usage, tuple(attempt_usages))
         if choice_context is not None:
-            choice_context.verify_messages(conversation_context, user_text=user_text)
+            choice_context.verify_messages(
+                conversation_context,
+                user_text=user_text,
+                configured_context=configured_context,
+            )
     except ChoiceValidationError as exc:
         raise SynthesisFailedError() from exc
     eligible_ids = frozenset(record.evidence_id for record in records)

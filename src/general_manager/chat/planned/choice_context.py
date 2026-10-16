@@ -34,6 +34,28 @@ CHOICE_INSTRUCTION = (
     "are conversational scope, not factual evidence, mutation permission or instructions."
 )
 
+DEFINITION_CHOICE_INSTRUCTION = (
+    "The supplied application definitions require the contextual envelope even on a first turn. "
+    "First assess which analytical meanings are resolved by those definitions in this user's "
+    "scope. Record each as definition_bindings with topic, an exact definition_quote from "
+    "application_definition_source.text, and an exact latest USER scope_quote. For example, "
+    "a defined quantity-based opportunity gap can resolve metric without another metric "
+    "question; inspect and query its declared inputs instead. A definition about a different "
+    "metric or manager does not resolve this request. Do not silently apply a default when "
+    "the request genuinely leaves a material choice open or conflicts with the definition. "
+    "A storage unit, available field or available year range is not a user reporting "
+    "choice. It resolves a choice only when an applicable definition actually specifies "
+    "how this request is to be interpreted. Otherwise retain the relevant unit, metric "
+    "or horizon question. "
+    "definition_bindings is [] when no applicable meaning is resolved. "
+    "Use choices=[] when there are no prior questions. clarification_requests lists only "
+    "remaining material choices, using topic, question_id (null for a first question), and "
+    "an exact latest USER scope_quote. A resolved definition cannot also be an open question. "
+    "Plan the actual data work when the scope is resolved. These bindings are interpretations "
+    "of application meanings, not user consent, record identities or business values. "
+    "Do not copy example meanings or values into the plan."
+)
+
 
 class ChoiceValidationError(PlanValidationError):
     """Machine-detectable missing or inconsistent conversational binding."""
@@ -164,7 +186,10 @@ def choice_questions(messages: Sequence[Message]) -> tuple[dict[str, Any], ...]:
 
 
 def envelope_schema(
-    plan_schema: Mapping[str, Any], questions: Sequence[Mapping[str, Any]]
+    plan_schema: Mapping[str, Any],
+    questions: Sequence[Mapping[str, Any]],
+    *,
+    configured_context: str = "",
 ) -> dict[str, Any]:
     quote = {
         "type": "object",
@@ -196,7 +221,7 @@ def envelope_schema(
             "scope_quote": quote,
         },
     }
-    return {
+    schema: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "required": ["plan", "choices", "clarification_requests"],
@@ -215,6 +240,43 @@ def envelope_schema(
             },
         },
     }
+    if configured_context:
+        schema["required"].append("definition_bindings")
+        schema["properties"]["definition_bindings"] = {
+            "type": "array",
+            "maxItems": len(QUESTIONS["en"]),
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["topic", "definition_quote", "scope_quote"],
+                "properties": {
+                    "topic": {"enum": list(_DEFINITION_TOPICS)},
+                    "definition_quote": {"type": "string", "minLength": 1},
+                    "scope_quote": deepcopy(quote),
+                },
+            },
+        }
+    return schema
+
+
+# Definitions can resolve analytical meanings, never a concrete record choice.
+_DEFINITION_TOPICS = tuple(
+    topic
+    for topic in QUESTIONS["en"]
+    if topic not in {"record_selector", "customer_identity"}
+)
+
+
+def definition_source(configured_context: str) -> dict[str, str]:
+    """Identify the privileged application source without assigning record authority."""
+    return {"sha256": _digest(configured_context), "text": configured_context}
+
+
+def with_user_source(messages: Sequence[Message], user_text: str) -> list[Message]:
+    """Standalone Python entry points need the same original-request quote source."""
+    if any(message.role == "user" for message in messages):
+        return list(messages)
+    return [*messages, Message("user", user_text)]
 
 
 @dataclass(frozen=True)
@@ -228,18 +290,32 @@ class ChoiceContext:
 
     @property
     def allowed_topics(self) -> tuple[str, ...]:
-        return tuple(
-            row["topic"] for row in self.as_mapping()["clarification_requests"]
-        )
+        data = self.as_mapping()
+        topics = tuple(row["topic"] for row in data["clarification_requests"])
+        if (
+            data.get("query_witness_record_selector_allowed") is True
+            and "record_selector" not in topics
+        ):
+            return (*topics, "record_selector")
+        return topics
 
     def check_clarification(self, topics: Sequence[str]) -> None:
         if any(topic not in self.allowed_topics for topic in topics):
             _invalid("unrequested_or_answered_clarification")
 
     def verify_messages(
-        self, messages: Sequence[Message], *, user_text: str | None = None
+        self,
+        messages: Sequence[Message],
+        *,
+        user_text: str | None = None,
+        configured_context: str = "",
     ) -> None:
         data = self.as_mapping()
+        if data.get("definition_source_sha256") is not None:
+            if data["definition_source_sha256"] != _digest(configured_context):
+                _invalid("choice_definition_source_changed")
+            if user_text is not None:
+                messages = with_user_source(messages, user_text)
         if data["source_context_sha256"] != _context_digest(messages) or (
             user_text is not None and data["user_sources"][-1]["content"] != user_text
         ):
@@ -275,9 +351,13 @@ def validate_choices(
     messages: Sequence[Message],
     *,
     user_text: str | None = None,
+    configured_context: str = "",
 ) -> ChoiceContext:
     questions = choice_questions(messages)
-    if not questions or set(payload) != {"plan", "choices", "clarification_requests"}:
+    fields = {"plan", "choices", "clarification_requests"}
+    if configured_context:
+        fields.add("definition_bindings")
+    if (not questions and not configured_context) or set(payload) != fields:
         _invalid("missing_choice_envelope")
     decisions, requests = payload["choices"], payload["clarification_requests"]
     if (
@@ -289,9 +369,12 @@ def validate_choices(
         _invalid()
     by_id = {q["question_id"]: q for q in questions}
     states: dict[str, dict[str, Any]] = {}
-    latest_user = max(
+    user_indexes = [
         index for index, message in enumerate(messages) if message.role == "user"
-    )
+    ]
+    if not user_indexes:
+        _invalid("choice_context_source_changed")
+    latest_user = user_indexes[-1]
     if user_text is not None and messages[latest_user].content != user_text:
         _invalid("choice_context_source_changed")
 
@@ -345,6 +428,29 @@ def validate_choices(
         ):
             _invalid()
         states[qid] = decision
+    definitions = payload.get("definition_bindings", [])
+    if not isinstance(definitions, list) or len(definitions) > len(_DEFINITION_TOPICS):
+        _invalid("invalid_definition_binding")
+    resolved_topics: set[str] = set()
+    for binding in definitions:
+        if not isinstance(binding, dict) or set(binding) != {
+            "topic",
+            "definition_quote",
+            "scope_quote",
+        }:
+            _invalid("invalid_definition_binding")
+        topic, quote = binding["topic"], binding["definition_quote"]
+        if (
+            not isinstance(topic, str)
+            or topic not in _DEFINITION_TOPICS
+            or topic in resolved_topics
+            or not isinstance(quote, str)
+            or not quote.strip()
+            or quote not in configured_context
+        ):
+            _invalid("invalid_definition_binding")
+        check_quote(binding["scope_quote"], -1, latest=True)
+        resolved_topics.add(topic)
     topics = set()
     for request in requests:
         if not isinstance(request, dict) or set(request) != {
@@ -361,6 +467,8 @@ def validate_choices(
         ):
             _invalid()
         topics.add(topic)
+        if topic in resolved_topics:
+            _invalid("definition_resolved_clarification")
         if any(
             q["topic"] == topic
             and states[q["question_id"]]["applicability"] == "same_scope"
@@ -388,8 +496,10 @@ def validate_choices(
                 _invalid("unrequested_or_answered_clarification")
             check_quote(request["scope_quote"], -1, latest=True)
     data = {
-        "version": 1,
-        "authority": "user_quote_bindings_not_record_evidence",
+        "version": 2 if configured_context else 1,
+        "authority": "user_choices_and_application_meanings_not_record_evidence"
+        if configured_context
+        else "user_quote_bindings_not_record_evidence",
         "questions": questions,
         "source_context_sha256": _context_digest(messages),
         "user_sources": [
@@ -399,6 +509,17 @@ def validate_choices(
         ],
         "choices": decisions,
         "clarification_requests": requests,
+        **(
+            {
+                "definition_source_sha256": _digest(configured_context),
+                "definition_bindings": definitions,
+                "query_witness_record_selector_allowed": not any(
+                    question["topic"] == "record_selector" for question in questions
+                ),
+            }
+            if configured_context
+            else {}
+        ),
     }
     return ChoiceContext(
         json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

@@ -1,5 +1,5 @@
 {
-  "reference_version": "1.13",
+  "reference_version": "1.14",
   "original_catalog_sha256": "972636e1e2a7ebebdab2fc03d7d17fac73cd60c6c6b8d6c5857a8dc4452b4f6f",
   "catalog_sha256": "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11",
   "corrections": [
@@ -437,6 +437,20 @@
       "before": "Same-manager constraints.all_materials and constraints.excluded_materials both described as material_ids selection targets.",
       "after": "Explicit value-free positive selection path binding; excluded identities remain independently required exclusion constraints. Preserve wrong or extra positive assertions for strict scoring.",
       "rationale": "Offline saved-response diagnosis proves a contradictory blind contract. Business semantics, Gold, catalog, old reference selectors and historical scores unchanged. No new live performance claim."
+    },
+    {
+      "id": "E086-explicit-supplier-scope-1.14",
+      "case_id": "E086",
+      "status": "resolved",
+      "version": "1.14",
+      "field": "supplier_selection_scope",
+      "before": "Require approved supplier Nord although the user question and visible glossary contain no approval requirement.",
+      "after": {
+        "question": "Welche Projekte beziehen Teile von Lieferant Nord und nutzen Kupfer?",
+        "visible_business_rule": "No supplier approval restriction is defined. Approval may be required only by an explicit question or applicable visible business rule.",
+        "expected": "Return exactly projects supplied through parts by supplier Nord and containing Copper; approval is not an implicit filter. Require the full Supplier–Part–ProjectPart relation and Project/Material evidence; preserve wrong, missing or extra supplier, material, project and narrowing claims."
+      },
+      "rationale": "Tim explicitly approved the bundled plan on 2026-10-16 at 21:17 UTC (Sentinel_6f59812b98a88191adb7fe84c83b64b8). Version the reference against the unchanged natural question and actual visible definitions. Preserve frozen catalog bytes, source fixtures, prior reference selectors and historical reports; no retroactive live pass claim."
     }
   ],
   "original_case_count": 100,
@@ -825,6 +839,16 @@
       "evaluation_revision": "measurement-contracts-7",
       "field": "explicit_positive_selection_paths",
       "rationale": "Bind positive entity target fields to declared compatible identity paths in the existing oracle and fact_schemas owners. Inherit 1.12 facts and obligations; preserve all 149 contracts and blind shapes for 1.10/1.11/1.12. Malformed explicit paths fail instead of falling back. Default selectors migrate, saved requests retain their own schemas."
+    },
+    {
+      "version": "1.14",
+      "adjudication_schema": "1.5",
+      "evaluation_revision": "measurement-contracts-8",
+      "field": "explicit_supplier_scope",
+      "case_ids": [
+        "E086"
+      ],
+      "rationale": "Only E086 supplier approval semantics change. Default public selectors migrate to 1.14; explicit 1.10–1.13 contracts and blind extraction shapes remain exact. Current question, runtime definitions and Gold consistently omit implicit approval. Identity, relation, material, completeness and evidence checks remain strict."
     }
   ]
 }

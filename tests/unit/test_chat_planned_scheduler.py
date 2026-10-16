@@ -1674,8 +1674,12 @@ def test_executor_reference_includes_the_declared_requirement_operation() -> Non
         )
     )
 
+    from general_manager.chat.planned.schema_projection import logical_messages
+
     reference = json.loads(
-        _reference_content(_Executor.calls[-1]).removeprefix("REFERENCE_DATA=")
+        _reference_content(logical_messages(_Executor.calls[-1])).removeprefix(
+            "REFERENCE_DATA="
+        )
     )
     assert reference["task"]["requirements"] == [
         {

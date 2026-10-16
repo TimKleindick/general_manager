@@ -11,6 +11,40 @@ if TYPE_CHECKING:
     from general_manager.chat.providers.base import ChatEvent, Message, ToolDefinition
 
 
+def contextual_probe_plan(
+    plan: Mapping[str, Any],
+    reference: Mapping[str, Any],
+    *,
+    clarification_topics: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Build explicitly scripted infrastructure replies, never repair model output."""
+    value = dict(plan)
+    if "application_definition_source" not in reference:
+        return value
+    if "plan" in value:
+        return {**value, "definition_bindings": value.get("definition_bindings", [])}
+    if reference.get("choice_questions"):
+        message = "Probe must explicitly supply decisions for prior questions"
+        raise ValueError(message)
+    history = reference["conversation_context"]
+    latest = max(
+        index for index, message in enumerate(history) if message["role"] == "user"
+    )
+    return {
+        "plan": value,
+        "choices": [],
+        "definition_bindings": [],
+        "clarification_requests": [
+            {
+                "topic": topic,
+                "question_id": None,
+                "scope_quote": {"index": latest, "quote": history[latest]["content"]},
+            }
+            for topic in clarification_topics
+        ],
+    }
+
+
 class ScriptedFactory:
     """Each role consumes declared model replies through the real provider path."""
 
@@ -260,7 +294,7 @@ def make_script(case: Mapping[str, Any], runtime: Any) -> Any:
                 )
                 requirement_kind = "schema" if clarification else "query"
                 if "catalog_and_schema_summary" in reference:
-                    reply = {
+                    reply: dict[str, Any] = {
                         "intent": "read",
                         "tasks": [
                             {
@@ -280,6 +314,7 @@ def make_script(case: Mapping[str, Any], runtime: Any) -> Any:
                             }
                         ],
                     }
+                    reply = contextual_probe_plan(reply, reference)
                 elif "resolved_evidence" in reference:
                     reply = {
                         "answer": "Which metric and years should define this request?"

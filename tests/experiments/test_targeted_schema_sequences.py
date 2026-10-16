@@ -56,6 +56,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=MANAGER_COUNT)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
+from experiments.gm_eval.scripted import contextual_probe_plan
 from experiments.siwc_eval.provider import payload
 from general_manager.chat.providers.base import DoneEvent,TextChunkEvent,TokenUsage,ToolCallEvent
 from general_manager.chat.planned.schema_projection import logical_messages
@@ -90,6 +91,7 @@ async def sequence(manager,selective):
                         "schema":{"manager":manager,"view":"overview","types":[],"snapshot":"current"}},
                        {"requirement_id":"rows","kind":"query","description":"Read the selected population","operation":None}],
        "completion_criteria":["schema","rows"],"routing_features":[]}]}
+     response=contextual_probe_plan(response,reference)
      event=TextChunkEvent(json.dumps(response))
     elif "resolved_evidence" in reference:
      response={"answer":"Offline infrastructure sequence completed.","evidence_ids":[item["evidence_id"] for item in reference["resolved_evidence"]]}
