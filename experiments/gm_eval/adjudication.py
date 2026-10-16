@@ -285,7 +285,7 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
         str(name): _shape(str(name), value)
         for name, value in expectation["facts"].items()
     }
-    revised = expectation.get("schema_version") in {"1.11", "1.12"}
+    revised = expectation.get("schema_version") in {"1.11", "1.12", "1.13"}
     if revised:
         for field, components in expectation.get("fact_components", {}).items():
             shapes[field] = {
@@ -425,6 +425,31 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
             for path in identities.get("paths", [])
             if path["manager"] == manager and path["path"][0] == "constraints"
         ]
+        explicit_targets = (
+            expectation.get("schema_version") == "1.13"
+            and "selection_target_paths" in descriptor
+        )
+        if explicit_targets:
+            paths = descriptor["selection_target_paths"]
+            if (
+                not isinstance(paths, list)
+                or not paths
+                or any(
+                    not isinstance(path, list)
+                    or not path
+                    or not all(isinstance(part, str) and part for part in path)
+                    or not any(
+                        item["path"] == path
+                        and item["manager"] == manager
+                        and item["shape"] == descriptor["shape"]
+                        for item in identities.get("paths", [])
+                    )
+                    for path in paths
+                )
+            ):
+                message = "Invalid explicit selection target paths"
+                raise ValueError(message)
+            target_paths = [".".join(path) for path in paths]
         if target_paths:
             shapes[name]["description"] = (
                 f"{manager} identities asserted as requested selection targets in "
@@ -436,6 +461,13 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
                 "Preserve an incorrect target actually asserted as the requested target. "
                 "All explanatory claims remain subject to answer_supported."
             )
+            if explicit_targets:
+                shapes[name]["description"] += (
+                    " These are positive inclusion targets only. An explicitly excluded "
+                    "identity belongs in its independent exclusion constraint, not in this "
+                    "positive-target field. Preserve wrong or extra positive targets actually "
+                    "asserted, including contradictory positive and excluded claims."
+                )
         else:
             shapes[name]["description"] = (
                 f"{manager} identities asserted as members of or related to the requested result. "
@@ -1730,7 +1762,7 @@ def build_adjudication_request(
         "observation": observation,
         "model_performance_measured": run.get("model_performance_measured") is True,
     }
-    if expectation.get("schema_version") in {"1.11", "1.12"}:
+    if expectation.get("schema_version") in {"1.11", "1.12", "1.13"}:
         request["reference_version"] = expectation["schema_version"]
     schema_sources = _schema_history_sources(run, turn_index, schema, history)
     if schema_sources:

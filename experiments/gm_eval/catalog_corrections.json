@@ -1,5 +1,5 @@
 {
-  "reference_version": "1.12",
+  "reference_version": "1.13",
   "original_catalog_sha256": "972636e1e2a7ebebdab2fc03d7d17fac73cd60c6c6b8d6c5857a8dc4452b4f6f",
   "catalog_sha256": "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11",
   "corrections": [
@@ -427,6 +427,16 @@
       "before": "Required WBS identifiers, complete group values/names and WbsElement evidence for a question that asks for a cost overview.",
       "after": "Require the independently derived actual net EUR cost total for 2025, exact scope and ledger evidence. WBS/project details are optional and, if offered, independently checked; no fixed size threshold. Explicit WBS questions E117/E118 remain strict.",
       "rationale": "Explicit user decision on 2026-10-16: project costs primarily as a sum; a breakdown can help for few results but omission alone must not fail. Arithmetic, units, period, exclusions and evidence stay strict. E086 supplier approval is unresolved and unchanged; no historical rescoring."
+    },
+    {
+      "id": "E072-positive-selection-role-1.13",
+      "case_id": "E072",
+      "status": "resolved",
+      "version": "1.13",
+      "field": "material_ids_extraction_role",
+      "before": "Same-manager constraints.all_materials and constraints.excluded_materials both described as material_ids selection targets.",
+      "after": "Explicit value-free positive selection path binding; excluded identities remain independently required exclusion constraints. Preserve wrong or extra positive assertions for strict scoring.",
+      "rationale": "Offline saved-response diagnosis proves a contradictory blind contract. Business semantics, Gold, catalog, old reference selectors and historical scores unchanged. No new live performance claim."
     }
   ],
   "original_case_count": 100,
@@ -808,6 +818,13 @@
         "E116"
       ],
       "rationale": "Version only the two explicit user decisions. Preserve all 149 reference 1.10 and 1.11 expectations and blind shapes exactly. Bind reference 1.12 in requests, extraction and scoring; inherit 1.11 blind extraction meanings. Optional detail judgment reuses the existing required additional_breakdowns_supported check; no new scorer heuristic, threshold or live performance claim."
+    },
+    {
+      "version": "1.13",
+      "adjudication_schema": "1.5",
+      "evaluation_revision": "measurement-contracts-7",
+      "field": "explicit_positive_selection_paths",
+      "rationale": "Bind positive entity target fields to declared compatible identity paths in the existing oracle and fact_schemas owners. Inherit 1.12 facts and obligations; preserve all 149 contracts and blind shapes for 1.10/1.11/1.12. Malformed explicit paths fail instead of falling back. Default selectors migrate, saved requests retain their own schemas."
     }
   ]
 }
