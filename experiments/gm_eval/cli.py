@@ -15,6 +15,8 @@ import sys
 import tempfile
 from typing import Any
 
+from .catalog import REFERENCE_VERSION
+
 
 class ValidationError(ValueError):
     """A local experimental validation request is inconsistent."""
@@ -39,14 +41,14 @@ def select_cases(
     return selected
 
 
-def catalog_report() -> dict[str, Any]:
+def catalog_report(*, reference_version: str = REFERENCE_VERSION) -> dict[str, Any]:
     from .catalog import load_catalog, validate_catalog
     from .oracle import expected_turn
 
-    cases = load_catalog()
-    validation = validate_catalog(cases)
+    cases = load_catalog(reference_version=reference_version)
+    validation = validate_catalog(cases, reference_version=reference_version)
     oracles = [
-        expected_turn(case, turn)
+        expected_turn(case, turn, reference_version=reference_version)
         for case in cases
         for turn in range(len(case["turns"]))
     ]

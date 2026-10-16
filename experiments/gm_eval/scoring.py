@@ -1090,6 +1090,11 @@ def score_turn(
             or extraction.get("adjudication_schema_version")
             == expectation["adjudication_schema_version"]
         )
+        and (
+            extraction.get("reference_version") == expectation.get("schema_version")
+            if "reference_version" in extraction
+            else expectation.get("schema_version") != "1.11"
+        )
         and isinstance(extraction.get("validator"), str)
         and bool(extraction.get("validator"))
         and extraction.get("answer_sha256") == digest
@@ -1648,7 +1653,9 @@ def score_turn(
         "unit_normalization": unit_audit,
         "designation_normalization": designation_audit,
         "selection_scope": scope_audit,
-        "evaluation_revision": "measurement-contracts-4",
+        "evaluation_revision": "measurement-contracts-5"
+        if expectation.get("schema_version") == "1.11"
+        else "measurement-contracts-4",
         "reference_version": expectation.get("schema_version"),
         "citation_policy": citation_policy,
         "visible_citations": {

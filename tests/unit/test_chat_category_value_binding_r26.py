@@ -209,6 +209,101 @@ def _binding(*, field="family", path=None):
     }
 
 
+def test_unlinked_schema_lookup_reports_repairable_reason_without_query_authority(
+    category_schema,
+):
+    schema = category_schema
+    runner = _public_runner(schema.manager)
+    _call(runner, "get_manager_schema", manager=schema.manager, view="overview")
+    assert not runner.evidence.is_linked("task_1", "task_1:schema:1")
+    before = len(schema.calls)
+    result, valid = _call(
+        runner,
+        "query",
+        manager=schema.manager,
+        fields=["id", "family"],
+        category_lookup={"schema_evidence_id": "task_1:schema:1"},
+    )
+    assert result == {
+        "status": "error",
+        "code": "invalid_category_binding",
+        "reason": "schema_evidence_not_linked",
+    }
+    assert not valid and len(schema.calls) == before
+    assert not any(r.kind == "query" for r in runner.evidence.records)
+
+    _call(runner, "get_manager_schema", manager=schema.manager, view="full")
+    assert runner.evidence.is_linked("task_1", "task_1:schema:2")
+    rows, valid = _call(
+        runner,
+        "query",
+        manager=schema.manager,
+        fields=["id", "family"],
+        category_lookup={"schema_evidence_id": "task_1:schema:2"},
+    )
+    assert valid and rows["complete"] is True
+    assert len(rows["data"]) == 3
+    assert len(schema.calls) == before + 1
+
+    # Unknown sources retain the generic rejection and cannot reveal metadata.
+    result, valid = _call(
+        runner,
+        "query",
+        manager=schema.manager,
+        fields=["id", "family"],
+        category_lookup={"schema_evidence_id": "unobserved"},
+    )
+    assert result == {"status": "error", "code": "invalid_category_binding"}
+    assert not valid and len(schema.calls) == before + 1
+
+
+def test_category_binding_reports_missing_input_definition_then_accepts_explicit_full(
+    category_schema,
+):
+    schema = category_schema
+    runner = _public_runner(schema.manager)
+    runtime = runner.runtimes["task_1"]
+    runtime.task = replace(
+        runtime.task,
+        requirements=tuple(
+            replace(r, schema=SchemaBinding(schema.manager, "overview", (), "current"))
+            if r.kind == "schema"
+            else r
+            for r in runtime.task.requirements
+        ),
+    )
+    _call(runner, "get_manager_schema", manager=schema.manager)
+    _, valid = _call(
+        runner,
+        "query",
+        manager=schema.manager,
+        fields=["id", "family"],
+        category_lookup={"schema_evidence_id": "task_1:schema:1"},
+    )
+    assert valid
+    before = len(schema.calls)
+    business = {
+        "manager": schema.manager,
+        "fields": ["id", "family"],
+        "filters": {"family_Exact": schema.actual},
+    }
+    binding = _binding()
+    result, valid = _call(runner, "query", **business, category_bindings=[binding])
+    assert not valid and result["reason"] == "filter_input_definition_not_observed"
+    assert len(schema.calls) == before
+
+    # Full is explicitly requested and compatible with the declared overview.
+    _call(runner, "get_manager_schema", manager=schema.manager, view="full")
+    binding["schema_evidence_id"] = "task_1:schema:3"
+    binding["filter_path"] = ["family_Exact"]
+    result, valid = _call(runner, "query", **business, category_bindings=[binding])
+    assert not valid and result["reason"] == "invalid_filter_path"
+    assert len(schema.calls) == before
+    binding["filter_path"] = ["filters", "family_Exact"]
+    result, valid = _call(runner, "query", **business, category_bindings=[binding])
+    assert valid and [row["id"] for row in result["data"]] == [1, 2]
+
+
 def test_unobserved_record_names_cannot_bind_family_or_supply_absence_evidence(
     category_schema,
 ):

@@ -554,6 +554,42 @@ historical; 1.10 supersedes their exclusive criterion requirement. All catalog
 bytes, questions, numeric facts, source and follow-up obligations are preserved.
 Stored-case rescoring is a separate offline artifact and measures no new model
 performance. Independent v38 review is required before any inference release.
+### Blind measurement extraction, reference 1.11 (r55)
+
+Reference 1.11 changes the blind extraction contract for fixed shipment
+components and explicitly unavailable forecasts. The catalog bytes, questions,
+numeric Gold, exact scorer comparisons and historical raw scores are unchanged.
+The Brass/Copper scope interpretation remains pending; this revision does not
+change that oracle or supplier approval and WBS-default policies.
+
+Net shipment comparisons declare value-free `gross`, `returns` and `net`
+component meanings. They are not entity-keyed measurements. Entity-membership
+guidance applies to an actual identity descriptor; ordinary entity/year maps
+retain their existing meaning. Wrong, missing and extra component assertions
+remain representable and fail the independent exact comparison.
+
+Forecast guidance describes a canonical null when the answer explicitly cannot
+produce forecast values. It does not restrict the schema according to Gold's
+availability: numerical, contradictory and additional claims remain extractable.
+Separately labelled existing plans stay outside the forecast measurement but
+remain accountable under `answer_supported`. Existing source-kind guidance is
+retained; no deterministic future Judge success is claimed.
+
+`load_catalog`, `validate_catalog`, `reference_corrections`, `expected_turn` and
+`catalog_report` accept the keyword `reference_version="1.10"` or `"1.11"`;
+the default is 1.11. Unknown versions and non-string selectors are rejected.
+The explicit 1.10 path reproduces all 149 previous expectations and blind fact
+schemas exactly. `run_case`, `compare_consumer_parity` and `offline_check` carry
+an explicit version to their run metadata; callers choosing a legacy reference
+must pass the same selection to every entry point. Ordinary CLI runs use 1.11.
+
+New 1.11 Judge requests bind `reference_version` in their request hash. Only a
+validated request can supply that marker to its parsed extraction. The existing
+scoring metadata check requires it for 1.11 and rejects mismatched markers.
+Historical markerless requests remain markerless and are parsed against their
+own saved `response_schema`. The adjudication envelope remains version 1.5.
+Reconstructing old requests is compatibility evidence, not a new model score.
+
 # Offline identity normalization
 
 Numeric/string IDs are normalized only from eligible selected typed query rows

@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from asgiref.sync import sync_to_async
 
-from .catalog import REFERENCE_VERSION
+from .catalog import REFERENCE_VERSION, validate_reference_version
 from .profiles import (
     EvaluationProfile,
     ExperimentProvider,
@@ -465,6 +465,7 @@ async def run_case(
     *,
     route: str = "scheduler",
     mode: str = "offline",
+    reference_version: str = REFERENCE_VERSION,
 ) -> dict[str, Any]:
     """Run one isolated synthetic conversation; scoring is deliberately separate."""
     from django.conf import settings as django_settings
@@ -472,6 +473,7 @@ async def run_case(
     from general_manager.chat.planned.config import get_planned_chat_settings
     from general_manager.chat.settings import validate_chat_settings
 
+    validate_reference_version(reference_version)
     if route not in {"scheduler", "consumer"}:
         raise ValueError("unknown_harness_route")
     if mode not in {"offline", "live"}:
@@ -746,7 +748,7 @@ async def run_case(
         "snapshot": runtime.snapshot,
         "variant": runtime.variant,
         "seed": runtime.seed,
-        "reference_version": REFERENCE_VERSION,
+        "reference_version": reference_version,
         "status": failure_flags[0] if failure_flags else "infrastructure_check",
         "failure_flags": failure_flags,
         "task_quality_status": "unscored",
@@ -777,14 +779,29 @@ async def run_case(
 
 
 async def compare_consumer_parity(
-    runtime: Any, case: Mapping[str, Any], profile: EvaluationProfile
+    runtime: Any,
+    case: Mapping[str, Any],
+    profile: EvaluationProfile,
+    *,
+    reference_version: str = REFERENCE_VERSION,
 ) -> dict[str, Any]:
     """Compare real ASGI consumer and direct scheduler with identical model scripts."""
     from .scripted import make_script
 
-    scheduler = await run_case(runtime, case, profile, make_script(case, runtime))
+    scheduler = await run_case(
+        runtime,
+        case,
+        profile,
+        make_script(case, runtime),
+        reference_version=reference_version,
+    )
     consumer = await run_case(
-        runtime, case, profile, make_script(case, runtime), route="consumer"
+        runtime,
+        case,
+        profile,
+        make_script(case, runtime),
+        route="consumer",
+        reference_version=reference_version,
     )
     keys = (
         "user",
@@ -855,18 +872,39 @@ async def compare_consumer_parity(
 
 
 def offline_check(
-    runtime: Any, case_id: str, *, profile: str = "weak-fallback", parity: bool = False
+    runtime: Any,
+    case_id: str,
+    *,
+    profile: str = "weak-fallback",
+    parity: bool = False,
+    reference_version: str = REFERENCE_VERSION,
 ) -> dict[str, Any]:
     """Synchronous CLI entry; all candidate replies are offline test scripts."""
     from .catalog import load_catalog
     from .profiles import make_profile
     from .scripted import make_script
 
-    case = next(item for item in load_catalog() if item["id"] == case_id)
+    case = next(
+        item
+        for item in load_catalog(reference_version=reference_version)
+        if item["id"] == case_id
+    )
     selected = make_profile(profile)
     if parity:
-        result = asyncio.run(compare_consumer_parity(runtime, case, selected))
+        result = asyncio.run(
+            compare_consumer_parity(
+                runtime, case, selected, reference_version=reference_version
+            )
+        )
         result["model_performance_measured"] = False
         result["gaps"] = list(CAPABILITY_GAPS)
         return result
-    return asyncio.run(run_case(runtime, case, selected, make_script(case, runtime)))
+    return asyncio.run(
+        run_case(
+            runtime,
+            case,
+            selected,
+            make_script(case, runtime),
+            reference_version=reference_version,
+        )
+    )
