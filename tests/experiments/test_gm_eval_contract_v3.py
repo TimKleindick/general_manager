@@ -51,7 +51,7 @@ def test_explicit_source_requests_remain_strict(question):
 
 
 def test_reference_version_keeps_explicit_and_legacy_policy():
-    assert catalog.REFERENCE_VERSION == "1.11"
+    assert catalog.REFERENCE_VERSION == "1.12"
     assert expected("E098")["citation_policy"] == "visible_required"
     assert expected("E100", 1)["citation_policy"] == "visible_required"
     legacy = expected("E001")

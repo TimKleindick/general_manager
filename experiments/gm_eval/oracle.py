@@ -682,16 +682,6 @@ def expected_turn(
                 "Project-cost oracle requires an explicit rate for non-EUR actuals"
             )
             raise ValueError(message)
-        cost_values: dict[str, Decimal] = {}
-        for row in rows:
-            key = str(
-                row["wbs_code"]
-                if resolved == "project_costs_wbs"
-                else row["project_code"]
-            )
-            cost_values[key] = cost_values.get(key, Decimal(0)) + _decimal(
-                row["net_amount"]
-            )
         contract.source("actual_cost_ledger", ["ProjectCost"])
         contract.measure("actual_net_project_cost", "EUR", [year], ["actual"])
         contract.fact(
@@ -699,29 +689,61 @@ def expected_turn(
             "period",
             {"start": f"{year}-01-01", "end_exclusive": f"{year + 1}-01-01"},
         )
-        cost_manager = "WbsElement" if resolved == "project_costs_wbs" else "Project"
-        contract.fact(
-            "C",
-            "values",
-            {key: _rounded(value) for key, value in sorted(cost_values.items())},
-            entity_manager=cost_manager,
-        )
-        contract.fact("C", "total", _rounded(sum(cost_values.values(), Decimal(0))))
-        contract.selection(
-            sorted(cost_values),
-            manager=cost_manager,
-            kind="actual",
-            **({"project": aurora} if resolved == "project_costs_project" else {}),
-        )
-        if resolved == "project_costs_wbs":
-            contract.source("wbs_labels", ["WbsElement"])
-            wbs = _index(data, "wbs_element")
+        if reference_version == "1.12" and case["id"] == "E116":
+            # This question requests a summary, not the explicit WBS grouping
+            # requested by E117/E118. Its total must not depend on WBS metadata.
             contract.fact(
-                "R",
-                "wbs_names",
-                {code: wbs[code]["name"] for code in sorted(cost_values)},
-                entity_manager="WbsElement",
+                "C",
+                "total",
+                _rounded(
+                    sum((_decimal(row["net_amount"]) for row in rows), Decimal(0))
+                ),
             )
+            contract.fact("R", "constraints", {"kind": "actual"})
+            contract.value["fact_meanings"] = {
+                "total": "Extract the answer's asserted aggregate total for the entire requested cost population. Keep optional WBS/project rows separate. Never calculate an omitted total from rows or tools, substitute a partial amount, or repair a wrong total."
+            }
+            contract.semantic(
+                "A",
+                "additional_breakdowns_supported",
+                "No breakdown is required. If the answer volunteers WBS/project details, verify each assignment, name, amount, unit, period and scope against eligible evidence. Wrong or unsupported details fail even when the overall total is correct. Reconcile a breakdown claimed complete with that total; explicitly partial examples need not sum to the total. Do not impose a fixed size threshold or require an omitted optional breakdown.",
+            )
+        else:
+            cost_values: dict[str, Decimal] = {}
+            for row in rows:
+                key = str(
+                    row["wbs_code"]
+                    if resolved == "project_costs_wbs"
+                    else row["project_code"]
+                )
+                cost_values[key] = cost_values.get(key, Decimal(0)) + _decimal(
+                    row["net_amount"]
+                )
+            cost_manager = (
+                "WbsElement" if resolved == "project_costs_wbs" else "Project"
+            )
+            contract.fact(
+                "C",
+                "values",
+                {key: _rounded(value) for key, value in sorted(cost_values.items())},
+                entity_manager=cost_manager,
+            )
+            contract.fact("C", "total", _rounded(sum(cost_values.values(), Decimal(0))))
+            contract.selection(
+                sorted(cost_values),
+                manager=cost_manager,
+                kind="actual",
+                **({"project": aurora} if resolved == "project_costs_project" else {}),
+            )
+            if resolved == "project_costs_wbs":
+                contract.source("wbs_labels", ["WbsElement"])
+                wbs = _index(data, "wbs_element")
+                contract.fact(
+                    "R",
+                    "wbs_names",
+                    {code: wbs[code]["name"] for code in sorted(cost_values)},
+                    entity_manager="WbsElement",
+                )
     elif resolved == "material_density":
         material_code = _resolve(data, "material", "CU-ETP")
         material = _index(data, "material")[material_code]
@@ -863,6 +885,13 @@ def expected_turn(
             identifiers = _projects(
                 data, customer=selected_customer, materials=materials
             )
+            if resolved == "brass" and reference_version == "1.12":
+                identifiers = [
+                    code
+                    for code in identifiers
+                    if copper not in projects[code]["material_codes"]
+                ]
+                constraints["excluded_materials"] = [copper]
             if resolved == "shared_material":
                 identifiers = [code for code in identifiers if code != aurora]
                 constraints["exclude_project"] = aurora
@@ -927,7 +956,7 @@ def expected_turn(
             values,
             entity_manager=None if resolved == "returns" else "Project",
         )
-        if resolved == "returns" and reference_version == "1.11":
+        if resolved == "returns" and reference_version in {"1.11", "1.12"}:
             contract.value["fact_components"] = {
                 "values": {
                     "gross": "Quantity shipped before returns, as asserted in the answer.",

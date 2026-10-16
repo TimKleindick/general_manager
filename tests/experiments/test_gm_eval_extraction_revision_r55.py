@@ -42,7 +42,7 @@ def test_all_149_historical_expectations_and_blind_shapes_remain_exact():
     assert len(baseline) == 149
 
 
-@pytest.mark.parametrize("version", [None, True, 1.11, "1.12", "1.9", ""])
+@pytest.mark.parametrize("version", [None, True, 1.11, "1.13", "1.9", ""])
 def test_reference_selector_rejects_unknown_or_mistyped_versions(version):
     with pytest.raises(ValueError, match="reference version"):
         oracle.expected_turn(case("E079"), 0, reference_version=version)
@@ -55,7 +55,7 @@ def test_catalog_and_report_preserve_the_selected_legacy_version():
     assert report["catalog_validation"]["reference_version"] == "1.10"
     assert {e["schema_version"] for e in report["oracles"]} == {"1.10"}
     assert not any(c["version"] == "1.11" for c in report["reference_corrections"])
-    assert catalog.REFERENCE_VERSION == "1.11"
+    assert catalog.REFERENCE_VERSION == "1.12"
     assert catalog.catalog_sha256() == catalog.REVIEWED_SHA256
     assert any(c["version"] == "1.11" for c in catalog.reference_corrections())
 
@@ -96,12 +96,12 @@ def test_unavailable_forecast_guidance_does_not_condition_shapes_on_gold_truth()
     )
 
 
-def _roundtrip(expected, facts):
+def _roundtrip(expected, facts, *, answer=None, semantic_overrides=None):
     # A controlled saved tool trace and injected Judge envelope: no provider call.
     run = saved_run()
     run["case_id"] = expected["case_id"]
     turn = run["turns"][0]
-    turn["answer"] = json.dumps(facts, sort_keys=True)
+    turn["answer"] = answer if answer is not None else json.dumps(facts, sort_keys=True)
     for event in turn["events"]:
         if event.get("type") == "text_chunk":
             event["content"] = turn["answer"]
@@ -109,6 +109,14 @@ def _roundtrip(expected, facts):
     managers = {
         m for req in expected["source_requirements"] for m in req["alternatives"][0]
     }
+    # Keep the controlled discovery fixture consistent with the extra queries.
+    for message in run["trace"]["provider_calls"][0]["messages"]:
+        if message["content"].startswith("REFERENCE_DATA="):
+            reference = json.loads(message["content"].removeprefix("REFERENCE_DATA="))
+            reference["manager_candidates"] = [
+                {"manager": name} for name in sorted(managers | {"Shipment", "Project"})
+            ]
+            message["content"] = "REFERENCE_DATA=" + json.dumps(reference)
     for manager in sorted(managers - {"Shipment", "Project"}):
         run["schema_index"][manager] = {"relations": []}
         call = {
@@ -148,7 +156,7 @@ def _roundtrip(expected, facts):
         "citations": [],
         "semantic_checks": {
             c["id"]: {
-                "passed": True,
+                "passed": (semantic_overrides or {}).get(c["id"], True),
                 "reason": "Synthetic protocol control, no model quality claim.",
                 "evidence_ids": ["answer", *ids],
             }
@@ -248,12 +256,12 @@ def test_explicit_null_version_is_not_markerless_legacy_compatibility():
         assert score(legacy, observed, judgment)["primary_failure"] == "judge_failure"
 
 
-@pytest.mark.parametrize("version", ["1.10", "1.11"])
+@pytest.mark.parametrize("version", ["1.10", "1.11", "1.12"])
 def test_reference_marker_cannot_be_added_removed_or_changed_with_a_saved_hash(version):
     expected = _expected("E079", version)
     request, _ = _roundtrip(expected, deepcopy(expected["facts"]))
     original_hash = request["request_sha256"]
-    for marker in (None, "1.10", "1.11", True):
+    for marker in (None, "1.10", "1.11", "1.12", True):
         changed = deepcopy(request)
         if marker is None:
             changed.pop("reference_version", None)
@@ -268,7 +276,7 @@ def test_reference_marker_cannot_be_added_removed_or_changed_with_a_saved_hash(v
             adjudication._validate_request(changed)
 
 
-@pytest.mark.parametrize("version", ["1.10", "1.11"])
+@pytest.mark.parametrize("version", ["1.10", "1.11", "1.12"])
 def test_selected_reference_reaches_native_harness_metadata(version):
     from tests.experiments.test_gm_eval_harness import _child
 

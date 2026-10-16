@@ -63,7 +63,9 @@ source snapshots, never inconsistent totals in one database. Monetary inputs
 are exact decimal strings, EUR net unless explicitly specified, and final values
 round half up to cents. Ties use ascending project code. Missing is not zero.
 
-The added `project_costs` fixture uses actual net EUR costs grouped by PSP/WBS.
+The added `project_costs` fixture supplies actual net EUR costs and PSP/WBS
+classification. An overview primarily requires the total; explicitly requested
+WBS breakdowns remain required, and volunteered details must be supported.
 For calendar 2025, Engineering W01 totals EUR 3,500 and Project Management W02
 EUR 1,200, overall EUR 4,700. Aurora's actual total is EUR 2,500. Separate plan
 rows and out-of-period boundary rows must be excluded. These conventions are
@@ -575,13 +577,14 @@ Separately labelled existing plans stay outside the forecast measurement but
 remain accountable under `answer_supported`. Existing source-kind guidance is
 retained; no deterministic future Judge success is claimed.
 
-`load_catalog`, `validate_catalog`, `reference_corrections`, `expected_turn` and
-`catalog_report` accept the keyword `reference_version="1.10"` or `"1.11"`;
-the default is 1.11. Unknown versions and non-string selectors are rejected.
+At R55, `load_catalog`, `validate_catalog`, `reference_corrections`, `expected_turn`
+and `catalog_report` introduced the explicit `reference_version="1.10"` or
+`"1.11"` selector with default 1.11. Reference 1.12 below extends that selector and
+migrates the current default. Unknown versions and non-string selectors are rejected.
 The explicit 1.10 path reproduces all 149 previous expectations and blind fact
 schemas exactly. `run_case`, `compare_consumer_parity` and `offline_check` carry
 an explicit version to their run metadata; callers choosing a legacy reference
-must pass the same selection to every entry point. Ordinary CLI runs use 1.11.
+must pass the same selection to every entry point.
 
 New 1.11 Judge requests bind `reference_version` in their request hash. Only a
 validated request can supply that marker to its parsed extraction. The existing
@@ -589,6 +592,43 @@ scoring metadata check requires it for 1.11 and rejects mismatched markers.
 Historical markerless requests remain markerless and are parsed against their
 own saved `response_schema`. The adjudication envelope remains version 1.5.
 Reconstructing old requests is compatibility evidence, not a new model score.
+
+### Authorized exclusion and cost-summary semantics, reference 1.12 (r56)
+
+The user resolved two business choices on 2026-10-16. E072 requires Brass and
+excludes every project containing Copper, including Brass/Copper intersections.
+Other materials do not disqualify a project unless they are excluded too. The
+base fixture still returns P11; a counterfactual mixed-project test distinguishes
+the new negative predicate from historical inclusion-only selection.
+
+E116 requires the actual net EUR 4700 cost sum for calendar 2025, its exact
+half-open interval, actual source kind/constraint and ProjectCost evidence.
+It does not require WBS discovery, result IDs, labels or component amounts.
+A grounded additional breakdown may help for few results, but no fixed count
+defines that presentation choice and omission alone cannot fail the answer.
+The existing mandatory `additional_breakdowns_supported` semantic check examines
+any volunteered WBS/project assignments, names, amounts, units, period and scope.
+Wrong extras fail even with a correct total; an absent/invalid judgment remains
+unscored. Only an asserted complete breakdown must reconcile to the total;
+explicitly partial examples need not. The extractor never calculates a missing
+total from optional rows. E117/E118 explicitly request WBS and remain strict.
+
+All public Python entry points above plus `run_case`, `compare_consumer_parity`
+and `offline_check` now default to `reference_version="1.12"`. Ordinary CLI
+runs inherit 1.12. Callers replaying an older reference must pass `"1.10"` or
+`"1.11"` consistently to each Python entry point. The existing adjudication
+schema remains 1.5; new requests hash-bind the selected reference and their
+validated extractions must match. Scored output identifies 1.12 with
+`evaluation_revision="measurement-contracts-6"`. R55 component/forecast guidance
+is inherited. All 149 historical contracts and blind shapes for each supported
+older version are hash-exact; the catalog bytes, source fixtures, stored Gold,
+raw answers and historical scores/reports remain untouched. No historical
+attempt was rescored and no new live performance was measured.
+
+E086 supplier approval is still undecided and unchanged. See
+[the R56 decision and verification scope](../../docs/chat/eval-semantics-r56.md).
+The separately prepared Cloud-Linux A/B route is blocked before execution;
+this revision does not start a substitute diagnostic or live Eval.
 
 # Offline identity normalization
 
