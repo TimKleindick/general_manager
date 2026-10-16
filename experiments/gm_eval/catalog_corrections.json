@@ -1,5 +1,5 @@
 {
-  "reference_version": "1.11",
+  "reference_version": "1.12",
   "original_catalog_sha256": "972636e1e2a7ebebdab2fc03d7d17fac73cd60c6c6b8d6c5857a8dc4452b4f6f",
   "catalog_sha256": "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11",
   "corrections": [
@@ -407,6 +407,26 @@
       "before": "No explicit canonical representation for a stated unavailable forecast; separately labelled plan comparisons were sometimes extracted as forecast claims.",
       "after": "Value-free guidance for unavailable values and scenarios; preserve contradictory numerical claims and independent accountability of plan comparisons. Existing source-kind scope rules remain unchanged.",
       "rationale": "Independently reviewed against original requirements, saved R7 answers and original tests. Catalog questions and numeric Gold unchanged; historical scores are not reclassified."
+    },
+    {
+      "id": "E072-mixed-material-exclusion-1.12",
+      "case_id": "E072",
+      "status": "resolved",
+      "version": "1.12",
+      "field": "excluded_materials",
+      "before": "Brass inclusion without a negative Copper predicate; base fixture does not distinguish mixed projects.",
+      "after": "Require Brass and exclude every project also containing Copper, including mixed projects. Other unexcluded materials remain allowed.",
+      "rationale": "Explicit user decision on 2026-10-16: excluded characteristics also exclude intersections that contain them. Preserve old reference selectors, source fixture, catalog bytes and historical scores."
+    },
+    {
+      "id": "E116-cost-total-first-1.12",
+      "case_id": "E116",
+      "status": "resolved",
+      "version": "1.12",
+      "field": "cost_summary_granularity",
+      "before": "Required WBS identifiers, complete group values/names and WbsElement evidence for a question that asks for a cost overview.",
+      "after": "Require the independently derived actual net EUR cost total for 2025, exact scope and ledger evidence. WBS/project details are optional and, if offered, independently checked; no fixed size threshold. Explicit WBS questions E117/E118 remain strict.",
+      "rationale": "Explicit user decision on 2026-10-16: project costs primarily as a sum; a breakdown can help for few results but omission alone must not fail. Arithmetic, units, period, exclusions and evidence stay strict. E086 supplier approval is unresolved and unchanged; no historical rescoring."
     }
   ],
   "original_case_count": 100,
@@ -777,6 +797,17 @@
       "evaluation_revision": "measurement-contracts-5",
       "field": "blind_extraction_meaning",
       "rationale": "Explicit reference selector preserves all 149 reference-1.10 expectations and shapes. New Judge requests bind reference 1.11 through request hash, parsed extraction and existing scoring metadata validation. E072 interpretation remains pending; no Gold arithmetic or semantic-score relaxation."
+    },
+    {
+      "version": "1.12",
+      "adjudication_schema": "1.5",
+      "evaluation_revision": "measurement-contracts-6",
+      "field": "authorized_exclusion_and_cost_summary",
+      "case_ids": [
+        "E072",
+        "E116"
+      ],
+      "rationale": "Version only the two explicit user decisions. Preserve all 149 reference 1.10 and 1.11 expectations and blind shapes exactly. Bind reference 1.12 in requests, extraction and scoring; inherit 1.11 blind extraction meanings. Optional detail judgment reuses the existing required additional_breakdowns_supported check; no new scorer heuristic, threshold or live performance claim."
     }
   ]
 }

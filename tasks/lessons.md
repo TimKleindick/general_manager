@@ -1,5 +1,7 @@
 # Lessons
 
+- Trigger: Making an overview breakdown optional by explicit user decision. Action: derive its required total directly from eligible ledger rows, remove hidden classification/label discovery obligations, and reuse the required independent check for any volunteered details; keep explicitly requested grouping strict and invent no presentation-size threshold. Verification: total-only and partial-detail controls pass, wrong totals/details or missing evidence/judgments cannot pass, and explicit-grouping and historical contracts remain strict.
+
 - Trigger: Revising a blind evaluator after a correct-looking answer fails. Action: independently reconcile original requirements, raw extraction and prior decisions; version value-free extraction meanings without constraining representable claims to Gold truth. Verification: reconstruct legacy contracts and saved failures exactly, then run request/parser/scorer controls proving wrong, missing and extra claims still receive failures rather than disappearing into unscored results.
 
 - Trigger: Adding identity-aware search transport for a lossy provider. Action: carry explicit native types alongside document/filter values, isolate provider equality tokens from business fields, and update settings-only commands plus reconciliation fingerprints. Preserve raw Dev scalar/list grammar and final native permission gates. Verification: reproduce adjacent large IDs against real providers, then check authenticated conditional counts, stale/mixed reindexing, shared type scopes, and all supported database suites.
