@@ -689,7 +689,7 @@ def expected_turn(
             "period",
             {"start": f"{year}-01-01", "end_exclusive": f"{year + 1}-01-01"},
         )
-        if reference_version == "1.12" and case["id"] == "E116":
+        if reference_version in {"1.12", "1.13"} and case["id"] == "E116":
             # This question requests a summary, not the explicit WBS grouping
             # requested by E117/E118. Its total must not depend on WBS metadata.
             contract.fact(
@@ -885,7 +885,7 @@ def expected_turn(
             identifiers = _projects(
                 data, customer=selected_customer, materials=materials
             )
-            if resolved == "brass" and reference_version == "1.12":
+            if resolved == "brass" and reference_version in {"1.12", "1.13"}:
                 identifiers = [
                     code
                     for code in identifiers
@@ -914,6 +914,12 @@ def expected_turn(
             contract.fact(
                 "R", "material_ids", sorted(materials), "set", entity_manager="Material"
             )
+            if reference_version == "1.13":
+                # Positive target identities are distinct from independently
+                # required exclusions of the same manager type.
+                contract.value["entity_identity_reference"]["fields"]["material_ids"][
+                    "selection_target_paths"
+                ] = [["constraints", "all_materials"]]
         contract.selection(identifiers, manager="Project", **constraints)
         if resolved == "copper_projects":
             contract.fact("C", "ranked_ids", identifiers, entity_manager="Project")
@@ -956,7 +962,7 @@ def expected_turn(
             values,
             entity_manager=None if resolved == "returns" else "Project",
         )
-        if resolved == "returns" and reference_version in {"1.11", "1.12"}:
+        if resolved == "returns" and reference_version in {"1.11", "1.12", "1.13"}:
             contract.value["fact_components"] = {
                 "values": {
                     "gross": "Quantity shipped before returns, as asserted in the answer.",

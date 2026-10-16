@@ -87,7 +87,7 @@ def control(expectation: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]
             ),
             **(
                 {"reference_version": expectation["schema_version"]}
-                if expectation.get("schema_version") in {"1.11", "1.12"}
+                if expectation.get("schema_version") in {"1.11", "1.12", "1.13"}
                 else {}
             ),
             "origin": "external",
@@ -772,7 +772,7 @@ def test_new_cost_density_and_prior_month_oracles_exclude_adjacent_periods() -> 
 def test_expansion_metadata_retains_original_catalog_identity() -> None:
     summary = api("catalog").validate_catalog(api("catalog").load_catalog())
     assert summary["original_case_count"] == 100
-    assert summary["reference_version"] == "1.12"
+    assert summary["reference_version"] == "1.13"
     assert summary["reference_expansions"][0]["case_ids"] == [
         f"E{number:03}" for number in range(101, 122)
     ]
@@ -838,7 +838,7 @@ STEEL_SCOPE_REPLY = "Mit aktuell meine ich nicht gelöschte Datensätze; auch in
 
 def test_k13_retains_natural_question_and_adds_shared_scope_followup() -> None:
     catalog = api("catalog")
-    assert catalog.REFERENCE_VERSION == "1.12"
+    assert catalog.REFERENCE_VERSION == "1.13"
     cases = [row for row in catalog.load_catalog() if row["core_id"] == "K13"]
     assert len(cases) == 5
     assert {row["managers"] for row in cases} == {5, 10, 50, 100, 250}
@@ -1567,7 +1567,7 @@ def test_reference_15_preserves_gold_and_catalog_and_versions_policy() -> None:
     metadata = json.loads(
         catalog.CATALOG_PATH.with_name("catalog_corrections.json").read_text()
     )
-    assert catalog.REFERENCE_VERSION == metadata["reference_version"] == "1.12"
+    assert catalog.REFERENCE_VERSION == metadata["reference_version"] == "1.13"
     assert metadata["history"][-1]["reference_version"] == "1.4"
     assert metadata["evaluation_policy_changes"][-1]["case_ids"] == [
         f"E{n:03}" for n in range(1, 122)
