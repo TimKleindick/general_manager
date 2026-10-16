@@ -44,8 +44,8 @@ def test_all_149_reference_111_contracts_and_blind_shapes_remain_exact():
 
 
 def test_reference_112_keeps_frozen_catalog_and_explicit_older_selectors():
-    assert catalog.REFERENCE_VERSION == "1.12"
-    assert catalog.REFERENCE_VERSIONS == ("1.10", "1.11", "1.12")
+    assert catalog.REFERENCE_VERSION == "1.13"
+    assert catalog.REFERENCE_VERSIONS == ("1.10", "1.11", "1.12", "1.13")
     assert catalog.catalog_sha256() == catalog.REVIEWED_SHA256
     assert {
         row["case_id"]

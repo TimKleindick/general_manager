@@ -133,6 +133,23 @@ _ALLOWED_TOOL_NAMES = frozenset(
 _EXECUTOR_ACTIONS = frozenset(EXECUTOR_ACTION_FIELDS)
 
 
+def execution_state_signature(reference: Mapping[str, Any]) -> str:
+    """Bind material executor state, excluding only top-level operational feedback.
+
+    Runtime cycle detection and offline certificates must use the same projection.
+    Preserve unknown fields, nested data and the established JSON encoding.
+    """
+    return json.dumps(
+        {
+            key: value
+            for key, value in reference.items()
+            if key
+            not in {"action_validation_error", "manager_candidates", "last_tool_round"}
+        },
+        sort_keys=True,
+    )
+
+
 def _add_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
     return TokenUsage(
         input_tokens=left.input_tokens + right.input_tokens,
@@ -1870,14 +1887,8 @@ class _Runner:
                 if message.role == "user"
                 and message.content.startswith("REFERENCE_DATA=")
             )
-            feedback = reference.pop("action_validation_error", None)
-            # Resolver candidate churn is not changed execution evidence. Task
-            # bindings, dependency payloads and linked evidence are material.
-            reference.pop("manager_candidates", None)
-            # Operational feedback does not change bindings or factual evidence.
-            reference.pop("last_tool_round", None)
-            # Evidence IDs alone do not prove equal state.
-            runtime.execution_state = json.dumps(reference, sort_keys=True)
+            feedback = reference.get("action_validation_error")
+            runtime.execution_state = execution_state_signature(reference)
             result = await complete_provider_round(
                 provider, messages, _tool_definitions(), remaining
             )

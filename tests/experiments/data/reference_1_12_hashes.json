@@ -1,0 +1,896 @@
+[
+  {
+    "case_id": "E001",
+    "turn_index": 0,
+    "contract_sha256": "aedc20520437afdbd31422f2f51d3722818f3cfd674bf61e779c8d4c2060b313",
+    "fact_schema_sha256": "1d6a8fbf8183f672d86a77a51667679d7629fa3145f14bb017e3b364971af4fd"
+  },
+  {
+    "case_id": "E002",
+    "turn_index": 0,
+    "contract_sha256": "5659009cbf899918c352b84f214f8a3b16368dbdf09c594d1879fc39168e8935",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E003",
+    "turn_index": 0,
+    "contract_sha256": "3321b4987d05ae170b09e2b79f9ddc603bac696452123455669ac537ca9743f8",
+    "fact_schema_sha256": "d2045a858eac021195badae09d6bf2ef7900f767a0934013cf44d5d555781f15"
+  },
+  {
+    "case_id": "E004",
+    "turn_index": 0,
+    "contract_sha256": "697a838b8227022065f9c02bcb81c36a38e7abd0f62fa3d395d6d7a952b4f3ce",
+    "fact_schema_sha256": "df909cb10a960f6a4e36f8c106b5a789d8fe274f7529a511117a33d78e849ba1"
+  },
+  {
+    "case_id": "E005",
+    "turn_index": 0,
+    "contract_sha256": "41b6f81e406d93a954b1b0d28cec3c35e8968a303517d96c488fd05caf9c2979",
+    "fact_schema_sha256": "058ca6cbce4de18eeb8007bcd0cb1b0227f25122763e0ba9e00e61ccfe2cf8dd"
+  },
+  {
+    "case_id": "E006",
+    "turn_index": 0,
+    "contract_sha256": "af1267c65e55786a403de36b03e97b66c153b90862c7dc1c902fd48fa2e6c745",
+    "fact_schema_sha256": "f830933f1c47f61d76de13eae304c4f6cc31d81c5a0ed7a631a47b4abd60e284"
+  },
+  {
+    "case_id": "E007",
+    "turn_index": 0,
+    "contract_sha256": "f24b4a2258f9304b1f412b5d888360bc7eb10d589ee378cf6b1b45a9c73adb51",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E007",
+    "turn_index": 1,
+    "contract_sha256": "6e977251363e579072b90aa7fda0f51405cf72c46a1359ab5348eb63410f153b",
+    "fact_schema_sha256": "830e0d32b6db4ddb25052ef0ef59767b2438c61695ac5434f789e6bf5d7a6e88"
+  },
+  {
+    "case_id": "E008",
+    "turn_index": 0,
+    "contract_sha256": "40d378538217e18178fd50b16db29206a09794483fae23d2635ae7293bdd106c",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E008",
+    "turn_index": 1,
+    "contract_sha256": "4995cc20e12b679dc05d031b319d72e832a4a22be4144285e85a32ad68ddee4b",
+    "fact_schema_sha256": "c3e711c728b47cba5a7c580d6bf586d52b23c9619ffe8b36e818d40b39dd8177"
+  },
+  {
+    "case_id": "E009",
+    "turn_index": 0,
+    "contract_sha256": "3065b46c33f2d544148e605e5c26e6c63fe0c0eac8f249a5b72f96f8e641d940",
+    "fact_schema_sha256": "318f008bee8cafb045ca4591fd9a7c38d107799a77d277d2616365955f43256b"
+  },
+  {
+    "case_id": "E010",
+    "turn_index": 0,
+    "contract_sha256": "50eead7d31495366cce61936e42a96d18d96c40b0231c297134020b0098571b6",
+    "fact_schema_sha256": "809d4974301f8ff2a3ce64bcc093760cb96ecc120d7a3d1acb942bf9e8be1ab4"
+  },
+  {
+    "case_id": "E011",
+    "turn_index": 0,
+    "contract_sha256": "39b2ad7d9721cf6f2e28817d4e4baf202c62c2019181c930f449192e27f6b26c",
+    "fact_schema_sha256": "1d6a8fbf8183f672d86a77a51667679d7629fa3145f14bb017e3b364971af4fd"
+  },
+  {
+    "case_id": "E012",
+    "turn_index": 0,
+    "contract_sha256": "91ecb016d44212850a5954f91aaa021a2cf06e7a7c5b412f98a95a3f7249de62",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E013",
+    "turn_index": 0,
+    "contract_sha256": "9bc52a149351c694a6edfef2870615c14129f050a2af54b36255db606d3d0926",
+    "fact_schema_sha256": "d2045a858eac021195badae09d6bf2ef7900f767a0934013cf44d5d555781f15"
+  },
+  {
+    "case_id": "E014",
+    "turn_index": 0,
+    "contract_sha256": "fd3eda4fb577749c2222f86955c9934e04eba7d050f16108d0da332459a53e91",
+    "fact_schema_sha256": "df909cb10a960f6a4e36f8c106b5a789d8fe274f7529a511117a33d78e849ba1"
+  },
+  {
+    "case_id": "E015",
+    "turn_index": 0,
+    "contract_sha256": "afac3ac1803381d145f9906bd7ea976b77cdac90ff170806dba74b1bdc9f418a",
+    "fact_schema_sha256": "058ca6cbce4de18eeb8007bcd0cb1b0227f25122763e0ba9e00e61ccfe2cf8dd"
+  },
+  {
+    "case_id": "E016",
+    "turn_index": 0,
+    "contract_sha256": "6614726d0466197b19ea679b45a689fdb709be26022f1c6f04328920f6ed105a",
+    "fact_schema_sha256": "f830933f1c47f61d76de13eae304c4f6cc31d81c5a0ed7a631a47b4abd60e284"
+  },
+  {
+    "case_id": "E017",
+    "turn_index": 0,
+    "contract_sha256": "f176a34464281e54fdae844da2567799a230bba0dfe9c50f6b4806f256d253d4",
+    "fact_schema_sha256": "318f008bee8cafb045ca4591fd9a7c38d107799a77d277d2616365955f43256b"
+  },
+  {
+    "case_id": "E018",
+    "turn_index": 0,
+    "contract_sha256": "d0237777fdb4316a32e648d823c878af468048d61a00789ea634d75b026fab3e",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E018",
+    "turn_index": 1,
+    "contract_sha256": "be0c89f2759e5fbaf12e3447902286dd9fb47e3310f7a91526c85d050738654d",
+    "fact_schema_sha256": "830e0d32b6db4ddb25052ef0ef59767b2438c61695ac5434f789e6bf5d7a6e88"
+  },
+  {
+    "case_id": "E019",
+    "turn_index": 0,
+    "contract_sha256": "2daa03171e7b1830bbd545e1b69c6968ef055c0e7dee0b09fa166ed6ab4f9974",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E019",
+    "turn_index": 1,
+    "contract_sha256": "2f9e9dddb564ee0ad34fd01634860b7b28a2086978193b0130292447591a486f",
+    "fact_schema_sha256": "04718452fca7b844dddaf74ee95d465509019411f63ee0c4750ac2eba42ee978"
+  },
+  {
+    "case_id": "E020",
+    "turn_index": 0,
+    "contract_sha256": "48fbe74ee6f5f9441ceaa20581d12ba0dbcb9823f23b3a2dc55b4eece199c0ba",
+    "fact_schema_sha256": "00c1dc226ce10d771ae375b537bdcd44b9697f916b0a87307a8a084b3aa2ed7a"
+  },
+  {
+    "case_id": "E021",
+    "turn_index": 0,
+    "contract_sha256": "47219c62db26e1af32da24ddfad29ae6f4eaaaf50c3dca1d031394b9063e2c76",
+    "fact_schema_sha256": "50f3eeaff5dab36fa668ee12125a94aaede7e1fdbe7ce9aa7d26a07f6a0d8733"
+  },
+  {
+    "case_id": "E022",
+    "turn_index": 0,
+    "contract_sha256": "0892bb3bf4a395f8c1eb6cbf2aaf383e409bda82160009383c4e4af4394c76f3",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E022",
+    "turn_index": 1,
+    "contract_sha256": "aa7c619b1f2308a4f7a3a1a55a21239b1afae21c6d92410f3ef425330c65f880",
+    "fact_schema_sha256": "b1bcaea38adf5890fa0aa59d26b8caced9abb0731630c40bd3bba40a104688bd"
+  },
+  {
+    "case_id": "E023",
+    "turn_index": 0,
+    "contract_sha256": "77632897475ed04a1ca92d5ee89b414f1e962b241d2e3bc8b66fca598cf59283",
+    "fact_schema_sha256": "1d6a8fbf8183f672d86a77a51667679d7629fa3145f14bb017e3b364971af4fd"
+  },
+  {
+    "case_id": "E024",
+    "turn_index": 0,
+    "contract_sha256": "cfc7141223e4f8e095b229e339b51121daf41ee0c87d537da4e986403af85206",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E025",
+    "turn_index": 0,
+    "contract_sha256": "fdc99f31768a36c6ca0ff68da80bd69df10f973decc03b98c8fcd6a298560881",
+    "fact_schema_sha256": "d2045a858eac021195badae09d6bf2ef7900f767a0934013cf44d5d555781f15"
+  },
+  {
+    "case_id": "E026",
+    "turn_index": 0,
+    "contract_sha256": "3fa874fb23415552dce0a7848c2d898b1a3dbb653249c86d0c9a72c2d36cbf16",
+    "fact_schema_sha256": "df909cb10a960f6a4e36f8c106b5a789d8fe274f7529a511117a33d78e849ba1"
+  },
+  {
+    "case_id": "E027",
+    "turn_index": 0,
+    "contract_sha256": "c735254589abfbea7b6fcedb969ac4a8fe06477f59fa69dd8aa25e18ff62d53e",
+    "fact_schema_sha256": "058ca6cbce4de18eeb8007bcd0cb1b0227f25122763e0ba9e00e61ccfe2cf8dd"
+  },
+  {
+    "case_id": "E028",
+    "turn_index": 0,
+    "contract_sha256": "8e73f69fe1adbcd3833af69514dcf6ac7e85fd9118da480a6dd7417671ff8d42",
+    "fact_schema_sha256": "f830933f1c47f61d76de13eae304c4f6cc31d81c5a0ed7a631a47b4abd60e284"
+  },
+  {
+    "case_id": "E029",
+    "turn_index": 0,
+    "contract_sha256": "eeaa8766fdece9a4e1905913165b50488ec86a95e14a110684fc9e8e246b0d28",
+    "fact_schema_sha256": "318f008bee8cafb045ca4591fd9a7c38d107799a77d277d2616365955f43256b"
+  },
+  {
+    "case_id": "E030",
+    "turn_index": 0,
+    "contract_sha256": "fe8437679db3a66ab48e9179567c164c634892851d7e710bce7d986c9e648f55",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E030",
+    "turn_index": 1,
+    "contract_sha256": "9e8b01a0018ea9d547fe3be07fd2841cf3c2dea1e4cf8281beb38f9851215261",
+    "fact_schema_sha256": "830e0d32b6db4ddb25052ef0ef59767b2438c61695ac5434f789e6bf5d7a6e88"
+  },
+  {
+    "case_id": "E031",
+    "turn_index": 0,
+    "contract_sha256": "0ea06c15d08cb77b32c14537a3075fc5049b9cd977e3efbe5d7878df37ad49ce",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E031",
+    "turn_index": 1,
+    "contract_sha256": "bc986481d3bdfe713798fcda36ea0a6f8bd49e18af6dc906e9ade385dff9677f",
+    "fact_schema_sha256": "04718452fca7b844dddaf74ee95d465509019411f63ee0c4750ac2eba42ee978"
+  },
+  {
+    "case_id": "E032",
+    "turn_index": 0,
+    "contract_sha256": "d0817b80ef903dd71bc8d0f24f5335780e718b9b5acbac576605949e2d308695",
+    "fact_schema_sha256": "00c1dc226ce10d771ae375b537bdcd44b9697f916b0a87307a8a084b3aa2ed7a"
+  },
+  {
+    "case_id": "E033",
+    "turn_index": 0,
+    "contract_sha256": "221cedf4902313f50194ae7798d726c6a4e2795c2e377cfab20b89774ce1401e",
+    "fact_schema_sha256": "50f3eeaff5dab36fa668ee12125a94aaede7e1fdbe7ce9aa7d26a07f6a0d8733"
+  },
+  {
+    "case_id": "E034",
+    "turn_index": 0,
+    "contract_sha256": "ea0fed067e32c7c975b14cb9dfbd39931ca493ccf6bbe9f5da56850c0fcaaff7",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E034",
+    "turn_index": 1,
+    "contract_sha256": "6fb06001e269b21a8c6c70730e86c2437e27f036065446302e71c34bb0faa500",
+    "fact_schema_sha256": "b1bcaea38adf5890fa0aa59d26b8caced9abb0731630c40bd3bba40a104688bd"
+  },
+  {
+    "case_id": "E035",
+    "turn_index": 0,
+    "contract_sha256": "8719be1c909503f70124c77b9102cd1e10e6002b6a2053760dbceb10cd36551c",
+    "fact_schema_sha256": "1d6a8fbf8183f672d86a77a51667679d7629fa3145f14bb017e3b364971af4fd"
+  },
+  {
+    "case_id": "E036",
+    "turn_index": 0,
+    "contract_sha256": "2f8e39e750dd7d3e7361f0ff8930637f77dac9a6b121b4a426b4b324a664825e",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E037",
+    "turn_index": 0,
+    "contract_sha256": "870d70116b072b8cf8acddb340acc25c047e19b2d79daf62682ab1eba760862c",
+    "fact_schema_sha256": "d2045a858eac021195badae09d6bf2ef7900f767a0934013cf44d5d555781f15"
+  },
+  {
+    "case_id": "E038",
+    "turn_index": 0,
+    "contract_sha256": "7799b0c04114cb6912edcc0a9bbc1223b9ec9d39157d7d616d3e83e7ab9ff44a",
+    "fact_schema_sha256": "df909cb10a960f6a4e36f8c106b5a789d8fe274f7529a511117a33d78e849ba1"
+  },
+  {
+    "case_id": "E039",
+    "turn_index": 0,
+    "contract_sha256": "dbf6f1a79095371a94b960a65ad648b79852f20d686cd7d33b678eccb666560a",
+    "fact_schema_sha256": "058ca6cbce4de18eeb8007bcd0cb1b0227f25122763e0ba9e00e61ccfe2cf8dd"
+  },
+  {
+    "case_id": "E040",
+    "turn_index": 0,
+    "contract_sha256": "6016b81250b80a7ee5c2335f4e969998ca40eb039b6191cb7a2f636649e53039",
+    "fact_schema_sha256": "f830933f1c47f61d76de13eae304c4f6cc31d81c5a0ed7a631a47b4abd60e284"
+  },
+  {
+    "case_id": "E041",
+    "turn_index": 0,
+    "contract_sha256": "4dbede7408ce36b7bc02b8e6919686ec10c5e4b237e2e7ff0c7d71e615bfec81",
+    "fact_schema_sha256": "318f008bee8cafb045ca4591fd9a7c38d107799a77d277d2616365955f43256b"
+  },
+  {
+    "case_id": "E042",
+    "turn_index": 0,
+    "contract_sha256": "ea436ed467083d3eb12ee385d4d5887c62a7fc6889ae8273569c04616294db81",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E042",
+    "turn_index": 1,
+    "contract_sha256": "e9b71c8731a52b6cc40ee4550a9dddc56ad13653c0ad55870963c88e7c1da1b5",
+    "fact_schema_sha256": "830e0d32b6db4ddb25052ef0ef59767b2438c61695ac5434f789e6bf5d7a6e88"
+  },
+  {
+    "case_id": "E043",
+    "turn_index": 0,
+    "contract_sha256": "bee4bd46d6e3f2075ab593ab83f921a3f90f80c01f6708a64196ec62a583900a",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E043",
+    "turn_index": 1,
+    "contract_sha256": "82e6005c8a17eb39575f5db01684a940429bc303878b811950469c8f3200dfe5",
+    "fact_schema_sha256": "04718452fca7b844dddaf74ee95d465509019411f63ee0c4750ac2eba42ee978"
+  },
+  {
+    "case_id": "E044",
+    "turn_index": 0,
+    "contract_sha256": "4bba5c273d0f68fd5c21c32f9aff9b1a7a8f4fc3219a676abe827c2b68e151ad",
+    "fact_schema_sha256": "00c1dc226ce10d771ae375b537bdcd44b9697f916b0a87307a8a084b3aa2ed7a"
+  },
+  {
+    "case_id": "E045",
+    "turn_index": 0,
+    "contract_sha256": "38e7598f3305c602f9cb61a8ea048847b5f827b4bd80b24c6737b4cf250ebc7c",
+    "fact_schema_sha256": "50f3eeaff5dab36fa668ee12125a94aaede7e1fdbe7ce9aa7d26a07f6a0d8733"
+  },
+  {
+    "case_id": "E046",
+    "turn_index": 0,
+    "contract_sha256": "7a390b29d565616a6d044786f88a62d177352f92a84b0bdedd211e54d00ef4e9",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E046",
+    "turn_index": 1,
+    "contract_sha256": "953a9815bbc0bc381492c6ddb878c2785e0a5c3b5b3937c2ba1a7d7f1cd109e8",
+    "fact_schema_sha256": "b1bcaea38adf5890fa0aa59d26b8caced9abb0731630c40bd3bba40a104688bd"
+  },
+  {
+    "case_id": "E047",
+    "turn_index": 0,
+    "contract_sha256": "8af89dd4b241ff47454e49e538210e063f9aa1d737f88b4193c4267940aca1f7",
+    "fact_schema_sha256": "1d6a8fbf8183f672d86a77a51667679d7629fa3145f14bb017e3b364971af4fd"
+  },
+  {
+    "case_id": "E048",
+    "turn_index": 0,
+    "contract_sha256": "c66492e463f7115601dbcab3bcb1579dca70935920592209f039db703a9ae07b",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E049",
+    "turn_index": 0,
+    "contract_sha256": "e2275dfc661da8957603ac59dbd6904d1048f01b3024b560cd4a55d99bec1eb2",
+    "fact_schema_sha256": "d2045a858eac021195badae09d6bf2ef7900f767a0934013cf44d5d555781f15"
+  },
+  {
+    "case_id": "E050",
+    "turn_index": 0,
+    "contract_sha256": "45b801ab1b31864062c08ac917808f85724d0c31ddd754be6a78ccd73975d793",
+    "fact_schema_sha256": "df909cb10a960f6a4e36f8c106b5a789d8fe274f7529a511117a33d78e849ba1"
+  },
+  {
+    "case_id": "E051",
+    "turn_index": 0,
+    "contract_sha256": "237665af97af9d26559426e88d0dea84666160d1a68b88e70e2c3de7cecd77a1",
+    "fact_schema_sha256": "058ca6cbce4de18eeb8007bcd0cb1b0227f25122763e0ba9e00e61ccfe2cf8dd"
+  },
+  {
+    "case_id": "E052",
+    "turn_index": 0,
+    "contract_sha256": "e4c003eea7fc8d4122da9c47bfe7a63d96863d18b326ed8eff40caadf1cdac49",
+    "fact_schema_sha256": "f830933f1c47f61d76de13eae304c4f6cc31d81c5a0ed7a631a47b4abd60e284"
+  },
+  {
+    "case_id": "E053",
+    "turn_index": 0,
+    "contract_sha256": "b2bc6d5f5d46e836137518194ec21ecc9c4d5ed83593ee627bc4d6a78a515da3",
+    "fact_schema_sha256": "318f008bee8cafb045ca4591fd9a7c38d107799a77d277d2616365955f43256b"
+  },
+  {
+    "case_id": "E054",
+    "turn_index": 0,
+    "contract_sha256": "a6821d05789b496dc8d7f75ccfd4d473d02d8a856842231dc0d1ae17bbfd59ed",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E054",
+    "turn_index": 1,
+    "contract_sha256": "d368890972c102e089e65ef6d442ebdf7681858eb44487296ab4d2128d412dd1",
+    "fact_schema_sha256": "830e0d32b6db4ddb25052ef0ef59767b2438c61695ac5434f789e6bf5d7a6e88"
+  },
+  {
+    "case_id": "E055",
+    "turn_index": 0,
+    "contract_sha256": "597a23f8da98d6658eea2f30f9e2fbc9371c02e3c93be3d30d1d8eec6a2db56e",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E055",
+    "turn_index": 1,
+    "contract_sha256": "9c312cd405e4a86ad065929b4794f6cd025fe7c1b5df7818b06d87b444984b04",
+    "fact_schema_sha256": "04718452fca7b844dddaf74ee95d465509019411f63ee0c4750ac2eba42ee978"
+  },
+  {
+    "case_id": "E056",
+    "turn_index": 0,
+    "contract_sha256": "278c93b2f7dc75ee3134f1eda2ab897de4af182cd43a9ed236b9872aa85b145b",
+    "fact_schema_sha256": "00c1dc226ce10d771ae375b537bdcd44b9697f916b0a87307a8a084b3aa2ed7a"
+  },
+  {
+    "case_id": "E057",
+    "turn_index": 0,
+    "contract_sha256": "4c333260e90e31e4f126949b1dc61a00bc25039a0d97f16c99ed5e80e8eb6051",
+    "fact_schema_sha256": "50f3eeaff5dab36fa668ee12125a94aaede7e1fdbe7ce9aa7d26a07f6a0d8733"
+  },
+  {
+    "case_id": "E058",
+    "turn_index": 0,
+    "contract_sha256": "1b628455173b859a689f30bea934a2eff9ab808f7f764fc5e43445e356e61863",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E058",
+    "turn_index": 1,
+    "contract_sha256": "5591f7f76a89add58ee9c681fba397c1ad59877f9690af87f41da17d96015045",
+    "fact_schema_sha256": "b1bcaea38adf5890fa0aa59d26b8caced9abb0731630c40bd3bba40a104688bd"
+  },
+  {
+    "case_id": "E059",
+    "turn_index": 0,
+    "contract_sha256": "eec4531977285e288ff5300e8159871970f5d6e6e3600efd8941a663836e332f",
+    "fact_schema_sha256": "1d6a8fbf8183f672d86a77a51667679d7629fa3145f14bb017e3b364971af4fd"
+  },
+  {
+    "case_id": "E060",
+    "turn_index": 0,
+    "contract_sha256": "cd978e83f89b00521d45e3b67723822f57d1b08065d47f296aceb26e5cce54f9",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E061",
+    "turn_index": 0,
+    "contract_sha256": "4c40ecde3cb61f64e25e0886a8a4598d988d65769f54d1dee8ffaf4599916e11",
+    "fact_schema_sha256": "d2045a858eac021195badae09d6bf2ef7900f767a0934013cf44d5d555781f15"
+  },
+  {
+    "case_id": "E062",
+    "turn_index": 0,
+    "contract_sha256": "fef1d7bb682bddbeada634f3bb64d24174085f4c3241b2d4ce6ef08196e8ca3f",
+    "fact_schema_sha256": "df909cb10a960f6a4e36f8c106b5a789d8fe274f7529a511117a33d78e849ba1"
+  },
+  {
+    "case_id": "E063",
+    "turn_index": 0,
+    "contract_sha256": "e630ebd7474fdf262d229b9781a0767bd8a8cdcfc0f260fa6ae54f018bcf3dcb",
+    "fact_schema_sha256": "058ca6cbce4de18eeb8007bcd0cb1b0227f25122763e0ba9e00e61ccfe2cf8dd"
+  },
+  {
+    "case_id": "E064",
+    "turn_index": 0,
+    "contract_sha256": "0bcc4dfb8239f79420e66d997904e7c92b88b436e3a0ca285527e76c2a7a2322",
+    "fact_schema_sha256": "f830933f1c47f61d76de13eae304c4f6cc31d81c5a0ed7a631a47b4abd60e284"
+  },
+  {
+    "case_id": "E065",
+    "turn_index": 0,
+    "contract_sha256": "d3d6a6b393d96db01024edbc41368d46249c3a8ebc344418e4683b21851638f5",
+    "fact_schema_sha256": "318f008bee8cafb045ca4591fd9a7c38d107799a77d277d2616365955f43256b"
+  },
+  {
+    "case_id": "E066",
+    "turn_index": 0,
+    "contract_sha256": "27b77c581e8a0c6cb929d7dbf9ea462556aae0d8db43a7dcb6cfd8752a0c5081",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E066",
+    "turn_index": 1,
+    "contract_sha256": "3c53ab28e5d3be00d4c4bb25bf18480f4fe4c9920dff1873518fa68c9a53d80b",
+    "fact_schema_sha256": "830e0d32b6db4ddb25052ef0ef59767b2438c61695ac5434f789e6bf5d7a6e88"
+  },
+  {
+    "case_id": "E067",
+    "turn_index": 0,
+    "contract_sha256": "3c6050ba4b820276fb1e4ac4e4e06681c83c2dbaf8391ce2798c509b9f6919a5",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E067",
+    "turn_index": 1,
+    "contract_sha256": "664f7a9f702ed85ced13a0faedb2f0c31b59306b39ec3ead5210075e394883c0",
+    "fact_schema_sha256": "04718452fca7b844dddaf74ee95d465509019411f63ee0c4750ac2eba42ee978"
+  },
+  {
+    "case_id": "E068",
+    "turn_index": 0,
+    "contract_sha256": "b6ea987fec93cba70025db49e54dee51c821bead0a0d0b755d0118a586dc70a9",
+    "fact_schema_sha256": "00c1dc226ce10d771ae375b537bdcd44b9697f916b0a87307a8a084b3aa2ed7a"
+  },
+  {
+    "case_id": "E069",
+    "turn_index": 0,
+    "contract_sha256": "0292ffe7a5acd717c86ec0da79fecd762d010a8822194bffa6483d4c4b129972",
+    "fact_schema_sha256": "50f3eeaff5dab36fa668ee12125a94aaede7e1fdbe7ce9aa7d26a07f6a0d8733"
+  },
+  {
+    "case_id": "E070",
+    "turn_index": 0,
+    "contract_sha256": "08fe365ed932512b6b53fd67adfe07a0c70fd896a3a14aa109c5b1e164aefa87",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E070",
+    "turn_index": 1,
+    "contract_sha256": "f1d894d364754252020ed3c27bddf13f381f54506a2bb600a2dadd47a66a35d0",
+    "fact_schema_sha256": "b1bcaea38adf5890fa0aa59d26b8caced9abb0731630c40bd3bba40a104688bd"
+  },
+  {
+    "case_id": "E071",
+    "turn_index": 0,
+    "contract_sha256": "3980e056f0c1737c7a5c989a8ac2594dbe711801d16836df9bf13e61af85aac5",
+    "fact_schema_sha256": "647abb283d0f91eaa19034b8f3b7604be2c8bf37c5bd8bfd56c4d5ab5f19d3eb"
+  },
+  {
+    "case_id": "E071",
+    "turn_index": 1,
+    "contract_sha256": "b2e4bbf688b5e4a1275b9830f78484419dd8927ecf3e94370a6ce4688397dfd3",
+    "fact_schema_sha256": "e36e84f0feb7dc82bbd80dfb8152e7e89cdfa949e3679775c93ceb2d820a660e"
+  },
+  {
+    "case_id": "E072",
+    "turn_index": 0,
+    "contract_sha256": "6b0eed96a29bebee3345f22d3aa648f551b55797fe0beb0a4792b2b9a482b214",
+    "fact_schema_sha256": "e86aeee5689361eb9fd5d3a9778705c429f1c55e7f66746b32d90c1a27499ffa"
+  },
+  {
+    "case_id": "E073",
+    "turn_index": 0,
+    "contract_sha256": "af4c22960ebb257ec80f9ee3dde64d81be1968092de64fb5c3e73e1ac614bec0",
+    "fact_schema_sha256": "65d335098e287a53cea7d4027438a2f688d0271de03c8c468e97044d0b470281"
+  },
+  {
+    "case_id": "E074",
+    "turn_index": 0,
+    "contract_sha256": "8288d738418035c0ce011c20a84cffb96c0fa9f6a6a042a433f53b650581bffc",
+    "fact_schema_sha256": "989a8b0c760feab765199f8cf1f31776d1dc32a8f4a0aaa4039ba2c2007f9140"
+  },
+  {
+    "case_id": "E075",
+    "turn_index": 0,
+    "contract_sha256": "2c397e1856557ba4128cc265a824cf81f21623c58adc208c3b47c3bddd7821ed",
+    "fact_schema_sha256": "f830933f1c47f61d76de13eae304c4f6cc31d81c5a0ed7a631a47b4abd60e284"
+  },
+  {
+    "case_id": "E076",
+    "turn_index": 0,
+    "contract_sha256": "1f4d363f51d8849a8bb1e38e92253ee882fe3813e6836cbade75d52ffdb0e7aa",
+    "fact_schema_sha256": "318f008bee8cafb045ca4591fd9a7c38d107799a77d277d2616365955f43256b"
+  },
+  {
+    "case_id": "E077",
+    "turn_index": 0,
+    "contract_sha256": "6d4408e2ff59b125ce6f259f16415da22ac9393689760a261b3de56632347447",
+    "fact_schema_sha256": "df909cb10a960f6a4e36f8c106b5a789d8fe274f7529a511117a33d78e849ba1"
+  },
+  {
+    "case_id": "E078",
+    "turn_index": 0,
+    "contract_sha256": "649c5c03c6fff20dac7cf86ba89b354d8b70115063c341df2e95ce0cfe417e70",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E078",
+    "turn_index": 1,
+    "contract_sha256": "df2fadb885d38fa9edc45b6a439437db7c0aa2b93bfff0f56ef35dfba759fa5f",
+    "fact_schema_sha256": "b39d7cf8904f91bfcc30fd10af8ba373adeab23c6afe896454f115ffd7567979"
+  },
+  {
+    "case_id": "E079",
+    "turn_index": 0,
+    "contract_sha256": "d7c11d63617354a013eaaf17de14578893ea3b69161a396f67a4099a22440c5a",
+    "fact_schema_sha256": "ccdf9cac374941094d69a3b8aef313289f9b900c93fad54edefd1a9caab05193"
+  },
+  {
+    "case_id": "E080",
+    "turn_index": 0,
+    "contract_sha256": "5cb23328367293949a77b57eee7d566f012e3a07b0c424c583b64aac763409da",
+    "fact_schema_sha256": "b346c608e083cceeacd3691fc401cec2dd520a9557f4d6c9b9d394f283ccb26e"
+  },
+  {
+    "case_id": "E081",
+    "turn_index": 0,
+    "contract_sha256": "35aef2c1c53b6da378303f7cf75daf6077955e6578f00de44cd88b6316f6e866",
+    "fact_schema_sha256": "fbad859bbd218778530fdbb9678077e2ed6636d9d571794be9b77c48c1a7ab96"
+  },
+  {
+    "case_id": "E082",
+    "turn_index": 0,
+    "contract_sha256": "e7a4176a2beb05c2e903ace0b9d859495fed0f8c128603a54c589c369f72db43",
+    "fact_schema_sha256": "df3497ff1a9047d0e5e6328f5a5abb05a3b73d5767e219c5202258a1cbe899e1"
+  },
+  {
+    "case_id": "E083",
+    "turn_index": 0,
+    "contract_sha256": "ba1d37ccd0a727bd0b201f04f3339f1f74ceb81584db10a86a1537e9a4bb1fba",
+    "fact_schema_sha256": "989a8b0c760feab765199f8cf1f31776d1dc32a8f4a0aaa4039ba2c2007f9140"
+  },
+  {
+    "case_id": "E084",
+    "turn_index": 0,
+    "contract_sha256": "2b5cd0481bfacf4400ea2007dd7527033c97b650b00f6f26aa663e6585678682",
+    "fact_schema_sha256": "17a35f7842586dab242fa2bdbee52ed3e19518740aa4ade583b4ed688c79a15a"
+  },
+  {
+    "case_id": "E085",
+    "turn_index": 0,
+    "contract_sha256": "e7d313f70ef07be2371d0ca9f90f8ee0131bb02933ee221415bb0f21f67e243e",
+    "fact_schema_sha256": "0d58407dced31e1885c18810ded8a96757b1e8d85cd8affe71100e3095100a0d"
+  },
+  {
+    "case_id": "E086",
+    "turn_index": 0,
+    "contract_sha256": "3f67e09267d935a99cce97c18dfc22bba61de088eed5959ea8c2f2313177af07",
+    "fact_schema_sha256": "02de8dabf46267c7d0d570df5ce8da28c9c54a0ec6db9e7f6180b1189f62e564"
+  },
+  {
+    "case_id": "E087",
+    "turn_index": 0,
+    "contract_sha256": "abf226fb17947a39a2fa3ef498f3420de86592971f4e3c5f76b7bf0db98a78dc",
+    "fact_schema_sha256": "4bd9310380ce0749f956aa3d59a6c20a1d04521333c43c9e2b27dd0088d11ac1"
+  },
+  {
+    "case_id": "E088",
+    "turn_index": 0,
+    "contract_sha256": "635d994ac93afc34499d8bd03aeda49dfe6eb4c565173f54add5687e6dd10898",
+    "fact_schema_sha256": "0213bd1ec84963a69d37cd5f3a7a60b273c06e3d98ab944367fc2a9d9fff93cc"
+  },
+  {
+    "case_id": "E089",
+    "turn_index": 0,
+    "contract_sha256": "552f584335c8fb55a204f1632a5dc9575ad01fe4ea34cd729b044b855f160b9d",
+    "fact_schema_sha256": "d771a7d52e85ea77585ac65c9eb43789a8d19f739af6e6b3e0dbdba508e69abb"
+  },
+  {
+    "case_id": "E090",
+    "turn_index": 0,
+    "contract_sha256": "b414cb12cf228fe6d9c664af49893564f5192f40fffe6ec3d10a656120c30eb1",
+    "fact_schema_sha256": "00c1dc226ce10d771ae375b537bdcd44b9697f916b0a87307a8a084b3aa2ed7a"
+  },
+  {
+    "case_id": "E091",
+    "turn_index": 0,
+    "contract_sha256": "41c15a2f81d44e9076d2da4cd68ae68bec358424faa46e31667c8ae11ba14a4d",
+    "fact_schema_sha256": "809d4974301f8ff2a3ce64bcc093760cb96ecc120d7a3d1acb942bf9e8be1ab4"
+  },
+  {
+    "case_id": "E092",
+    "turn_index": 0,
+    "contract_sha256": "8544bcde7626a2c2c74ff152600b92f946e42762d5abb8ac3a5d101062a423eb",
+    "fact_schema_sha256": "e1e891285f6cba0fc722602bf121cfbfddcf80414ed5c558674c33aad0acf530"
+  },
+  {
+    "case_id": "E093",
+    "turn_index": 0,
+    "contract_sha256": "73f507f205d33e91a0c637a4f2eab31c0023f904222d587a74bc8014f1adc408",
+    "fact_schema_sha256": "d6884d43d6674de0e1f42220c28b228f30e222b0d96b3aa4745278f5c5d1bfa1"
+  },
+  {
+    "case_id": "E094",
+    "turn_index": 0,
+    "contract_sha256": "249d32ba7e690597768bdfe0fd6e9760f7cf45b0d7f89c66dcd2007cd8036c09",
+    "fact_schema_sha256": "d6884d43d6674de0e1f42220c28b228f30e222b0d96b3aa4745278f5c5d1bfa1"
+  },
+  {
+    "case_id": "E095",
+    "turn_index": 0,
+    "contract_sha256": "20674f0bc464f00e76fa6c78de3521668ecc000e70fefdabe7b5cacb8f7af1d6",
+    "fact_schema_sha256": "77558f76dab7b9241408726245571caaeba0d3902f07b4d0b7eb761da44cd198"
+  },
+  {
+    "case_id": "E096",
+    "turn_index": 0,
+    "contract_sha256": "d11bd33c5a97546371e5e1acc8a1252d0d44545c650fa9a2d5475a352cf408ea",
+    "fact_schema_sha256": "a708e124fcaadea581ebd4ab100a52984b6e52ce9cd1b2deea79c0d058af346c"
+  },
+  {
+    "case_id": "E097",
+    "turn_index": 0,
+    "contract_sha256": "1ee077c073ffd6d3527962377074b39faa0cc109db96ef1e7169f00cc145ebdb",
+    "fact_schema_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+    "case_id": "E097",
+    "turn_index": 1,
+    "contract_sha256": "b5f8f4f0cff4ccdcd3d283885857c60b2d35861b3823782f24775026d00cb730",
+    "fact_schema_sha256": "302103b4714ab9fff6f2308c05da7abe6b8792ad31ae2c03f336156d7e039788"
+  },
+  {
+    "case_id": "E098",
+    "turn_index": 0,
+    "contract_sha256": "eef948103c77c9cf7e807b9729d949b249f2efd8848d979eb99833f00c748fd9",
+    "fact_schema_sha256": "36aa280e15b7c33290dda67ecf4d0957e25ef8be5d81257bf3d2ca55c1599746"
+  },
+  {
+    "case_id": "E099",
+    "turn_index": 0,
+    "contract_sha256": "778cac15371c95815b74214311d4147611695f14a5ffe2a0b405f6fc68794b0f",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E099",
+    "turn_index": 1,
+    "contract_sha256": "1f39ff0d7afe7b1ab0e2a724b7579fd1901be32264c23e8391b56ad323007623",
+    "fact_schema_sha256": "830e0d32b6db4ddb25052ef0ef59767b2438c61695ac5434f789e6bf5d7a6e88"
+  },
+  {
+    "case_id": "E099",
+    "turn_index": 2,
+    "contract_sha256": "fffd168d9a18f67c3b4a6c9a3fdb8e02a1e4c344b332586e9410620382131900",
+    "fact_schema_sha256": "87d16b8737318e992a602ae425c5201a2aaec5fbd54f3d3aee57c792164ac3ca"
+  },
+  {
+    "case_id": "E100",
+    "turn_index": 0,
+    "contract_sha256": "86935578b008eaa324b7d9bf2fb7474b2ce0cfb506a5fe52ff88481a496d7cf5",
+    "fact_schema_sha256": "9bc8d4455176ae4659d414f9509987f3a5442276d350ce9214518700f90b27a6"
+  },
+  {
+    "case_id": "E100",
+    "turn_index": 1,
+    "contract_sha256": "541e942e14a2f5cda1f5aabe92ec25776fb6853525269f6d253110c1b2986008",
+    "fact_schema_sha256": "bc31676db262a97c735ae08754852265ad044fb2ea116cd040b5698a66156dae"
+  },
+  {
+    "case_id": "E101",
+    "turn_index": 0,
+    "contract_sha256": "e389843818e76db0a55f24b20b25a03003670f29b5b620f2023f47ed2d73a429",
+    "fact_schema_sha256": "9fc916c57c2e9c33a89817f877fceaf4c665eca6593265d16013f5d95b7be695"
+  },
+  {
+    "case_id": "E101",
+    "turn_index": 1,
+    "contract_sha256": "79b3f476bd2533647d1c682e9bb97d6db601dfb1cf8431d7ae3b23194838a3b3",
+    "fact_schema_sha256": "52b4973312578134a5ff2ac9a6b460a09fed4e49771fd9e60e0832f8c5562761"
+  },
+  {
+    "case_id": "E102",
+    "turn_index": 0,
+    "contract_sha256": "6aed300013ea460227e2418c17c97b0a0384efd542d0e3b25dcd52e65b9855db",
+    "fact_schema_sha256": "9fc916c57c2e9c33a89817f877fceaf4c665eca6593265d16013f5d95b7be695"
+  },
+  {
+    "case_id": "E102",
+    "turn_index": 1,
+    "contract_sha256": "13fc557203c2ee1a474a4382e4cc39f5740746fd7f383f1df53c8ecf604ff9d7",
+    "fact_schema_sha256": "52b4973312578134a5ff2ac9a6b460a09fed4e49771fd9e60e0832f8c5562761"
+  },
+  {
+    "case_id": "E103",
+    "turn_index": 0,
+    "contract_sha256": "2f1ecff204547bc40e844375fa901cd299d1ab1ea108a77d9e4b53ada6b6752f",
+    "fact_schema_sha256": "9fc916c57c2e9c33a89817f877fceaf4c665eca6593265d16013f5d95b7be695"
+  },
+  {
+    "case_id": "E103",
+    "turn_index": 1,
+    "contract_sha256": "cdae259e9081e3a48d56756c34369122133b1dd61714ce86751b2de6d8bb724c",
+    "fact_schema_sha256": "52b4973312578134a5ff2ac9a6b460a09fed4e49771fd9e60e0832f8c5562761"
+  },
+  {
+    "case_id": "E104",
+    "turn_index": 0,
+    "contract_sha256": "10bc91315d833962fbb149adb2f84319c39733d5f2ab7e7f093dc69d110bbcf3",
+    "fact_schema_sha256": "9fc916c57c2e9c33a89817f877fceaf4c665eca6593265d16013f5d95b7be695"
+  },
+  {
+    "case_id": "E104",
+    "turn_index": 1,
+    "contract_sha256": "e91bd60009223413869384f77f776395db45f50683ccbd5b95aabe5cdfede885",
+    "fact_schema_sha256": "52b4973312578134a5ff2ac9a6b460a09fed4e49771fd9e60e0832f8c5562761"
+  },
+  {
+    "case_id": "E105",
+    "turn_index": 0,
+    "contract_sha256": "b7a7b4e5a3c716515088e182d2cfbbcaa9d3f45464a137c5541db3f4c739c103",
+    "fact_schema_sha256": "9fc916c57c2e9c33a89817f877fceaf4c665eca6593265d16013f5d95b7be695"
+  },
+  {
+    "case_id": "E105",
+    "turn_index": 1,
+    "contract_sha256": "7880235141ae5f007a9d0a548a249ceb9aadb122085f48ec44cd6eda0864048a",
+    "fact_schema_sha256": "52b4973312578134a5ff2ac9a6b460a09fed4e49771fd9e60e0832f8c5562761"
+  },
+  {
+    "case_id": "E106",
+    "turn_index": 0,
+    "contract_sha256": "dbac57f057d8e96b57c206fd49fe22fd5ba6f6c05588fa0ec6dfc4f5cc3949f4",
+    "fact_schema_sha256": "14370927837ee290b6afeb421919f903f01fa1d6e53c304bc42ba64537f55759"
+  },
+  {
+    "case_id": "E107",
+    "turn_index": 0,
+    "contract_sha256": "215ae9d739b9e9da3dae900c8caf8483dbb2d718f9a7443ea6e62c743ffb0bf7",
+    "fact_schema_sha256": "14370927837ee290b6afeb421919f903f01fa1d6e53c304bc42ba64537f55759"
+  },
+  {
+    "case_id": "E108",
+    "turn_index": 0,
+    "contract_sha256": "e29ad550255f514b6f8b59a4f2b8c88cb7abd356c91c85c13b36108d46a1fe1c",
+    "fact_schema_sha256": "14370927837ee290b6afeb421919f903f01fa1d6e53c304bc42ba64537f55759"
+  },
+  {
+    "case_id": "E109",
+    "turn_index": 0,
+    "contract_sha256": "66b5543d52f8ffe6d4fb8e0c93279eefa210172ca964d49cd63c355fc1286295",
+    "fact_schema_sha256": "14370927837ee290b6afeb421919f903f01fa1d6e53c304bc42ba64537f55759"
+  },
+  {
+    "case_id": "E110",
+    "turn_index": 0,
+    "contract_sha256": "592682736c6b1a900477eb0c1840c731c7503a1e7770fbeddbd816d0d92447ef",
+    "fact_schema_sha256": "14370927837ee290b6afeb421919f903f01fa1d6e53c304bc42ba64537f55759"
+  },
+  {
+    "case_id": "E111",
+    "turn_index": 0,
+    "contract_sha256": "735274b3986cf567c0ecbfe00b0bcda39568730b3720cec2e65420144d73038f",
+    "fact_schema_sha256": "7792c8319098b160e4eef15618d4c63bd8aaea2b41a77b83c95e6d34bf3ee853"
+  },
+  {
+    "case_id": "E112",
+    "turn_index": 0,
+    "contract_sha256": "a305adb9668d06a8f09ea8d3ac7dd4a566c48bca3362b9be221385480a3f4f6c",
+    "fact_schema_sha256": "7792c8319098b160e4eef15618d4c63bd8aaea2b41a77b83c95e6d34bf3ee853"
+  },
+  {
+    "case_id": "E113",
+    "turn_index": 0,
+    "contract_sha256": "9e1f9b19b5ba458d8bd4a58268ea081b4220197ba50028472ccd7c347e59ef27",
+    "fact_schema_sha256": "7792c8319098b160e4eef15618d4c63bd8aaea2b41a77b83c95e6d34bf3ee853"
+  },
+  {
+    "case_id": "E114",
+    "turn_index": 0,
+    "contract_sha256": "7105e56ad55cc4423b4e3275acb2ff63cb6f9feb93c11124c18ae88a74ed8b4d",
+    "fact_schema_sha256": "7792c8319098b160e4eef15618d4c63bd8aaea2b41a77b83c95e6d34bf3ee853"
+  },
+  {
+    "case_id": "E115",
+    "turn_index": 0,
+    "contract_sha256": "dca0e92705d945b4dd87f503e6169765716f4504d6473dedee7d241d0910416c",
+    "fact_schema_sha256": "7792c8319098b160e4eef15618d4c63bd8aaea2b41a77b83c95e6d34bf3ee853"
+  },
+  {
+    "case_id": "E116",
+    "turn_index": 0,
+    "contract_sha256": "70167008b55af10789e35063ef5a557db9f1a852751ebadef3627c77f05a6d88",
+    "fact_schema_sha256": "3a856a5d74a8b6f33cca427371ef69f709f1e0dec80a92815cde251b0347e3e7"
+  },
+  {
+    "case_id": "E117",
+    "turn_index": 0,
+    "contract_sha256": "acf61d00a9c85ac8ee86e353e9dff53f04db630a3d5361327ddea3a5298f4f51",
+    "fact_schema_sha256": "14d56c120185de54a5e385c929c6e15c7f8abb8edc7d9735d92387cced63ca8a"
+  },
+  {
+    "case_id": "E118",
+    "turn_index": 0,
+    "contract_sha256": "69dd7d3405792cb520f67bea585725cd1f940371453bb17bb2e84e587e250628",
+    "fact_schema_sha256": "14d56c120185de54a5e385c929c6e15c7f8abb8edc7d9735d92387cced63ca8a"
+  },
+  {
+    "case_id": "E119",
+    "turn_index": 0,
+    "contract_sha256": "bb7f3629cbd35805f7e3e06345bb3ee857ec98ef12924dee086b0d7823ad1af5",
+    "fact_schema_sha256": "2ceb72bd4c4d14a27f8bea162718a112cd86feec04f9dc7303228abf35deb9c4"
+  },
+  {
+    "case_id": "E120",
+    "turn_index": 0,
+    "contract_sha256": "9e90c6b222d4b824d43ab6f5cdf23d779c3cfff866686fe8d1c9924ee4070ea3",
+    "fact_schema_sha256": "463619c598150627f57a7236af479ebebd82fa74f60ca586c57ed9ad5e9ed723"
+  },
+  {
+    "case_id": "E121",
+    "turn_index": 0,
+    "contract_sha256": "b66cdad6af0d3e851a59e34533a9d857fd9a2392f597a437bad3bd736ba03604",
+    "fact_schema_sha256": "df909cb10a960f6a4e36f8c106b5a789d8fe274f7529a511117a33d78e849ba1"
+  }
+]

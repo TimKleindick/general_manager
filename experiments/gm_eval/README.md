@@ -593,6 +593,19 @@ Historical markerless requests remain markerless and are parsed against their
 own saved `response_schema`. The adjudication envelope remains version 1.5.
 Reconstructing old requests is compatibility evidence, not a new model score.
 
+### Positive target roles and state certificates, reference 1.13 (r57)
+
+The default reference is now 1.13. It inherits 1.12 business obligations and
+binds positive entity target fields to explicit, compatible identity paths;
+exclusions remain separate strict constraints. All 149 contracts and blind
+shapes for explicit selectors 1.10/1.11/1.12 remain exact. Requests, extraction
+and scores bind 1.13, with evaluation revision `measurement-contracts-7`.
+No historical score is rewritten. Offline certificate consumers must reuse
+the scheduler's material-state projection through the narrow
+`validation_cycles.validation_cycle_state_matches` adapter, retaining every
+other certificate and global STOP gate. See
+[R57 contract and certificate details](../../docs/chat/eval-contract-certificate-r57.md).
+
 ### Authorized exclusion and cost-summary semantics, reference 1.12 (r56)
 
 The user resolved two business choices on 2026-10-16. E072 requires Brass and
