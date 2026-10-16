@@ -13,7 +13,8 @@ ORIGINAL_REVIEWED_SHA256 = (
     "972636e1e2a7ebebdab2fc03d7d17fac73cd60c6c6b8d6c5857a8dc4452b4f6f"
 )
 REVIEWED_SHA256 = "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11"
-REFERENCE_VERSION = "1.10"
+REFERENCE_VERSION = "1.11"
+REFERENCE_VERSIONS = ("1.10", "1.11")
 SCALES = (5, 10, 50, 100, 250)
 DIMENSIONS = ("D", "I", "R", "C", "Q", "A")
 CONTRACTS = frozenset(
@@ -107,8 +108,22 @@ def catalog_sha256() -> str:
     return sha256(CATALOG_PATH.read_bytes()).hexdigest()
 
 
-def reference_corrections() -> list[dict[str, Any]]:
+def validate_reference_version(reference_version: str) -> str:
+    """Select supported semantics explicitly, never coerce an archival version."""
+    if (
+        not isinstance(reference_version, str)
+        or reference_version not in REFERENCE_VERSIONS
+    ):
+        message = "Unsupported reference version"
+        raise ValueError(message)
+    return reference_version
+
+
+def reference_corrections(
+    *, reference_version: str = REFERENCE_VERSION
+) -> list[dict[str, Any]]:
     """Read the versioned, authorized change log without changing the catalog."""
+    selected = validate_reference_version(reference_version)
     metadata = json.loads(
         CATALOG_PATH.with_name("catalog_corrections.json").read_text(encoding="utf-8")
     )
@@ -119,21 +134,30 @@ def reference_corrections() -> list[dict[str, Any]]:
         message = "Reference correction fingerprints do not match the frozen catalog"
         raise ValueError(message)
     corrections: list[dict[str, Any]] = metadata["corrections"]
-    return corrections
+    return [
+        row
+        for row in corrections
+        if tuple(map(int, row["version"].split(".")))
+        <= tuple(map(int, selected.split(".")))
+    ]
 
 
-def load_catalog() -> list[dict[str, Any]]:
+def load_catalog(*, reference_version: str = REFERENCE_VERSION) -> list[dict[str, Any]]:
     """Return fresh case dictionaries after validating the immutable reference."""
+    validate_reference_version(reference_version)
     if catalog_sha256() != REVIEWED_SHA256:
         message = "The reviewed catalog changed; version its reference before use"
         raise ValueError(message)
     cases: list[dict[str, Any]] = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
-    validate_catalog(cases)
+    validate_catalog(cases, reference_version=reference_version)
     return cases
 
 
-def validate_catalog(cases: list[dict[str, Any]]) -> dict[str, Any]:
+def validate_catalog(
+    cases: list[dict[str, Any]], *, reference_version: str = REFERENCE_VERSION
+) -> dict[str, Any]:
     """Validate count, language, complete paired cores and all explicit contracts."""
+    validate_reference_version(reference_version)
     errors: list[str] = []
     identifiers = [row.get("id") for row in cases]
     if identifiers != [f"E{number:03}" for number in range(1, 122)]:
@@ -217,9 +241,11 @@ def validate_catalog(cases: list[dict[str, Any]]) -> dict[str, Any]:
         "by_scale": dict(scales),
         "original_catalog_sha256": ORIGINAL_REVIEWED_SHA256,
         "catalog_sha256": catalog_sha256(),
-        "reference_corrections": reference_corrections(),
+        "reference_corrections": reference_corrections(
+            reference_version=reference_version
+        ),
         "original_case_count": 100,
-        "reference_version": REFERENCE_VERSION,
+        "reference_version": reference_version,
         "reference_expansions": json.loads(
             CATALOG_PATH.with_name("catalog_corrections.json").read_text(
                 encoding="utf-8"

@@ -1,5 +1,5 @@
 {
-  "reference_version": "1.10",
+  "reference_version": "1.11",
   "original_catalog_sha256": "972636e1e2a7ebebdab2fc03d7d17fac73cd60c6c6b8d6c5857a8dc4452b4f6f",
   "catalog_sha256": "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11",
   "corrections": [
@@ -387,6 +387,26 @@
       "authorization": "Tim authorized the E019 evaluation correction on 2026-10-06; parent explicitly authorized the bounded context-specific scorer correction after independent v37 review FAIL.",
       "supersedes_reference": "1.9 exclusive criterion requirement; v37 remains preserved as rejected historical evidence",
       "unchanged": "Questions, catalog bytes, extracted topic labels, Judge requests/responses, product, numeric/unit/source/follow-up obligations and historical scores."
+    },
+    {
+      "id": "E079-blind-extraction-1.11",
+      "case_id": "E079",
+      "status": "resolved",
+      "version": "1.11",
+      "field": "component_extraction",
+      "before": "Generic values map with entity-membership wording despite no entity descriptor.",
+      "after": "Value-free declared gross/returns/net component meanings; preserve wrong, missing and extra assertions for strict scoring.",
+      "rationale": "Independently reviewed against original requirements, saved R7 answers and original tests. Catalog questions and numeric Gold unchanged; historical scores are not reclassified."
+    },
+    {
+      "id": "E095-blind-extraction-1.11",
+      "case_id": "E095",
+      "status": "resolved",
+      "version": "1.11",
+      "field": "unavailable_forecast_extraction",
+      "before": "No explicit canonical representation for a stated unavailable forecast; separately labelled plan comparisons were sometimes extracted as forecast claims.",
+      "after": "Value-free guidance for unavailable values and scenarios; preserve contradictory numerical claims and independent accountability of plan comparisons. Existing source-kind scope rules remain unchanged.",
+      "rationale": "Independently reviewed against original requirements, saved R7 answers and original tests. Catalog questions and numeric Gold unchanged; historical scores are not reclassified."
     }
   ],
   "original_case_count": 100,
@@ -750,6 +770,13 @@
       "evaluation_revision": "measurement-contracts-4",
       "field": "extraction_and_nested_identity_contract",
       "rationale": "Typed nested identity lists and context; explicit result membership, annual maps and metric/unit qualifiers; effective user scope. New contracts require a matching external extraction version. Catalog bytes and all gold facts unchanged; no historical rescoring."
+    },
+    {
+      "version": "1.11",
+      "adjudication_schema": "1.5",
+      "evaluation_revision": "measurement-contracts-5",
+      "field": "blind_extraction_meaning",
+      "rationale": "Explicit reference selector preserves all 149 reference-1.10 expectations and shapes. New Judge requests bind reference 1.11 through request hash, parsed extraction and existing scoring metadata validation. E072 interpretation remains pending; no Gold arithmetic or semantic-score relaxation."
     }
   ]
 }

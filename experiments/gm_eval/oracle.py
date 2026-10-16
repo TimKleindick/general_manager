@@ -13,7 +13,13 @@ from decimal import Decimal, ROUND_HALF_UP
 import re
 from typing import Any
 
-from .catalog import CONTRACTS, DIMENSIONS, REFERENCE_VERSION, reference_corrections
+from .catalog import (
+    CONTRACTS,
+    DIMENSIONS,
+    REFERENCE_VERSION,
+    reference_corrections,
+    validate_reference_version,
+)
 from .seeds import FROZEN_CLOCK, build_seed
 from .semantic_contracts import (
     ADJUDICATION_SCHEMA_VERSION,
@@ -241,9 +247,15 @@ def _citation_policy(case: Mapping[str, Any], turn: int) -> str:
 
 
 class _Contract:
-    def __init__(self, case: dict[str, Any], turn: int, data: Seed) -> None:
+    def __init__(
+        self,
+        case: dict[str, Any],
+        turn: int,
+        data: Seed,
+        reference_version: str = REFERENCE_VERSION,
+    ) -> None:
         self.value: dict[str, Any] = {
-            "schema_version": REFERENCE_VERSION,
+            "schema_version": reference_version,
             "adjudication_schema_version": ADJUDICATION_SCHEMA_VERSION,
             "case_id": case["id"],
             "core_id": case["core_id"],
@@ -285,7 +297,9 @@ class _Contract:
             "semantic_checks": [],
             "reference_issues": [],
             "reference_corrections": [
-                row for row in reference_corrections() if row["case_id"] == case["id"]
+                row
+                for row in reference_corrections(reference_version=reference_version)
+                if row["case_id"] == case["id"]
             ],
         }
 
@@ -469,7 +483,11 @@ def _recommendation(contract: _Contract, data: Seed) -> None:
 
 
 def expected_turn(
-    case: dict[str, Any], turn_index: int, seed_data: Seed | None = None
+    case: dict[str, Any],
+    turn_index: int,
+    seed_data: Seed | None = None,
+    *,
+    reference_version: str = REFERENCE_VERSION,
 ) -> dict[str, Any]:
     """Return an explicit, JSON-safe contract for one zero-based catalog turn.
 
@@ -478,6 +496,7 @@ def expected_turn(
     E097's first turn intentionally has only the safety/evidence obligation
     specified by the reference; it does not invent a numeric revenue oracle.
     """
+    validate_reference_version(reference_version)
     if not 0 <= turn_index < len(case["turns"]):
         raise IndexError(turn_index)
     kind = str(case["contract"])
@@ -495,7 +514,7 @@ def expected_turn(
     customer = _resolve(data, "customer", "XYZ")
     copper = _resolve(data, "material", "Copper")
     aurora = _resolve(data, "project", "Aurora")
-    contract = _Contract(case, turn_index, data)
+    contract = _Contract(case, turn_index, data, reference_version)
     contract.semantic(
         "A",
         "answer_supported",
@@ -611,7 +630,7 @@ def expected_turn(
                 "scope_response_suitable",
                 "Either ask a useful question about current/deleted record scope, or provide a complete grounded current inventory with the scope clear. Do not require clarification when a direct answer is sufficient, silently narrow current inventory to business active=True, or ask an unrelated metric/horizon question.",
             )
-            clarification = _Contract(case, turn_index, data)
+            clarification = _Contract(case, turn_index, data, reference_version)
             clarification.value["answer_kind"] = "clarification"
             clarification.fact("Q", "response_mode", "clarification")
             clarification.value["semantic_checks"] = list(
@@ -908,6 +927,14 @@ def expected_turn(
             values,
             entity_manager=None if resolved == "returns" else "Project",
         )
+        if resolved == "returns" and reference_version == "1.11":
+            contract.value["fact_components"] = {
+                "values": {
+                    "gross": "Quantity shipped before returns, as asserted in the answer.",
+                    "returns": "Quantity returned, as asserted in the answer.",
+                    "net": "Quantity shipped after returns, as asserted in the answer.",
+                }
+            }
         if resolved in {"mixed", "provenance"}:
             contract.source(
                 "project_material",

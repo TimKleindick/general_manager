@@ -32,6 +32,12 @@ INSTRUCTION = (
     "direct scalar field, and filter_path to an exact/in category scalar or scalar list "
     "inside filters or arguments. The runtime validates same-manager/root, current "
     "schema/exposure, observed executable filter_contract, completeness and exact typed membership. "
+    "schema_evidence_not_linked means the supplied observation does not satisfy a declared "
+    "schema requirement; use a compatible linked inspection, not the same unlinked detail again. "
+    "A linked overview can establish a category lookup. Business category bindings also require "
+    "observed output and filter input definitions; an explicitly requested full inspection can "
+    "satisfy an overview requirement without changing its scope. invalid_filter_path means the "
+    "path must start at filters or the actual arguments/filter name, not a bare field. "
     "The root must declare its common interface_list population_contract for this manager. "
     "Inspect the native filter input definitions at the same snapshot; use their "
     "declared field/operator meanings, never guessed suffixes. Re-query after "
@@ -87,26 +93,24 @@ QUERY_PROPERTIES: dict[str, Any] = {
 class CategoryBindingError(ValueError):
     """A declared category lookup or binding lacks the required public evidence."""
 
-    def __init__(self) -> None:
+    def __init__(self, reason: str | None = None) -> None:
+        self.reason = reason
         super().__init__("category binding requires complete current public values")
 
 
-def _reject() -> NoReturn:
-    raise CategoryBindingError()
+def _reject(reason: str | None = None) -> NoReturn:
+    raise CategoryBindingError(reason)
 
 
 def _source(
     store: EvidenceStore, task_id: str, evidence_id: object, kind: str
 ) -> EvidenceRecord:
     record = store.get(evidence_id) if isinstance(evidence_id, str) else None
-    if (
-        record is None
-        or record.task_id != task_id
-        or record.kind != kind
-        or not store.is_linked(task_id, record.evidence_id)
-    ):
+    if record is None or record.task_id != task_id or record.kind != kind:
         _reject()
     assert record is not None
+    if not store.is_linked(task_id, record.evidence_id):
+        _reject("schema_evidence_not_linked" if kind == "schema" else None)
     return record
 
 
@@ -239,7 +243,7 @@ def _filter_value(
     if not isinstance(path, list) or any(
         not isinstance(part, str) or not part for part in path
     ):
-        _reject()
+        _reject("invalid_filter_path")
     query_type = runtime_schema().query_type
     if query_type is None:
         _reject()
@@ -247,23 +251,21 @@ def _filter_value(
     filter_name = argument_name(root_field, "filter")
     prefix = ["filters"] if path[:1] == ["filters"] else ["arguments", filter_name]
     if filter_name is None or path[: len(prefix)] != prefix:
-        _reject()
+        _reject("invalid_filter_path")
     selectors = path[len(prefix) :]
     if (
         not selectors
         or len(selectors) > 2
         or (len(selectors) == 2 and selectors[0] != field)
     ):
-        _reject()
+        _reject("invalid_filter_path")
     type_name = str(root_field.args[filter_name].type).removesuffix("!")
     for index, selector in enumerate(selectors):
         definition = full["types"].get(type_name)
-        if (
-            not isinstance(definition, Mapping)
-            or definition.get("kind") != "input"
-            or observed.get("types", {}).get(type_name) != definition
-        ):
+        if not isinstance(definition, Mapping) or definition.get("kind") != "input":
             _reject()
+        if observed.get("types", {}).get(type_name) != definition:
+            _reject("filter_input_definition_not_observed")
         signature = definition["fields"].get(selector)
         if not isinstance(signature, Mapping):
             _reject()
