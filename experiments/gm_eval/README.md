@@ -765,3 +765,35 @@ The isolated native parity tests apply every semantic assertion to the complete
 reports inside the child, then transfer only the verified case confirmation.
 The real scheduler and consumer routes and the 90-second guard are unchanged.
 The evaluation API continues to return complete reports and evidence.
+
+### Recommendation comparison extraction (r65)
+
+New reference 1.15 recommendation requests use the request-bound extraction policy
+`recommendation-claims/1`. It changes only the blind descriptions of `gaps`,
+`customer_evidence` and `recommendation_criterion`; all business facts, source
+requirements, semantic checks and exact scoring rules remain unchanged.
+
+The comparison maps collect explicitly asserted customer measurements throughout
+the answer, including excluded customers with negative or zero gaps, separately
+from recommendation membership and order. `customer_evidence` describes the four
+measurement components `actuals`, `forecast_2031`, `plan_2031` and `gap`. Identity,
+status and ownership annotations remain subject to `answer_supported`; they are
+not additional measurement components. Missing or wrong measurements must never
+be repaired from tools, arithmetic or reference values. Equivalent wording of the
+positive 2031 forecast-minus-existing-plan criterion uses its canonical label;
+wrong criteria remain representable and fail the independent exact comparison.
+
+`fact_schemas()` defaults to `extraction_policy="legacy"` for reproducible historical
+shapes. `build_adjudication_request()` defaults to selecting the new policy only
+for eligible reference 1.15 recommendation contracts; callers can explicitly pass
+`extraction_policy="legacy"`. Other contracts retain their policy. New packets
+carry the policy marker inside their existing request hash. Unknown policies and
+out-of-scope policy selections are rejected. Archived requests without a marker
+keep their stored field descriptions and system instructions; saved responses
+cannot be relabelled with a new request hash.
+
+This correction addresses a contradictory extraction instruction, not a change to
+the required answer. Offline protocol controls do not demonstrate future live
+judge accuracy. Any review of a saved answer must retain the original request,
+response and raw score, and identify a separate offline annotation or reassessment
+as such; it is not another live result or a replacement for the original score.
