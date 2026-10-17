@@ -549,7 +549,7 @@ every evaluation run requires either `--settings MODULE` or a nonempty
 
 The packaged dataset names are `basic_queries`, `demo_readiness`, `edge_cases`,
 `follow_ups`, `large_schema`, `multi_hop`, and `planned_orchestration`. The
-installed CLI's legacy suite runs the first six; selecting
+installed CLI runs the first six through production Planned orchestration; selecting
 `planned_orchestration` explicitly is rejected. That packaged dataset is
 instead exercised by the deterministic planned tests described in the task
 guide.
@@ -566,6 +566,20 @@ guide.
 `--settings` takes precedence over `DJANGO_SETTINGS_MODULE`; `--provider` takes
 precedence over the configured provider; and `--compare` takes precedence over
 single-provider selection.
+
+The installed CLI preserves custom no-argument provider construction, model
+and provider overrides, comparison, fixture selection, project managers and
+traces. Its selected provider serves all four planned roles serially through
+real exposed tools. Evaluation is read-only: mutation plans stop without calling
+a legacy provider loop. Production mutation permissions and confirmation are
+unchanged. Each turn permits at most 10 provider dispatches, including planner
+and synthesis calls; native evidence/synthesis deadlines still apply.
+
+New reports carry `chat-evaluation/3`. Historical `/1` and `/2` reports remain
+readable but cannot be used as comparable baselines for current execution.
+Internal legacy strategy and injected-recovery options are removed; a request
+cap has the name `max_provider_requests`, with `max_tool_iterations` retained
+only as a per-turn request-cap alias. The two cap names cannot be combined.
 
 Application automation should prefer the module CLI rather than import eval
 runner internals. See the [task guide](../howto/run_chat_evals.md) and

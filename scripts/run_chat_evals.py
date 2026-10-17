@@ -17,7 +17,6 @@ import os
 import socket
 import sys
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 # Ensure the project root is on sys.path so test settings are importable.
@@ -31,27 +30,18 @@ import django
 
 django.setup()
 
-from types import SimpleNamespace
 
-import graphene
-
-from general_manager.api.graphql import GraphQL
 from general_manager.chat.evals.runner import (
     list_datasets,
     print_report,
     run_eval_suite_sync,
 )
 from general_manager.chat.evals.fingerprints import build_run_fingerprint
-from general_manager.chat.evals.fixtures import setup_large_schema
+from general_manager.chat.evals.fixtures import setup_large_schema, setup_toy_schema
 from general_manager.chat.evals.traces import EvalTraceWriter
 from general_manager.chat.providers.ollama import OllamaProvider
-from general_manager.chat.schema_index import clear_schema_index_cache
 from general_manager.chat.system_prompt import build_system_prompt
 from general_manager.chat.tools import get_tool_definitions
-from general_manager.manager.general_manager import GeneralManager
-from general_manager.manager.meta import GeneralManagerMeta
-from general_manager.utils.path_mapping import PathMap
-from tests.utils.simple_manager_interface import BaseTestInterface
 
 
 # ---------------------------------------------------------------------------
@@ -60,230 +50,8 @@ from tests.utils.simple_manager_interface import BaseTestInterface
 
 
 def setup_test_schema() -> None:
-    """Register test managers, GraphQL types, and PathMap relationships."""
-    GraphQL.reset_registry()
-    GeneralManagerMeta.all_classes.clear()
-    GeneralManagerMeta.pending_graphql_interfaces.clear()
-    GeneralManagerMeta.pending_attribute_initialization.clear()
-    PathMap.mapping.clear()
-    if hasattr(PathMap, "instance"):
-        delattr(PathMap, "instance")
-
-    # -- Managers ----------------------------------------------------------
-
-    class MaterialInterface(BaseTestInterface):
-        @staticmethod
-        def get_attribute_types() -> dict[str, dict[str, object]]:
-            return {"name": {"type": str}, "density": {"type": float}}
-
-    class MaterialManager(GeneralManager):
-        Interface = MaterialInterface
-        chat_exposed = True
-
-    class PartInterface(BaseTestInterface):
-        @staticmethod
-        def get_attribute_types() -> dict[str, dict[str, object]]:
-            return {"name": {"type": str}}
-
-    class PartManager(GeneralManager):
-        Interface = PartInterface
-        chat_exposed = True
-
-    class ProjectInterface(BaseTestInterface):
-        @staticmethod
-        def get_attribute_types() -> dict[str, dict[str, object]]:
-            return {"name": {"type": str}}
-
-    class ProjectManager(GeneralManager):
-        Interface = ProjectInterface
-        chat_exposed = True
-
-    materials = [
-        {"id": 1, "name": "Steel", "density": 7.8},
-        {"id": 2, "name": "Aluminum", "density": 2.7},
-        {"id": 3, "name": "Cobalt", "density": 8.9},
-    ]
-    materials_by_name = {item["name"]: item for item in materials}
-    parts = [
-        {"id": 1, "name": "Bolt", "material": materials_by_name["Steel"]},
-        {"id": 2, "name": "Bearing", "material": materials_by_name["Aluminum"]},
-        {"id": 3, "name": "Gear", "material": materials_by_name["Cobalt"]},
-    ]
-    parts_by_name = {item["name"]: item for item in parts}
-    projects = [
-        {"id": 1, "name": "Apollo", "parts": [parts_by_name["Gear"]]},
-        {"id": 2, "name": "Mercury", "parts": [parts_by_name["Bearing"]]},
-    ]
-
-    # -- GraphQL types -----------------------------------------------------
-
-    class MaterialType(graphene.ObjectType):
-        """Materials used in manufacturing."""
-
-        name = graphene.String()
-        density = graphene.Float()
-
-    class PartType(graphene.ObjectType):
-        """Inventory parts catalog."""
-
-        name = graphene.String()
-        material = graphene.Field(MaterialType)
-
-    class ProjectType(graphene.ObjectType):
-        """Engineering projects."""
-
-        name = graphene.String()
-        parts = graphene.List(PartType)
-
-    class MaterialFilter(graphene.InputObjectType):
-        name = graphene.String()
-        density__gt = graphene.Float()
-
-    class PartFilter(graphene.InputObjectType):
-        name = graphene.String()
-        material__name = graphene.String()
-        material__name__icontains = graphene.String()
-
-    class ProjectFilter(graphene.InputObjectType):
-        name = graphene.String()
-        parts__name = graphene.String()
-        parts__material__name = graphene.String()
-        parts__material__name__icontains = graphene.String()
-
-    class PageInfoType(graphene.ObjectType):
-        total_count = graphene.Int(required=True)
-
-    class MaterialPageType(graphene.ObjectType):
-        items = graphene.List(MaterialType, required=True)
-        page_info = graphene.Field(PageInfoType, required=True)
-
-    class PartPageType(graphene.ObjectType):
-        items = graphene.List(PartType, required=True)
-        page_info = graphene.Field(PageInfoType, required=True)
-
-    class ProjectPageType(graphene.ObjectType):
-        items = graphene.List(ProjectType, required=True)
-        page_info = graphene.Field(PageInfoType, required=True)
-
-    def _lookup_values(value: Any, segments: list[str]) -> list[Any]:
-        if not segments:
-            return [value]
-        if isinstance(value, list):
-            output: list[Any] = []
-            for item in value:
-                output.extend(_lookup_values(item, segments))
-            return output
-        if isinstance(value, dict):
-            next_value = value.get(segments[0])
-            return _lookup_values(next_value, segments[1:])
-        return []
-
-    def _matches_filter(record: dict[str, Any], filters: dict[str, Any] | None) -> bool:
-        if not filters:
-            return True
-        for raw_key, expected in filters.items():
-            parts = str(raw_key).split("__")
-            op = "exact"
-            if parts[-1] in {"icontains", "gt"}:
-                op = parts.pop()
-            actual_values = _lookup_values(record, parts)
-            if op == "icontains":
-                needle = str(expected).lower()
-                if not any(needle in str(value).lower() for value in actual_values):
-                    return False
-                continue
-            if op == "gt":
-                try:
-                    threshold = float(expected)
-                except (TypeError, ValueError):
-                    return False
-                if not any(float(value) > threshold for value in actual_values):
-                    return False
-                continue
-            if expected not in actual_values:
-                return False
-        return True
-
-    def _page_payload(
-        records: list[dict[str, Any]], page_size: int | None
-    ) -> dict[str, Any]:
-        items = records[:page_size] if page_size is not None else records
-        return {
-            "items": items,
-            "page_info": {"total_count": len(records)},
-        }
-
-    class Query(graphene.ObjectType):
-        materialmanager_list = graphene.Field(
-            MaterialPageType,
-            filter=graphene.Argument(MaterialFilter),
-            page_size=graphene.Int(),
-        )
-        partmanager_list = graphene.Field(
-            PartPageType,
-            filter=graphene.Argument(PartFilter),
-            page_size=graphene.Int(),
-        )
-        projectmanager_list = graphene.Field(
-            ProjectPageType,
-            filter=graphene.Argument(ProjectFilter),
-            page_size=graphene.Int(),
-        )
-
-        def resolve_materialmanager_list(  # type: ignore[no-untyped-def]
-            self, info, filter=None, page_size=None
-        ):
-            del self, info
-            rows = [item for item in materials if _matches_filter(item, filter)]
-            return _page_payload(rows, page_size)
-
-        def resolve_partmanager_list(  # type: ignore[no-untyped-def]
-            self, info, filter=None, page_size=None
-        ):
-            del self, info
-            rows = [item for item in parts if _matches_filter(item, filter)]
-            return _page_payload(rows, page_size)
-
-        def resolve_projectmanager_list(  # type: ignore[no-untyped-def]
-            self, info, filter=None, page_size=None
-        ):
-            del self, info
-            rows = [item for item in projects if _matches_filter(item, filter)]
-            return _page_payload(rows, page_size)
-
-    GraphQL.graphql_type_registry = {
-        "MaterialManager": MaterialType,
-        "PartManager": PartType,
-        "ProjectManager": ProjectType,
-    }
-    GraphQL.graphql_filter_type_registry = {
-        "MaterialManager": MaterialFilter,
-        "PartManager": PartFilter,
-        "ProjectManager": ProjectFilter,
-    }
-    GraphQL.manager_registry = {
-        "MaterialManager": MaterialManager,
-        "PartManager": PartManager,
-        "ProjectManager": ProjectManager,
-    }
-    GraphQL._query_class = Query
-    GraphQL._schema = graphene.Schema(query=Query)
-
-    # -- Relationships -----------------------------------------------------
-
-    # Initialize the singleton once so later missing lookups do not rebuild the
-    # cache and overwrite these seeded eval-only paths.
-    PathMap("MaterialManager")
-
-    PathMap.mapping[("PartManager", "MaterialManager")] = SimpleNamespace(
-        path=["material"]
-    )
-    PathMap.mapping[("ProjectManager", "PartManager")] = SimpleNamespace(path=["parts"])
-    PathMap.mapping[("ProjectManager", "MaterialManager")] = SimpleNamespace(
-        path=["parts", "material"]
-    )
-
-    clear_schema_index_cache()
+    """Register the canonical packaged toy fixture for source-checkout recipes."""
+    setup_toy_schema()
 
 
 # ---------------------------------------------------------------------------

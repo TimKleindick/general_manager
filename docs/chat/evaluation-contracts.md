@@ -29,10 +29,28 @@ its stricter `response.completed` admission boundary.
 cancellation when cleanup also fails. Forwarding experiment and SIWC recording
 wrappers use it to propagate closure to their inner streams before returning.
 
-## Packaged evaluation contract 2
+## Packaged execution contract 3
 
 New fingerprints, JSONL traces and readiness summaries identify
-`chat-evaluation/2`. `EvalResult.status` distinguishes `pass`, `fail` and
+`chat-evaluation/3`. Module CLI, source helper, readiness and SIWC candidate
+callers execute the production planner/executor/synthesizer scheduler through a
+thin provider binding. Native tools use the actual exposed application schema;
+fixed managers and tool results exist only behind explicit deterministic role
+pins. The former provider/tool execution loop and its injected repairs are gone.
+Ollama and historical dataset, score and report readers remain available.
+
+The adapter is read-only and rejects mutation plans without executing a tool
+fallback. The application's mutation permission and confirmation paths remain
+unchanged. Default dispatch admission is 10 requests per turn across every role,
+including fallback, with no extra final-answer request. Existing explicit SIWC
+request ceilings and STOP behavior remain unchanged. A compatibility request-cap
+alias does not restore the removed execution strategy. See the
+[migration guide](../howto/run_chat_evals.md#7-migrate-older-evaluation-integrations).
+
+## Scoring and historical contract 2
+
+Contract `chat-evaluation/2` introduced the following scoring and completion
+rules, retained by execution contract 3. `EvalResult.status` distinguishes `pass`, `fail` and
 `unscored`; `passed` remains the boolean gate and is false for either failure
 kind. A caught execution error is unscored even when its diagnostic text is
 empty. A completed but wrong answer is a quality failure. A completed empty

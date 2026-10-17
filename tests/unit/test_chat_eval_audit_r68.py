@@ -124,18 +124,16 @@ class _LocalStream:
         self.closed = True
 
 
-def _adapter(provider_type, monkeypatch, completed):
+def _adapter(provider_type, monkeypatch, completed, content="Complete answer"):
     ns = SimpleNamespace
     if provider_type is OllamaProvider:
-        chunks = [{"message": {"content": "Complete answer"}}]
+        chunks = [{"message": {"content": content}}]
         if completed:
             chunks.append({"done": True})
     elif provider_type is OpenAIProvider:
         chunks = [
             ns(
-                choices=[
-                    ns(index=0, delta=ns(content="Complete answer"), finish_reason=None)
-                ],
+                choices=[ns(index=0, delta=ns(content=content), finish_reason=None)],
                 usage=None,
             )
         ]
@@ -150,7 +148,7 @@ def _adapter(provider_type, monkeypatch, completed):
         chunks = [
             ns(
                 type="content_block_delta",
-                delta=ns(type="text_delta", text="Complete answer"),
+                delta=ns(type="text_delta", text=content),
             )
         ]
         if completed:
@@ -161,7 +159,7 @@ def _adapter(provider_type, monkeypatch, completed):
                 ]
             )
     else:
-        chunks = [ns(text="Complete answer", candidates=[])]
+        chunks = [ns(text=content, candidates=[])]
         if completed:
             chunks.append(ns(text=None, candidates=[ns(finish_reason="STOP")]))
     stream = _LocalStream(chunks)
@@ -189,14 +187,46 @@ def _adapter(provider_type, monkeypatch, completed):
 def test_every_adapter_requires_its_actual_completion_marker(
     provider_type, completed, monkeypatch
 ):
-    provider, stream = _adapter(provider_type, monkeypatch, completed)
-    case = runner.EvalCase(
-        "completion", "", [{"user": "Answer"}], {"answer_contains": ["Complete answer"]}
+    from tests.unit.test_chat_eval_execution import NativeProjectProvider, project_case
+    from general_manager.chat.evals.fixtures import setup_toy_schema
+    from general_manager.chat.providers._shared import closing_async_resource
+    import json
+
+    setup_toy_schema()
+    adapter, stream = _adapter(
+        provider_type,
+        monkeypatch,
+        completed,
+        json.dumps(
+            {"answer": "Apollo and Mercury", "evidence_ids": ["task_1:query:1"]}
+        ),
     )
-    result = asyncio.run(runner.run_case(provider, case, []))
+
+    class NativeWithVendorSynthesis(NativeProjectProvider):
+        async def complete(self, messages, tools):
+            if len(self.calls) != 4:
+                async with closing_async_resource(
+                    super().complete(messages, tools)
+                ) as events:
+                    async for event in events:
+                        yield event
+                return
+            self.calls.append((list(messages), list(tools)))
+            try:
+                async with closing_async_resource(
+                    adapter.complete(messages, tools)
+                ) as events:
+                    async for event in events:
+                        yield event
+            finally:
+                self.closed += 1
+
+    provider = NativeWithVendorSynthesis()
+    result = asyncio.run(runner.run_case(provider, project_case(), []))
     assert result.passed is completed
     assert result.status == ("pass" if completed else "unscored")
     assert stream.closed
+    assert provider.closed == len(provider.calls)
 
 
 class _EventProvider:
@@ -297,13 +327,13 @@ def test_default_tier0_selection_uses_the_runner_supported_datasets():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     selected = module._datasets_for_gate("tier0")
-    assert selected == runner._legacy_dataset_names(None)
-    assert runner._legacy_dataset_names(selected) == selected
+    assert selected == runner.execution_dataset_names(None)
+    assert runner.execution_dataset_names(selected) == selected
 
 
 def test_explicit_unsupported_dataset_still_fails_before_provider_use():
-    with pytest.raises(ValueError, match="not supported"):
-        runner._legacy_dataset_names(["planned_orchestration"])
+    with pytest.raises(ValueError, match="require explicit deterministic"):
+        runner.execution_dataset_names(["planned_orchestration"])
 
 
 def test_readiness_distinguishes_unscored_from_quality_fail_on_the_full_denominator():
@@ -333,10 +363,15 @@ def test_readiness_distinguishes_unscored_from_quality_fail_on_the_full_denomina
     )
 
 
-def test_old_baseline_is_readable_but_cannot_authorize_a_new_contract_gate():
+@pytest.mark.parametrize(
+    "historical_contract", ["chat-evaluation/1", "chat-evaluation/2"]
+)
+def test_old_baseline_is_readable_but_cannot_authorize_a_new_contract_gate(
+    historical_contract,
+):
     current = _summary(_strategy_result(False))
-    assert current.evaluation_contract == "chat-evaluation/2"
-    historical = replace(current, evaluation_contract="chat-evaluation/1")
+    assert current.evaluation_contract == "chat-evaluation/3"
+    historical = replace(current, evaluation_contract=historical_contract)
     comparison = compare_to_baseline(current, historical)
     assert not comparison.comparable
     assert (
@@ -374,7 +409,9 @@ def test_consumer_reports_incomplete_stream_as_provider_failure():
 def test_incomplete_tool_request_cannot_execute_a_tool(monkeypatch):
     executed = []
     monkeypatch.setattr(
-        runner, "execute_chat_tool", lambda *args: executed.append(args)
+        __import__("general_manager.chat.tools", fromlist=["execute_chat_tool"]),
+        "execute_chat_tool",
+        lambda *args: executed.append(args),
     )
     provider = _EventProvider(
         [ToolCallEvent("partial", "query", {"manager": "PartManager"})]
@@ -695,79 +732,6 @@ def test_planned_evaluator_requires_one_terminal_event(monkeypatch, events):
     )
     assert not result.passed
     assert result.status == "unscored"
-
-
-def test_tool_budget_recovery_cannot_accept_eof_as_final_completion(monkeypatch):
-    class Provider:
-        calls = 0
-
-        async def complete(self, messages, tools):
-            self.calls += 1
-            if self.calls == 1:
-                yield ToolCallEvent(
-                    "query", "query", {"manager": "PartManager", "fields": ["name"]}
-                )
-                yield DoneEvent(TokenUsage())
-            else:
-                yield TextChunkEvent("Bolt")
-
-    monkeypatch.setattr(runner, "MAX_TOOL_ITERATIONS", 1)
-    monkeypatch.setattr(
-        runner, "execute_chat_tool", lambda *_args: {"data": [{"name": "Bolt"}]}
-    )
-    case = runner.EvalCase(
-        "recovery", "", [{"user": "Show parts"}], {"answer_contains": ["Bolt"]}
-    )
-    provider = Provider()
-    result = asyncio.run(
-        runner.run_case(
-            provider,
-            case,
-            [{"name": "query", "description": "query"}],
-            recover_missing_tools=True,
-        )
-    )
-    assert provider.calls == 2
-    assert not result.passed
-    assert result.status == "unscored"
-
-
-@pytest.mark.parametrize("recovery", [False, True])
-@pytest.mark.parametrize("close_failure", [False, True])
-def test_optional_trace_write_failure_closes_the_owned_stream_immediately(
-    recovery, close_failure
-):
-    class Provider:
-        closed = False
-
-        async def complete(self, messages, tools):
-            try:
-                yield TextChunkEvent("answer")
-                yield DoneEvent(TokenUsage())
-            finally:
-                self.closed = True
-                if close_failure:
-                    raise ValueError()
-
-    class BrokenOutput:
-        def write(self, value):
-            raise OSError()
-
-        def flush(self):
-            pass
-
-    async def check():
-        provider = Provider()
-        with pytest.raises(OSError):
-            if recovery:
-                await runner._collect_model_final_answer(
-                    provider=provider, messages=[], stream=BrokenOutput()
-                )
-            else:
-                await runner._run_turn(provider, [], [], stream=BrokenOutput())
-        assert provider.closed
-
-    asyncio.run(check())
 
 
 def test_external_cancellation_survives_failing_stream_cleanup():

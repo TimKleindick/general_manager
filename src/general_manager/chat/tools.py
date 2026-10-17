@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from contextlib import ExitStack
 from contextvars import ContextVar
 import re
@@ -198,14 +199,14 @@ class UnknownChatToolError(ValueError):
 
 
 def get_tool_definitions() -> list[dict[str, Any]]:
-    """Return the chat tools exposed to the provider."""
+    """Return chat tools with independent schemas for caller-local use."""
     if get_chat_settings().get("tool_strategy") == "direct":
         return _get_direct_tool_definitions()
     return [
         {
             "name": name,
             "description": description,
-            "input_schema": dict(TOOL_INPUT_SCHEMAS[name]),
+            "input_schema": deepcopy(TOOL_INPUT_SCHEMAS[name]),
         }
         for name, description in TOOL_DESCRIPTIONS.items()
     ]
@@ -294,15 +295,19 @@ def _get_direct_tool_definitions() -> list[dict[str, Any]]:
         {
             "name": f"query_{manager_name.lower()}",
             "description": f"Query {manager_name} records directly.",
-            "input_schema": {
-                **TOOL_INPUT_SCHEMAS["query"],
-                "properties": {
-                    key: value
-                    for key, value in TOOL_INPUT_SCHEMAS["query"]["properties"].items()
-                    if key != "manager"
-                },
-                "required": ["fields"],
-            },
+            "input_schema": deepcopy(
+                {
+                    **TOOL_INPUT_SCHEMAS["query"],
+                    "properties": {
+                        key: value
+                        for key, value in TOOL_INPUT_SCHEMAS["query"][
+                            "properties"
+                        ].items()
+                        if key != "manager"
+                    },
+                    "required": ["fields"],
+                }
+            ),
         }
         for manager_name in build_schema_index()
     ]

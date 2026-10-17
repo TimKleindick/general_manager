@@ -142,48 +142,33 @@ def test_larger_budget_still_rejects_invalid_configuration(budget):
         Provider("offline", Transport([]), max_requests=budget)
 
 
-def test_responses_history_survives_real_harness_follow_up():
+def test_responses_history_survives_current_orchestration_without_cross_role_reasoning():
     from general_manager.chat.evals.fixtures import setup_toy_schema
     from general_manager.chat.evals.runner import load_dataset, run_case
     from general_manager.chat.tools import get_tool_definitions
+    from experiments.siwc_eval.runner import synthetic_steps, synthetic_wire
 
     reasoning = {"type": "reasoning", "id": "r1", "encrypted_content": "synthetic"}
 
     class ConversationTransport:
         def __init__(self):
             self.requests = []
+            self.steps = [
+                *synthetic_steps(manager="PartManager", answer="Bolt, Bearing, Gear"),
+                *synthetic_steps(
+                    manager="PartManager",
+                    answer="Bolt",
+                    filters={"material_Name": "Steel"},
+                ),
+            ]
 
         async def stream(self, body):
-            self.requests.append(body)
             index = len(self.requests)
-            if index in {1, 3}:
-                args = {"manager": "PartManager", "fields": ["name"]}
-                if index == 3:
-                    args["filters"] = {"material_Name": "Steel"}
-                yield completed(
-                    [
-                        reasoning,
-                        {
-                            "type": "function_call",
-                            "call_id": f"call-{index}",
-                            "namespace": "gm",
-                            "name": "query",
-                            "arguments": json.dumps(args),
-                        },
-                    ]
-                )
-            else:
-                answer = "Bolt, Bearing, Gear" if index == 2 else "Bolt"
-                yield {"type": "response.output_text.delta", "delta": answer}
-                yield completed(
-                    [
-                        {
-                            "type": "message",
-                            "role": "assistant",
-                            "content": [{"type": "output_text", "text": answer}],
-                        }
-                    ]
-                )
+            self.requests.append(body)
+            output = synthetic_wire(self.steps[index])
+            if index == 2:
+                output.insert(0, reasoning)
+            yield completed(output)
 
     setup_toy_schema()
     transport = ConversationTransport()
@@ -193,15 +178,23 @@ def test_responses_history_survives_real_harness_follow_up():
             Provider("offline", transport, max_requests=32),
             case,
             get_tool_definitions(),
-            max_tool_iterations=16,
+            max_provider_requests=16,
         )
     )
-    assert result.passed
-    history = transport.requests[2]["input"]
-    assert reasoning in history
-    assert any(item.get("type") == "function_call_output" for item in history)
-    assert history[-1] == {"role": "user", "content": case.conversation[1]["user"]}
-    assert len(transport.requests) == 4
+    assert result.passed, (result.error, result.answer)
+    history = transport.requests[5]["input"]
+    # Role boundaries retain visible neutral facts, never encrypted role reasoning.
+    assert reasoning not in history
+    reference = next(
+        json.loads(row["content"].removeprefix("REFERENCE_DATA="))
+        for row in history
+        if row.get("role") == "user"
+        and isinstance(row.get("content"), str)
+        and row["content"].startswith("REFERENCE_DATA=")
+    )
+    assert any(row["role"] == "tool" for row in reference["conversation_context"])
+    assert any("Bolt" in row["content"] for row in reference["conversation_context"])
+    assert len(transport.requests) == 10
 
 
 def test_text_and_usage_wait_for_completed():
@@ -542,62 +535,41 @@ def test_incomplete_callback_has_absolute_deadline(monkeypatch):
             assert not worker.is_alive()
 
 
-def test_declined_first_consent_never_logs_in(monkeypatch):
-    from experiments.siwc_eval.runner import live
+@pytest.mark.parametrize(
+    "arguments", [["--live"], ["--live", "--case", "all"], ["--case", "steel"]]
+)
+def test_retired_live_flags_stop_before_setup_login_or_inference(
+    monkeypatch, capsys, arguments
+):
+    from experiments.siwc_eval import runner
+    import sys
 
-    calls = []
-    monkeypatch.setattr("builtins.input", lambda _prompt: "NEIN")
-    monkeypatch.setattr(
-        "experiments.siwc_eval.auth.login", lambda: calls.append("login")
-    )
-    with pytest.raises(EvalError, match="user_declined"):
-        live(0)
-    assert calls == []
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("retired execution must stop before setup or consent")
+
+    monkeypatch.setattr(sys, "argv", ["siwc_eval.runner", *arguments])
+    monkeypatch.setattr(runner, "configure", forbidden)
+    monkeypatch.setattr("builtins.input", forbidden)
+    with pytest.raises(SystemExit) as result:
+        runner.main()
+    assert result.value.code == 2
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "removed" in output.err and "experiments.gm_eval" in output.err
 
 
-@pytest.mark.parametrize("approve_inference", [False, True])
-def test_declined_inference_or_failure_revokes_session(monkeypatch, approve_inference):
-    from experiments.siwc_eval.runner import live
+def test_offline_runner_help_does_not_advertise_retired_live_execution(
+    monkeypatch, capsys
+):
+    from experiments.siwc_eval import runner
+    import sys
 
-    calls = []
-
-    class Session:
-        def access_token(self):
-            return "synthetic"
-
-        def logout(self):
-            calls.append("logout")
-            return True
-
-    class Transport:
-        def __init__(self, _token):
-            calls.append("transport")
-
-        def close(self):
-            calls.append("close")
-
-    async def failure(*_args):
-        calls.append("evaluate")
-        raise EvalError("synthetic_failure")
-
-    answers = iter(["JA", "1", "JA" if approve_inference else "NEIN"])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
-    monkeypatch.setattr("experiments.siwc_eval.auth.login", Session)
-    monkeypatch.setattr("experiments.siwc_eval.http.LiveTransport", Transport)
-    monkeypatch.setattr(
-        "experiments.siwc_eval.http.json_request",
-        lambda *_args, **_kwargs: {
-            "models": [{"visibility": "list", "slug": "synthetic"}]
-        },
-    )
-    monkeypatch.setattr("experiments.siwc_eval.runner.evaluate", failure)
-    with pytest.raises(EvalError):
-        live(0)
-    assert calls == (
-        ["transport", "evaluate", "close", "logout"]
-        if approve_inference
-        else ["logout"]
-    )
+    monkeypatch.setattr(sys, "argv", ["siwc_eval.runner", "--help"])
+    with pytest.raises(SystemExit) as result:
+        runner.main()
+    assert result.value.code == 0
+    output = capsys.readouterr().out
+    assert "--live" not in output and "--case" not in output
 
 
 def test_completed_items_survive_empty_terminal_output_and_replay():

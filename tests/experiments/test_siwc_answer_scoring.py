@@ -52,7 +52,7 @@ def configure_case(monkeypatch, *, verdict="correct", legacy_passed=False, turns
     monkeypatch.setattr("experiments.siwc_eval.answer_judge.AnswerJudge", FakeJudge)
 
     async def run_case(provider, case, definitions, **kwargs):
-        assert kwargs["max_tool_iterations"] == 16
+        assert kwargs["max_provider_requests"] == 16
         kwargs["trace_writer"].write_case(
             {
                 "case": case.name,
@@ -101,6 +101,20 @@ def test_correct_answer_passes_despite_legacy_retrieval_failure(monkeypatch, tmp
     assert artifact["legacy_trace"]["turns"][0]["answer"] == "answer 0"
     assert artifact["references"][0]["expected"]["rows"] == ["Bolt"]
     assert artifact["answer_assessment"]["passed"] is True
+
+
+def test_new_report_identifies_native_execution_without_revising_answer_policy(
+    monkeypatch, tmp_path
+):
+    configure_case(monkeypatch)
+    report = evaluate(tmp_path)
+    assert report["execution_contract"] == "chat-evaluation/3"
+    assert report["strategy"] == "planned"
+    assert report["eval_revision"] == "answer-correctness-v3"
+    row = report["results"][0]
+    assert row["execution_contract"] == report["execution_contract"]
+    artifact = json.loads((tmp_path / row["artifact"]).read_text())
+    assert artifact["execution_contract"] == report["execution_contract"]
 
 
 def test_incorrect_answer_fails_even_if_old_keyword_checks_pass(monkeypatch, tmp_path):
@@ -174,29 +188,25 @@ def test_second_turn_transport_failure_keeps_first_completed_answer(
     monkeypatch, tmp_path
 ):
     from general_manager.chat.evals.runner import run_case
+    from general_manager.chat.evals.fixtures import setup_toy_schema
+    from experiments.siwc_eval.runner import synthetic_steps, synthetic_wire
 
     captured = configure_case(monkeypatch, turns=2)
     monkeypatch.setattr("general_manager.chat.evals.runner.run_case", run_case)
+    setup_toy_schema()
 
     class InterruptedTransport:
         calls = 0
+        steps = synthetic_steps(manager="PartManager", answer="Bolt, Bearing and Gear.")
 
         async def stream(self, body):
             self.calls += 1
-            if self.calls == 2:
+            if self.calls == 6:
                 raise EvalError("http_429")
-            answer = "Bolt, Bearing and Gear."
-            yield {"type": "response.output_text.delta", "delta": answer}
             yield {
                 "type": "response.completed",
                 "response": {
-                    "output": [
-                        {
-                            "type": "message",
-                            "role": "assistant",
-                            "content": [{"type": "output_text", "text": answer}],
-                        }
-                    ],
+                    "output": synthetic_wire(self.steps[self.calls - 1]),
                 },
             }
 
@@ -209,12 +219,18 @@ def test_second_turn_transport_failure_keeps_first_completed_answer(
     row = report["results"][0]
     assert not report["completed"]
     assert row["passed"] is None and row["outcome"] == "infrastructure_error"
-    assert row["requests"] == 2 and row["judge_requests"] == 0
+    assert row["requests"] == 6 and row["judge_requests"] == 0
     assert captured == []
     artifact = json.loads((tmp_path / row["artifact"]).read_text())
     messages = artifact["partial_transcript"]["messages"]
+    reference = next(
+        json.loads(m["content"].removeprefix("REFERENCE_DATA="))
+        for m in messages
+        if m["role"] == "user" and m["content"].startswith("REFERENCE_DATA=")
+    )
     assert any(
         m["role"] == "assistant" and m["content"] == "Bolt, Bearing and Gear."
-        for m in messages
+        for m in reference["conversation_context"]
     )
-    assert messages[-1]["role"] == "user" and messages[-1]["content"] == "question 1"
+    assert reference["original_request"] == "question 1"
+    assert artifact["legacy_trace"]["turns"][0]["answer"] == "Bolt, Bearing and Gear."

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -313,6 +314,39 @@ class ChatSchemaIndexTests(SimpleTestCase):
         ]
         assert tools["query"]["input_schema"]["required"] == ["manager", "fields"]
         assert tools["mutate"]["input_schema"]["required"] == ["mutation", "input"]
+
+    def test_tool_definition_outputs_cannot_mutate_canonical_or_sibling_schemas(
+        self,
+    ) -> None:
+        from general_manager.chat.tool_metadata import TOOL_INPUT_SCHEMAS
+
+        original = deepcopy(TOOL_INPUT_SCHEMAS)
+        for strategy in ("discovery", "direct"):
+            with (
+                self.subTest(strategy=strategy),
+                override_settings(
+                    GENERAL_MANAGER={"CHAT": {"tool_strategy": strategy}}
+                ),
+                patch.dict(TOOL_INPUT_SCHEMAS, deepcopy(original), clear=True),
+            ):
+                definitions = get_tool_definitions()
+                baseline = deepcopy(definitions)
+                query = next(
+                    tool
+                    for tool in definitions
+                    if tool["name"] == "query" or tool["name"].startswith("query_")
+                )
+                schema = query["input_schema"]
+                schema["properties"]["fields"]["items"]["$ref"] = "tampered"
+                schema["required"].append("tampered")
+                schema["$defs"]["fieldSelection"].clear()
+                assert TOOL_INPUT_SCHEMAS == original
+                assert get_tool_definitions() == baseline
+                assert all(
+                    tool == unchanged
+                    for tool, unchanged in zip(definitions, baseline, strict=True)
+                    if tool["name"] != query["name"]
+                )
 
     def test_tool_descriptions_include_decision_hints_for_weaker_models(
         self,
