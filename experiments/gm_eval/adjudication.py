@@ -221,6 +221,36 @@ JUDGE_INSTRUCTION += "\nThe closed ranking_coverage vocabulary is:\n" + "\n".joi
 _MAPPING_FIELDS = frozenset(
     {"values", "actuals", "plan", "gaps", "scenario", "customer_evidence"}
 )
+_RECOMMENDATION_POLICY = "recommendation-claims/1"
+_RECOMMENDATION_DESCRIPTIONS = {
+    "gaps": (
+        "Customer identity to forecast-minus-existing-plan gap actually asserted in "
+        "the answer, including excluded customers and negative or zero gaps. Collect "
+        "claims from prose as well as tables; this is a comparison map, not membership "
+        "of recommendation_ids or ranked_ids. Preserve wrong, extra and missing claims; "
+        "never fill omitted customers or calculate missing gaps from tools or arithmetic."
+    ),
+    "customer_evidence": (
+        "Customer identity to the asserted measurement components actuals (year map), "
+        "forecast_2031, plan_2031 and gap. Include explicitly compared or excluded "
+        "customers, including negative gaps, from prose and tables across the answer; "
+        "this is not recommendation membership. Combine components explicitly stated "
+        "for the same uniquely resolved customer. Keep identity, alias, status and "
+        "project-ownership annotations outside these measurement components; their "
+        "correctness remains independently required under answer_supported. Preserve "
+        "wrong, extra or contradictory measurement claims and missing components; "
+        "never invent a customer or derive omitted values from tools or arithmetic."
+    ),
+    "recommendation_criterion": (
+        "Use positive_2031_forecast_minus_existing_plan only for an explicitly asserted "
+        "criterion selecting positive 2031 forecast-minus-existing-plan gaps; equivalent "
+        "prose and a descending-priority description use this same canonical meaning. "
+        "Preserve wrong or different horizons, subtraction direction, signs, metrics "
+        "and selection criteria as their actual asserted meaning, not this token. "
+        "Ordering is extracted independently in ranked_ids. An unstated or ambiguous "
+        "criterion stays null/absent; never infer it from correct numbers or tools."
+    ),
+}
 
 
 class AdjudicationError(ValueError):
@@ -229,6 +259,32 @@ class AdjudicationError(ValueError):
 
 def _invalid(code: str) -> NoReturn:
     raise AdjudicationError(code)
+
+
+def _extraction_policy(expectation: Mapping[str, Any], requested: str | None) -> str:
+    """Select prospective extraction semantics independently of business Gold."""
+    fields = expectation.get("entity_identity_reference", {}).get("fields", {})
+    eligible = (
+        expectation.get("schema_version") == "1.15"
+        and all(name in expectation["facts"] for name in _RECOMMENDATION_DESCRIPTIONS)
+        and all(
+            fields.get(name) == {"manager": "Customer", "shape": "mapping_keys"}
+            for name in ("gaps", "customer_evidence")
+        )
+    )
+    selected = (
+        (_RECOMMENDATION_POLICY if eligible else "legacy")
+        if requested is None
+        else requested
+    )
+    if not isinstance(selected, str) or selected not in {
+        "legacy",
+        _RECOMMENDATION_POLICY,
+    }:
+        _invalid("unknown_extraction_policy")
+    if selected == _RECOMMENDATION_POLICY and not eligible:
+        _invalid("out_of_scope_extraction_policy")
+    return selected
 
 
 def _json(value: Any) -> str:
@@ -319,8 +375,11 @@ def _shape(name: str, value: Any) -> dict[str, Any]:
     return {}
 
 
-def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
-    """Describe fact shapes without values, dynamic ID/year keys or cardinality."""
+def fact_schemas(
+    expectation: Mapping[str, Any], *, extraction_policy: str = "legacy"
+) -> dict[str, Any]:
+    """Describe blind shapes; the default retains archived extraction semantics."""
+    policy = _extraction_policy(expectation, extraction_policy)
     shapes = {
         str(name): _shape(str(name), value)
         for name, value in expectation["facts"].items()
@@ -623,6 +682,9 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
                     " Serialize a present claim as an array even for a single claimed value; "
                     "preserve all asserted elements and their order."
                 )
+    if policy == _RECOMMENDATION_POLICY:
+        for name, description in _RECOMMENDATION_DESCRIPTIONS.items():
+            shapes[name]["description"] = description
     return shapes
 
 
@@ -1765,6 +1827,7 @@ def build_adjudication_request(
     turn_index: int,
     *,
     schema_index: Mapping[str, Any] | None = None,
+    extraction_policy: str | None = None,
 ) -> dict[str, Any]:
     """Prepare a replayable blind request, using zero-based oracle turn indices."""
     if (
@@ -1799,13 +1862,16 @@ def build_adjudication_request(
         },
     }
     packet = make_judge_packet(expectation, observation)
+    policy = _extraction_policy(expectation, extraction_policy)
     packet.update(
         questions=[_saved_turn(run, index)["user"] for index in range(turn_index + 1)],
         visible_history=history,
         current_question=turn["user"],
         context_sha256=context_digest(context),
-        fact_fields=fact_schemas(expectation),
+        fact_fields=fact_schemas(expectation, extraction_policy=policy),
     )
+    if policy != "legacy":
+        packet["extraction_policy"] = policy
     packet["grounding_contract"] = {
         "version": "3",
         "evidence_binding": {
@@ -1867,6 +1933,14 @@ def _validate_request(request: Mapping[str, Any]) -> None:
         _invalid("stale_adjudication_request")
     if "reference_version" in request:
         validate_reference_version(request["reference_version"])
+    if "extraction_policy" in packet:
+        if packet["extraction_policy"] != _RECOMMENDATION_POLICY:
+            _invalid("unknown_extraction_policy")
+        if request.get("reference_version") != "1.15" or any(
+            packet.get("fact_fields", {}).get(name, {}).get("description") != meaning
+            for name, meaning in _RECOMMENDATION_DESCRIPTIONS.items()
+        ):
+            _invalid("inconsistent_extraction_policy")
     trace = observation.get("trace", {})
     if request.get("schema_version") in {"1.3", "1.4", "1.5"}:
         context = {
