@@ -54,7 +54,7 @@ def _record_rounds(monkeypatch, responses):
     pending = iter(responses)
     calls = []
 
-    async def complete(provider, messages, tools, timeout):
+    async def complete(provider, messages, tools, timeout, **_kwargs):
         calls.append((provider.role, deepcopy(messages), tools, timeout))
         response = next(pending)
         return ProviderRoundResult(

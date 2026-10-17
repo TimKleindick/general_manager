@@ -79,6 +79,11 @@ def judge_product_contract(
         )
     )
     violations.extend(answer_sense.issues)
+    violations.extend(
+        _unavailable_manager_messages(
+            _as_list(hard.get("unavailable_managers")), answer_text
+        )
+    )
 
     strategy_deviations.extend(
         _missing_tool_call_messages(
@@ -258,6 +263,39 @@ def _answer_messages(
         text = str(item)
         if text.lower() in answer_lower:
             messages.append(f"Unexpected answer text: {text}")
+    return messages
+
+
+def _unavailable_manager_messages(managers: list[Any], answer: str) -> list[str]:
+    """Reject explicit availability claims, permitting truthful named denials.
+
+    These bounded legacy checks do not replace SIWC's independent semantic Judge.
+    Naming a manager is not by itself an assertion that it is available.
+    """
+    messages = []
+    denial = r"(?:not\s+(?:available|exposed|accessible|supported|present)|unavailable|not\s+exist)"
+    for item in managers:
+        manager = re.escape(str(item))
+        target = rf"\b{manager}\b"
+        subject = rf"(?:{target}|that requested manager|the requested manager)"
+        patterns = (
+            rf"{subject}\s+(?:(?:is|was)\s+{denial}|does\s+not\s+exist)",
+            rf"\bno\s+(?:manager\s+(?:named|called)\s+)?{target}(?:\s+is\s+(?:available|exposed|accessible))?",
+            rf"{target},?\s+which\s+(?:does\s+not\s+exist|is\s+{denial})",
+            rf"\b(?:cannot|can't|do not|don't)\s+(?:access|query|find)\s+{target}",
+        )
+        remaining = answer
+        for pattern in patterns:
+            remaining = re.sub(pattern, "", remaining, flags=re.IGNORECASE)
+        assertions = (
+            rf"{target}\s+(?:(?:is|was)\s+(?:available|exposed|accessible|supported|present|not\s+unavailable)|exists?\b|contains?\b)",
+            rf"\b(?:I|we)\s+(?:found|can\s+(?:access|query))\s+{target}",
+            rf"\b(?:available|exposed)\s+managers?\s*:[^.!?\n]*{target}",
+        )
+        if any(
+            re.search(pattern, remaining, flags=re.IGNORECASE) for pattern in assertions
+        ):
+            messages.append(f"Answer must truthfully deny availability: {item}")
     return messages
 
 

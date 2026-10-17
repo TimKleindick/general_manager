@@ -135,7 +135,13 @@ def test_packet_and_observation_cannot_bind_json_distinct_tool_results(
 ):
     req = schema_request(with_default(original))
     req["packet"] = deepcopy(req["packet"])
-    req["packet"]["tool_calls"][0]["output"][0]["fields"][0]["default"] = replacement
+    current = next(
+        call
+        for call in req["packet"]["tool_calls"]
+        if call["name"] == "search_managers"
+        and call["source_turn"] == req["turn_index"]
+    )
+    current["output"][0]["fields"][0]["default"] = replacement
     req["request_sha256"] = api._request_digest(req)
     with pytest.raises(api.AdjudicationError, match="stale_adjudication_evidence"):
         api.judge_messages(req)

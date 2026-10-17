@@ -6,6 +6,8 @@ import hashlib
 import json
 from typing import Any
 
+EVALUATION_CONTRACT = "chat-evaluation/2"
+
 
 def stable_hash(payload: Any, *, length: int = 16) -> str:
     """Return a short deterministic hash for JSON-shaped data."""
@@ -30,6 +32,7 @@ def build_run_fingerprint(
     prompt_hash = stable_hash(prompt)
     tool_hash = stable_hash(tool_definitions)
     run_material = {
+        "evaluation_contract": EVALUATION_CONTRACT,
         "provider": provider,
         "model": model,
         "fixture": fixture,

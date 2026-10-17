@@ -94,6 +94,8 @@ from general_manager.chat.planned.catalog import load_manager_catalog
 from general_manager.chat.planned.resolver import AUDIT_MATCH_SOURCES, ManagerResolver
 from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
+    ProviderStreamError,
+    ProviderRoundTimeoutError,
     complete_provider_round,
 )
 from general_manager.chat.planned.synthesis import (
@@ -357,25 +359,14 @@ async def prepare_planned_turn(
     if remaining <= 0:
         raise TimeoutError("planned evidence deadline elapsed")  # noqa: TRY003
     callbacks = callbacks or SchedulerCallbacks()
-    try:
-        planned = await asyncio.wait_for(
-            planner(
-                user_text,
-                planner_messages,
-                settings,
-                budget,
-                catalog_summary,
-                **(
-                    {"configured_context": configured_context}
-                    if planner is plan_request
-                    else {}
-                ),
-            ),
-            remaining,
-        )
-    except InvalidPlanError as exc:
+    observed_usages: list[TokenUsage] = []
+
+    async def observe_usage(usage: TokenUsage) -> None:
+        observed_usages.append(usage)
+
+    async def account_planner_usage(usages: Sequence[TokenUsage]) -> None:
         if callbacks.enforce_rate_limit is not None:
-            for usage in exc.attempt_usages:
+            for usage in usages:
                 try:
                     await _call_sync(
                         callbacks,
@@ -387,6 +378,31 @@ async def prepare_planned_turn(
                     )
                 except Exception:  # noqa: BLE001, S110
                     pass
+
+    try:
+        planned = await asyncio.wait_for(
+            planner(
+                user_text,
+                planner_messages,
+                settings,
+                budget,
+                catalog_summary,
+                **(
+                    {
+                        "configured_context": configured_context,
+                        "on_usage": observe_usage,
+                    }
+                    if planner is plan_request
+                    else {}
+                ),
+            ),
+            remaining,
+        )
+    except InvalidPlanError as exc:
+        await account_planner_usage(observed_usages or exc.attempt_usages)
+        raise
+    except TimeoutError:
+        await account_planner_usage(observed_usages)
         raise
     # A planner needs the task-sized ledger; retain its already spent global rounds.
     task_budget = RoundBudget(
@@ -401,19 +417,7 @@ async def prepare_planned_turn(
         resolver = ManagerResolver(
             schema_index, load_manager_catalog(settings.catalog_source, schema_index)
         )
-    if callbacks.enforce_rate_limit is not None:
-        for usage in planned.attempt_usages:
-            try:
-                await _call_sync(
-                    callbacks,
-                    callbacks.enforce_rate_limit,
-                    dict(scope or {}),
-                    input_tokens=usage.input_tokens,
-                    output_tokens=usage.output_tokens,
-                    count_request=False,
-                )
-            except Exception:  # noqa: BLE001, S110
-                pass
+    await account_planner_usage(observed_usages or planned.attempt_usages)
     return PreparedPlannedTurn(
         plan=planned.plan,
         budget=task_budget,
@@ -1878,6 +1882,22 @@ class _Runner:
             return None
         await self.audit("budget", self._task_audit_payload(runtime))
         started = self.clock()
+        usage_observed = False
+
+        async def record_usage(usage: TokenUsage) -> None:
+            nonlocal usage_observed
+            usage_observed = True
+            await self.account_usage(usage)
+            await self.audit(
+                "usage",
+                {
+                    **self._task_audit_payload(runtime),
+                    "role": runtime.role,
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                },
+            )
+
         try:
             provider = build_profile_provider(
                 profile_for_role(self.prepared.settings, runtime.role)
@@ -1904,22 +1924,18 @@ class _Runner:
             feedback = reference.get("action_validation_error")
             runtime.execution_state = execution_state_signature(reference)
             result = await complete_provider_round(
-                provider, messages, _tool_definitions(), remaining
+                provider,
+                messages,
+                _tool_definitions(),
+                remaining,
+                on_usage=record_usage,
             )
             if isinstance(feedback, dict):
                 runtime.delivered_feedback[json.dumps(feedback, sort_keys=True)] = (
                     runtime.local_passes
                 )
-            await self.account_usage(result.usage)
-            await self.audit(
-                "usage",
-                {
-                    **self._task_audit_payload(runtime),
-                    "role": runtime.role,
-                    "input_tokens": result.usage.input_tokens,
-                    "output_tokens": result.usage.output_tokens,
-                },
-            )
+            if not usage_observed:
+                await record_usage(result.usage)
             await self.audit(
                 "latency",
                 {
@@ -1934,8 +1950,23 @@ class _Runner:
             )
         except asyncio.CancelledError:
             raise
+        except ProviderStreamError as exc:
+            if exc.usage_observed and not usage_observed:
+                await record_usage(exc.usage)
+            runtime.action_validation_error = None
+            await self.set_blocked(
+                runtime, "provider_failed", origin="provider_exception"
+            )
+            return "provider_failed"
+        except ProviderRoundTimeoutError as exc:
+            if exc.usage_observed and not usage_observed:
+                await record_usage(exc.usage)
+            runtime.action_validation_error = None
+            await self.set_blocked(runtime, "deadline_exceeded", origin="scheduler")
+            return "deadline_exceeded"
         except InvalidProviderRoundError as exc:
-            await self.account_usage(exc.usage)
+            if not usage_observed:
+                await record_usage(exc.usage)
             runtime.action_validation_error = action_validation_feedback(
                 "invalid_provider_round",
                 "$",
@@ -2649,11 +2680,11 @@ async def iter_planned_read_events(
             "terminal",
             {
                 "coverage": coverage,
-                "terminal_reason": "synthesis_failed",
+                "terminal_reason": exc.code,
                 "reason_origin": "synthesizer",
             },
         )
-        yield planned_error_event("synthesis_failed")
+        yield planned_error_event(exc.code)
         return
     except RoundBudgetExhausted as exc:
         for usage in getattr(exc, "attempt_usages", ()):

@@ -34,6 +34,10 @@ class ReadinessSummary:
     forbidden_recovery_events: list[str] = field(default_factory=list)
     forbidden_recovery_total: int = 0
     forbidden_recovered_cases: list[str] = field(default_factory=list)
+    # Missing in historical JSON: retain its actual legacy semantics on load.
+    evaluation_contract: str = "chat-evaluation/1"
+    failed: int = 0
+    unscored: int = 0
 
     @property
     def pass_rate(self) -> float:
@@ -48,6 +52,7 @@ class BaselineComparison:
     regressed: bool
     pass_rate_delta: float
     messages: list[str]
+    comparable: bool = True
 
 
 _SOFT_DIAGNOSTIC_ALLOWLIST = frozenset({"prompt/strategy_deviation"})
@@ -60,6 +65,15 @@ def compare_to_baseline(
     """Compare current readiness to a previous accepted summary."""
     messages: list[str] = []
     delta = current.pass_rate - baseline.pass_rate
+    if current.evaluation_contract != baseline.evaluation_contract:
+        return BaselineComparison(
+            regressed=False,
+            pass_rate_delta=round(delta, 6),
+            messages=[
+                "Evaluation contracts differ; establish a new baseline without rewriting the historical report."
+            ],
+            comparable=False,
+        )
     if delta < 0:
         messages.append(
             "Overall pass rate regressed from "

@@ -97,7 +97,7 @@ def valid_repetition_judgment(check: object, answer: object, context: object) ->
         not isinstance(row, Mapping)
         or set(row) != {"role", "content"}
         or not isinstance(row["role"], str)
-        or row["role"] not in {"user", "assistant", "system"}
+        or row["role"] not in {"user", "assistant", "system", "tool"}
         or not isinstance(row["content"], str)
         for row in history
     ):

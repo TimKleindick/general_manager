@@ -1318,6 +1318,7 @@ def test_executor_passes_its_admission_timeout_without_recomputing_the_clock(
         _messages: list[object],
         _tools: list[object],
         timeout_seconds: float,
+        **_kwargs: object,
     ) -> ProviderRoundResult:
         received_timeouts.append(timeout_seconds)
         return ProviderRoundResult(
@@ -2486,6 +2487,7 @@ def test_planning_and_evidence_share_one_absolute_deadline(
         _messages: list[object],
         _tools: list[object],
         timeout_seconds: float,
+        **_kwargs: object,
     ) -> ProviderRoundResult:
         timeouts.append(timeout_seconds)
         return ProviderRoundResult(

@@ -206,7 +206,8 @@ def test_synthesis_attempts_share_one_absolute_stage_deadline() -> None:
     timeouts: list[float] = []
 
     async def staged_round(*_args: object, **kwargs: object) -> ProviderRoundResult:
-        assert not kwargs
+        assert kwargs["classify_provider_errors"] is True
+        assert callable(kwargs["on_usage"])
         timeout = _args[-1]
         assert isinstance(timeout, float)
         timeouts.append(timeout)

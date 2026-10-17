@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import json
 from math import isfinite
@@ -10,6 +11,11 @@ from typing import NoReturn
 
 from general_manager.chat.planned.evidence import canonical_call_identity
 from general_manager.chat.planned.schema_projection import compact_messages
+from general_manager.chat.providers._shared import (
+    closing_async_resource,
+    completed_events,
+    ProviderCompletionError,
+)
 
 from general_manager.chat.providers.base import (
     BaseLLMProvider,
@@ -35,10 +41,23 @@ class InvalidProviderRoundTimeoutError(ValueError):
 
 
 class ProviderStreamError(RuntimeError):
-    """Opt-in provenance for a provider stream exception, never local validation."""
+    """Provider failure with observed usage, never local action validation."""
 
-    def __init__(self) -> None:
+    public_reason = "provider_failed"
+
+    def __init__(self, *, usage: TokenUsage | None = None) -> None:
+        self.usage_observed = usage is not None
+        self.usage = usage if usage is not None else TokenUsage()
         super().__init__("provider_failed")
+
+
+class ProviderRoundTimeoutError(TimeoutError):
+    """The existing deadline expired after any independently observed usage."""
+
+    def __init__(self, *, usage: TokenUsage | None = None) -> None:
+        self.usage_observed = usage is not None
+        self.usage = usage if usage is not None else TokenUsage()
+        super().__init__("deadline_exceeded")
 
 
 @dataclass(frozen=True)
@@ -100,6 +119,7 @@ async def complete_provider_round(
     timeout_seconds: float,
     *,
     classify_provider_errors: bool = False,
+    on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
 ) -> ProviderRoundResult:
     """Buffer one bounded provider stream without changing legacy iteration.
 
@@ -113,59 +133,95 @@ async def complete_provider_round(
     call_ids: set[str] = set()
     done_count = 0
     usage = TokenUsage()
+    usage_observed = False
 
-    async with asyncio.timeout(timeout):
-        prepared_messages = compact_messages(messages)
-        try:
-            stream = aiter(provider.complete(prepared_messages, tools))
-        except (InvalidProviderRoundError, InvalidProviderRoundTimeoutError):
-            raise
-        except Exception as exc:
-            if classify_provider_errors:
-                raise ProviderStreamError() from exc
-            raise
-        while True:
+    async def account_usage(received: TokenUsage) -> None:
+        nonlocal usage, usage_observed
+        usage = received
+        usage_observed = True
+        if on_usage is not None:
+            await on_usage(received)
+
+    deadline = asyncio.timeout(timeout)
+    try:
+        async with deadline:
+            prepared_messages = compact_messages(messages)
             try:
-                event = await anext(stream)
-            except StopAsyncIteration:
-                break
+                stream = aiter(
+                    completed_events(
+                        provider.complete(prepared_messages, tools),
+                        on_usage=account_usage,
+                    )
+                )
             except (InvalidProviderRoundError, InvalidProviderRoundTimeoutError):
                 raise
             except Exception as exc:
                 if classify_provider_errors:
                     raise ProviderStreamError() from exc
                 raise
-            if done_count:
-                _invalid("a done event must be terminal.", usage)
-            if isinstance(event, TextChunkEvent):
-                if tool_calls:
-                    _invalid(
-                        "a provider round cannot contain text and a tool call.", usage
-                    )
-                text_parts.append(event.content)
-                continue
-            if isinstance(event, ToolCallEvent):
-                call = _snapshot_tool_call(event, usage)
-                if call.id in call_ids:
-                    _invalid(
-                        "tool call IDs must be unique within a provider round.", usage
-                    )
-                if text_parts:
-                    _invalid(
-                        "a provider round cannot contain text and a tool call.", usage
-                    )
-                tool_calls.append(call)
-                call_ids.add(call.id)
-                continue
-            if isinstance(event, DoneEvent):
-                done_count += 1
-                if done_count > 1:
-                    _invalid("a provider round may contain only one done event.", usage)
-                if not isinstance(event.usage, TokenUsage):
-                    _invalid("a done event must carry token usage.", usage)
-                usage = event.usage
-                continue
-            _invalid("a provider round emitted an unsupported event.", usage)
+            async with closing_async_resource(stream):
+                while True:
+                    try:
+                        event = await anext(stream)
+                    except StopAsyncIteration:
+                        break
+                    except ProviderCompletionError as exc:
+                        if classify_provider_errors:
+                            raise ProviderStreamError(
+                                usage=usage if usage_observed else None
+                            ) from exc
+                        messages_by_code = {
+                            "stream_without_completion": "a provider round must finish with one done event.",
+                            "events_after_completion": "a done event must be terminal.",
+                            "invalid_completion_usage": "a done event must carry token usage.",
+                            "unsupported_provider_event": "a provider round emitted an unsupported event.",
+                        }
+                        _invalid(messages_by_code.get(exc.code, exc.code), usage)
+                    except (
+                        InvalidProviderRoundError,
+                        InvalidProviderRoundTimeoutError,
+                    ):
+                        raise
+                    except Exception as exc:
+                        if classify_provider_errors or usage_observed:
+                            raise ProviderStreamError(
+                                usage=usage if usage_observed else None
+                            ) from exc
+                        raise
+                    if isinstance(event, TextChunkEvent):
+                        if tool_calls:
+                            _invalid(
+                                "a provider round cannot contain text and a tool call.",
+                                usage,
+                            )
+                        text_parts.append(event.content)
+                        continue
+                    if isinstance(event, ToolCallEvent):
+                        call = _snapshot_tool_call(event, usage)
+                        if call.id in call_ids:
+                            _invalid(
+                                "tool call IDs must be unique within a provider round.",
+                                usage,
+                            )
+                        if text_parts:
+                            _invalid(
+                                "a provider round cannot contain text and a tool call.",
+                                usage,
+                            )
+                        tool_calls.append(call)
+                        call_ids.add(call.id)
+                        continue
+                    if isinstance(event, DoneEvent):
+                        done_count += 1
+                        usage = event.usage
+                        continue
+                    _invalid("a provider round emitted an unsupported event.", usage)
+    except TimeoutError as exc:
+        if not deadline.expired():
+            raise
+        raise ProviderRoundTimeoutError(
+            usage=usage if usage_observed else None
+        ) from exc
 
     if done_count != 1:
         _invalid("a provider round must finish with one done event.", usage)
@@ -180,6 +236,7 @@ async def complete_provider_round(
 __all__ = [
     "InvalidProviderRoundError",
     "ProviderRoundResult",
+    "ProviderRoundTimeoutError",
     "ProviderStreamError",
     "complete_provider_round",
 ]

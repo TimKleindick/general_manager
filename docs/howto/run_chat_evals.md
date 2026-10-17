@@ -1,5 +1,8 @@
 # Run the installed chat evaluation suite
 
+See [evaluation contracts and migration](../chat/evaluation-contracts.md) for
+completion requirements, PASS/FAIL/UNSCORED reporting and historical baselines.
+
 Use the installed module CLI when you want to evaluate a provider against the
 datasets shipped in the GeneralManager wheel. The command runs inside a Django
 project, so it must load that project's settings before it imports providers or

@@ -5,13 +5,13 @@ import json
 
 import pytest
 
-from experiments.gm_eval import adjudication, semantic_contracts
-from tests.experiments.test_gm_eval_scoring import control, expected, score
+from experiments.gm_eval import adjudication, oracle, semantic_contracts
+from tests.experiments.test_gm_eval_scoring import case, control, expected, score
 from tests.experiments import test_gm_eval_adjudication as fixtures
 
 
 def test_visible_table_order_is_a_requested_fact_without_ranking_prose():
-    description = adjudication.fact_schemas(expected("E074"))["ranked_ids"][
+    description = adjudication.fact_schemas(expected("E083"))["ranked_ids"][
         "description"
     ]
     assert "presentation order" in description
@@ -63,7 +63,7 @@ def test_wrong_or_absent_coverage_still_fails(coverage):
 
 @pytest.mark.parametrize("damage", ["reverse", "missing", "extra", "absent"])
 def test_visible_order_is_never_filled_or_repaired_from_reference(damage):
-    contract = expected("E074")
+    contract = oracle.expected_turn(case("E074"), 0, reference_version="1.15")
     observation, judgment = control(contract)
     original = observation["facts"]["ranked_ids"]
     wrong = {

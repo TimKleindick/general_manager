@@ -36,7 +36,7 @@ def test_explicit_block_origin_is_owned_by_scheduler(monkeypatch, reason):
 
 
 def test_provider_exception_has_distinct_framework_origin(monkeypatch):
-    async def failed(*_args):
+    async def failed(*_args, **_kwargs):
         detail = "private transport detail"
         raise RuntimeError(detail)
 
