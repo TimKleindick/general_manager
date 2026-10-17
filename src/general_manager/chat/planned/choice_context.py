@@ -19,7 +19,9 @@ CHOICE_INSTRUCTION = (
     "choices and clarification_requests. Inner plan examples describe only plan. Assess every "
     "supplied question exactly once as answered, open or conflicting, with applicability "
     "same_scope, changed_scope or unrelated. Bind decisions to exact visible USER quotes after "
-    "the question. Never use assistant/task/tool claims as user choices. A partial answer, "
+    "the question. Use the published user_sources indices: these are zero-based positions "
+    "in conversation_context, counting every role, not USER-only ordinals. "
+    "Never use assistant/task/tool claims as user choices. A partial answer, "
     "uncertainty or contradiction is not answered merely because it is nonempty. Interpret "
     "the original question and reply together: a chosen analytical basis can answer both a "
     "generic criterion question and a metric question; they are not universally synonymous. "
@@ -48,6 +50,8 @@ DEFINITION_CHOICE_INSTRUCTION = (
     "how this request is to be interpreted. Otherwise retain the relevant unit, metric "
     "or horizon question. "
     "definition_bindings is [] when no applicable meaning is resolved. "
+    "Use the published user_sources index for each scope_quote: it is the zero-based "
+    "conversation_context position, counting all roles; never renumber USER messages. "
     "Use choices=[] when there are no prior questions. clarification_requests lists only "
     "remaining material choices, using topic, question_id (null for a first question), and "
     "an exact latest USER scope_quote. A resolved definition cannot also be an open question. "
@@ -60,16 +64,29 @@ DEFINITION_CHOICE_INSTRUCTION = (
 class ChoiceValidationError(PlanValidationError):
     """Machine-detectable missing or inconsistent conversational binding."""
 
-    def __init__(self, code: str = "invalid_choice_binding") -> None:
+    def __init__(
+        self,
+        code: str = "invalid_choice_binding",
+        *,
+        path: str = "$.choices",
+        expected: str | None = None,
+    ) -> None:
         super().__init__(
             code,
-            path="$.choices",
-            expected="complete user-bound choice decisions consistent with requested clarifications",
+            path=path,
+            expected=expected
+            if expected is not None
+            else "complete user-bound choice decisions consistent with requested clarifications",
         )
 
 
-def _invalid(code: str = "invalid_choice_binding") -> NoReturn:
-    raise ChoiceValidationError(code)
+def _invalid(
+    code: str = "invalid_choice_binding",
+    *,
+    path: str = "$.choices",
+    expected: str | None = None,
+) -> NoReturn:
+    raise ChoiceValidationError(code, path=path, expected=expected)
 
 
 def _digest(value: Any) -> str:
@@ -196,7 +213,14 @@ def envelope_schema(
         "additionalProperties": False,
         "required": ["index", "quote"],
         "properties": {
-            "index": {"type": "integer", "minimum": 0},
+            "index": {
+                "type": "integer",
+                "minimum": 0,
+                "description": (
+                    "Use the exact USER index published in user_sources: its zero-based "
+                    "position in conversation_context, including every message role."
+                ),
+            },
             "quote": {"type": "string", "minLength": 1},
         },
     }
@@ -277,6 +301,15 @@ def with_user_source(messages: Sequence[Message], user_text: str) -> list[Messag
     if any(message.role == "user" for message in messages):
         return list(messages)
     return [*messages, Message("user", user_text)]
+
+
+def user_quote_sources(messages: Sequence[Message]) -> list[dict[str, object]]:
+    """Publish the same original USER positions used by quote validation."""
+    return [
+        {"index": index, "content": message.content}
+        for index, message in enumerate(messages)
+        if message.role == "user"
+    ]
 
 
 @dataclass(frozen=True)
@@ -378,22 +411,35 @@ def validate_choices(
     if user_text is not None and messages[latest_user].content != user_text:
         _invalid("choice_context_source_changed")
 
-    def check_quote(value: Any, after: int, *, latest: bool = False) -> None:
+    def check_quote(value: Any, after: int, *, path: str, latest: bool = False) -> None:
         if not isinstance(value, dict) or set(value) != {"index", "quote"}:
-            _invalid()
+            _invalid(path=path, expected="an exact {index, quote} USER source binding")
         index, quote = value["index"], value["quote"]
+        eligible = [
+            source
+            for source in user_indexes
+            if source > after and (not latest or source == latest_user)
+        ]
+        if type(index) is not int or index not in eligible:
+            _invalid(
+                path=path + ".index",
+                expected=(
+                    "one of the eligible USER source indices "
+                    + json.dumps(eligible)
+                    + " in conversation_context (zero-based, counting all roles)"
+                ),
+            )
         if (
-            type(index) is not int
-            or not after < index < len(messages)
-            or (latest and index != latest_user)
-            or messages[index].role != "user"
-            or not isinstance(quote, str)
+            not isinstance(quote, str)
             or not quote.strip()
             or quote not in messages[index].content
         ):
-            _invalid()
+            _invalid(
+                path=path + ".quote",
+                expected=f"a nonempty verbatim quote from USER message {index}",
+            )
 
-    for decision in decisions:
+    for decision_index, decision in enumerate(decisions):
         if not isinstance(decision, dict) or set(decision) != {
             "question_id",
             "state",
@@ -421,8 +467,12 @@ def validate_choices(
             )
         ):
             _invalid()
-        for quote in quotes:
-            check_quote(quote, by_id[qid]["question_index"])
+        for quote_index, quote in enumerate(quotes):
+            check_quote(
+                quote,
+                by_id[qid]["question_index"],
+                path=f"$.choices[{decision_index}].user_quotes[{quote_index}]",
+            )
         if decision["applicability"] != "same_scope" and not any(
             quote["index"] == latest_user for quote in quotes
         ):
@@ -432,7 +482,7 @@ def validate_choices(
     if not isinstance(definitions, list) or len(definitions) > len(_DEFINITION_TOPICS):
         _invalid("invalid_definition_binding")
     resolved_topics: set[str] = set()
-    for binding in definitions:
+    for binding_index, binding in enumerate(definitions):
         if not isinstance(binding, dict) or set(binding) != {
             "topic",
             "definition_quote",
@@ -449,10 +499,15 @@ def validate_choices(
             or quote not in configured_context
         ):
             _invalid("invalid_definition_binding")
-        check_quote(binding["scope_quote"], -1, latest=True)
+        check_quote(
+            binding["scope_quote"],
+            -1,
+            path=f"$.definition_bindings[{binding_index}].scope_quote",
+            latest=True,
+        )
         resolved_topics.add(topic)
     topics = set()
-    for request in requests:
+    for request_index, request in enumerate(requests):
         if not isinstance(request, dict) or set(request) != {
             "topic",
             "question_id",
@@ -486,7 +541,11 @@ def validate_choices(
             state = states[qid]
             if state["state"] == "answered" or state["applicability"] != "same_scope":
                 _invalid("unrequested_or_answered_clarification")
-            check_quote(request["scope_quote"], by_id[qid]["question_index"])
+            check_quote(
+                request["scope_quote"],
+                by_id[qid]["question_index"],
+                path=f"$.clarification_requests[{request_index}].scope_quote",
+            )
         else:
             if any(
                 q["topic"] == topic
@@ -494,7 +553,12 @@ def validate_choices(
                 for q in questions
             ):
                 _invalid("unrequested_or_answered_clarification")
-            check_quote(request["scope_quote"], -1, latest=True)
+            check_quote(
+                request["scope_quote"],
+                -1,
+                path=f"$.clarification_requests[{request_index}].scope_quote",
+                latest=True,
+            )
     data = {
         "version": 2 if configured_context else 1,
         "authority": "user_choices_and_application_meanings_not_record_evidence"
@@ -502,11 +566,7 @@ def validate_choices(
         else "user_quote_bindings_not_record_evidence",
         "questions": questions,
         "source_context_sha256": _context_digest(messages),
-        "user_sources": [
-            {"index": index, "content": message.content}
-            for index, message in enumerate(messages)
-            if message.role == "user"
-        ],
+        "user_sources": user_quote_sources(messages),
         "choices": decisions,
         "clarification_requests": requests,
         **(
