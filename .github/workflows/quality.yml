@@ -44,6 +44,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[file-upload-image]"
           pip install pytest pytest-django pytest-cov meilisearch==0.40.0
+          pip install -r requirements/chat-eval.txt
 
       - name: Run pytest with coverage
         env:

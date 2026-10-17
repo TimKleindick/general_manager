@@ -21,7 +21,8 @@ from general_manager.chat.evals.diagnostics import (
     sanitize_planned_trace,
     summarize_diagnostics,
 )
-from general_manager.chat.evals.fingerprints import stable_hash
+from general_manager.chat.evals.fingerprints import EVALUATION_CONTRACT, stable_hash
+from general_manager.chat.evals.outcomes import terminal_failure_categories
 from general_manager.chat.evals.judges.answer_quality import (
     AnswerQualityScore,
     judge_answer_quality,
@@ -34,9 +35,17 @@ from general_manager.chat.evals.judges.result_accuracy import (
     ResultAccuracyScore,
     judge_result_accuracy,
 )
+from general_manager.chat.evals.judges.result_set import (
+    ResultSetScore,
+    judge_result_set,
+)
 from general_manager.chat.evals.judges.tool_sequence import (
     ToolSequenceScore,
     judge_tool_sequence,
+)
+from general_manager.chat.providers._shared import (
+    completed_events,
+    closing_async_resource,
 )
 from general_manager.chat.providers.base import (
     DoneEvent,
@@ -49,6 +58,7 @@ from general_manager.chat.providers.base import (
 from general_manager.chat.planned.catalog import ManagerCatalog, ManagerCatalogEntry
 from general_manager.chat.planned.config import PlannedChatSettings, ProviderProfile
 from general_manager.chat.planned.resolver import ManagerResolver
+from general_manager.chat.planned.planner import InvalidPlanError
 from general_manager.chat.planned.scheduler import (
     SchedulerCallbacks,
     iter_planned_read_events,
@@ -260,13 +270,19 @@ class EvalResult:
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     answer: str = ""
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    result_set_score: ResultSetScore | None = None
+    turn_results: list[EvalResult] = field(default_factory=list)
+    requests: int = 0
     fingerprint: str = ""
     trace: dict[str, Any] = field(default_factory=dict)
     usage: dict[str, int] = field(default_factory=dict)
+    failure_category: str | None = None
 
     @property
     def passed(self) -> bool:
-        if self.error:
+        if self.error is not None or any(not turn.passed for turn in self.turn_results):
+            return False
+        if self.result_set_score is not None and not self.result_set_score.passed:
             return False
         if self.contract_score is not None and not self.contract_score.passed:
             return False
@@ -277,6 +293,17 @@ class EvalResult:
             return self.tool_score.passed
         return True
 
+    @property
+    def status(self) -> str:
+        """Separate ungradable execution from a completed quality failure."""
+        if (
+            self.error is not None
+            and self.error != "missing_turn_answer"
+            and self.failure_category != "model_task_failure"
+        ) or any(turn.status == "unscored" for turn in self.turn_results):
+            return "unscored"
+        return "pass" if self.passed else "fail"
+
 
 @dataclass
 class TurnRecord:
@@ -285,7 +312,10 @@ class TurnRecord:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     answer_chunks: list[str] = field(default_factory=list)
+    error: str | None = None
+    requests: int = 0
     recovery_events: list[str] = field(default_factory=list)
+    failure_category: str | None = None
 
     @property
     def answer(self) -> str:
@@ -344,7 +374,7 @@ def filter_cases(
     return output
 
 
-def _legacy_dataset_names(dataset_names: list[str] | None) -> list[str]:
+def legacy_dataset_names(dataset_names: list[str] | None = None) -> list[str]:
     """Return datasets supported by the legacy evaluation suite."""
     if dataset_names is None:
         return [
@@ -357,6 +387,10 @@ def _legacy_dataset_names(dataset_names: list[str] | None) -> list[str]:
         msg = f"Dataset(s) not supported by the legacy eval suite: {names}."
         raise ValueError(msg)
     return dataset_names
+
+
+# Preserve the private import used by older integrations; one selector owns both.
+_legacy_dataset_names = legacy_dataset_names
 
 
 # ---------------------------------------------------------------------------
@@ -387,39 +421,59 @@ async def _run_turn(
     tool_defs: list[dict[str, Any]],
     stream: IO[str] | None = None,
     recover_missing_tools: bool = False,
+    max_tool_iterations: int | None = None,
+    provider_messages: list[Message] | None = None,
 ) -> TurnRecord:
     """Execute one conversation turn through the provider + tool loop."""
+    iterations = (
+        MAX_TOOL_ITERATIONS if max_tool_iterations is None else max_tool_iterations
+    )
+    if (
+        isinstance(iterations, bool)
+        or not isinstance(iterations, int)
+        or not 1 <= iterations <= 64
+    ):
+        message = "max_tool_iterations must be between 1 and 64"
+        raise ValueError(message)
+    messages = (
+        _messages_to_provider(history)
+        if provider_messages is None
+        else provider_messages
+    )
     record = TurnRecord()
-    messages = _messages_to_provider(history)
     tools = _tool_defs_to_provider(tool_defs)
     available_tool_names = {tool.name for tool in tools}
     recovery_attempted: set[str] = set()
 
-    for _ in range(MAX_TOOL_ITERATIONS):
+    for _ in range(iterations):
         tool_calls_this_round: list[ToolCallEvent] = []
         text_chunks: list[str] = []
         assistant_line_open = False
 
-        async for event in provider.complete(messages, tools):
-            if isinstance(event, TextChunkEvent):
-                text_chunks.append(event.content)
-                if stream is not None:
-                    if not assistant_line_open:
-                        stream.write("assistant: ")
-                        assistant_line_open = True
-                    stream.write(event.content)
-                    stream.flush()
-            elif isinstance(event, ToolCallEvent):
-                if stream is not None and assistant_line_open:
-                    stream.write("\n")
-                    assistant_line_open = False
-                tool_calls_this_round.append(event)
-                _stream_line(
-                    stream,
-                    f"tool_call {event.name}: {_to_json(event.args)}",
-                )
-            elif isinstance(event, DoneEvent):
-                pass
+        record.requests += 1
+        async with closing_async_resource(
+            completed_events(provider.complete(list(messages), tools))
+        ) as events:
+            async for event in events:
+                if isinstance(event, TextChunkEvent):
+                    text_chunks.append(event.content)
+                    if stream is not None:
+                        if not assistant_line_open:
+                            stream.write("assistant: ")
+                            assistant_line_open = True
+                        stream.write(event.content)
+                        stream.flush()
+                elif isinstance(event, ToolCallEvent):
+                    if stream is not None and assistant_line_open:
+                        stream.write("\n")
+                        assistant_line_open = False
+                    tool_calls_this_round.append(event)
+                    _stream_line(
+                        stream,
+                        f"tool_call {event.name}: {_to_json(event.args)}",
+                    )
+                elif isinstance(event, DoneEvent):
+                    pass
 
         if stream is not None and assistant_line_open:
             stream.write("\n")
@@ -678,7 +732,11 @@ async def _run_turn(
             ),
             "",
         )
-        if recover_missing_tools and _has_successful_query(record):
+        if (
+            recover_missing_tools
+            and max_tool_iterations is None
+            and _has_successful_query(record)
+        ):
             record.recovery_events.append("final_answer_after_tool_budget")
             messages.append(
                 Message(
@@ -691,6 +749,7 @@ async def _run_turn(
                     ),
                 )
             )
+            record.requests += 1
             if final_answer := await _collect_model_final_answer(
                 provider=provider,
                 messages=messages,
@@ -698,6 +757,7 @@ async def _run_turn(
             ):
                 record.answer_chunks.append(final_answer)
                 return record
+        record.error = "turn_request_budget_exhausted"
         record.answer_chunks.append("[max tool iterations reached]")
         _stream_line(stream, "assistant: [max tool iterations reached]")
 
@@ -712,17 +772,20 @@ async def _collect_model_final_answer(
 ) -> str:
     text_chunks: list[str] = []
     assistant_line_open = False
-    async for event in provider.complete(messages, []):
-        if isinstance(event, TextChunkEvent):
-            text_chunks.append(event.content)
-            if stream is not None:
-                if not assistant_line_open:
-                    stream.write("assistant: ")
-                    assistant_line_open = True
-                stream.write(event.content)
-                stream.flush()
-        elif isinstance(event, DoneEvent):
-            pass
+    async with closing_async_resource(
+        completed_events(provider.complete(messages, []))
+    ) as events:
+        async for event in events:
+            if isinstance(event, TextChunkEvent):
+                text_chunks.append(event.content)
+                if stream is not None:
+                    if not assistant_line_open:
+                        stream.write("assistant: ")
+                        assistant_line_open = True
+                    stream.write(event.content)
+                    stream.flush()
+            elif isinstance(event, DoneEvent):
+                pass
     if stream is not None and assistant_line_open:
         stream.write("\n")
         stream.flush()
@@ -2767,15 +2830,93 @@ def _as_dict(value: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _score_case(case: EvalCase, records: list[TurnRecord]) -> EvalResult:
+def _expectation_error(case: EvalCase) -> str | None:
+    """Reject malformed strict contracts before spending provider requests."""
+    expectations = case.expectations
+    groups = [expectations]
+    if "turns" in expectations:
+        turns = expectations["turns"]
+        count = sum(bool(turn.get("user")) for turn in case.conversation)
+        if (
+            not isinstance(turns, list)
+            or not turns
+            or len(turns) != count
+            or any(
+                not isinstance(turn, dict) or not turn or "turns" in turn
+                for turn in turns
+            )
+        ):
+            return "invalid_or_missing_turn_expectations"
+        groups.extend(turns)
+    for group in groups:
+        if "result_set" in group:
+            spec = group["result_set"]
+            if (
+                not isinstance(spec, dict)
+                or judge_result_set(spec, [], []).reason
+                == "invalid_result_set_expectation"
+            ):
+                return "invalid_result_set_expectation"
+    return None
+
+
+def _score_case(
+    case: EvalCase, records: list[TurnRecord], *, strict_answer: bool = False
+) -> EvalResult:
     """Score a completed eval case against its expectations."""
     expectations = case.expectations
     result = EvalResult(case=case)
+    if expectation_error := _expectation_error(case):
+        result.error = expectation_error
+        return result
     result.recovery_events = [
         event for record in records for event in record.recovery_events
     ]
 
+    result.requests = sum(record.requests for record in records)
+    failures = [record for record in records if record.error is not None]
+    if failures:
+        # A technical failure anywhere keeps a multi-turn run unscored.
+        failure = next(
+            (
+                record
+                for record in failures
+                if record.failure_category != "model_task_failure"
+            ),
+            failures[0],
+        )
+        result.error = failure.error
+        result.failure_category = failure.failure_category
+    turn_expectations = expectations.get("turns")
+    if turn_expectations is not None:
+        user_turns = [turn for turn in case.conversation if turn.get("user")]
+        if len(records) != len(user_turns):
+            result.error = result.error or "invalid_or_missing_turn_expectations"
+        for index, (turn, record) in enumerate(
+            zip(turn_expectations, records, strict=False)
+        ):
+            turn_case = EvalCase(
+                name=f"{case.name}/turn-{index + 1}",
+                description=case.description,
+                conversation=[user_turns[index]],
+                expectations=turn,
+            )
+            scored = _score_case(turn_case, [record], strict_answer=True)
+            if not record.answer.strip():
+                scored.error = scored.error or "missing_turn_answer"
+            result.turn_results.append(scored)
+
     all_tool_calls, all_tool_results, full_answer = _aggregate_records(records)
+    exact_result_set = expectations.get("result_set")
+    if exact_result_set is not None:
+        if not isinstance(exact_result_set, dict) or len(records) != 1:
+            result.result_set_score = ResultSetScore(
+                False, "invalid_result_set_expectation"
+            )
+        else:
+            result.result_set_score = judge_result_set(
+                exact_result_set, all_tool_calls, all_tool_results
+            )
 
     # Product contract judge
     contract = expectations.get("contract")
@@ -2807,7 +2948,7 @@ def _score_case(case: EvalCase, records: list[TurnRecord]) -> EvalResult:
     answer_excludes = expectations.get("answer_excludes", [])
     if answer_contains is not None:
         result.answer_score = judge_answer_quality(
-            answer_contains, answer_excludes, full_answer
+            answer_contains, answer_excludes, full_answer, require_all=strict_answer
         )
 
     return result
@@ -2861,6 +3002,41 @@ def _write_trace(
             "tool_results": all_tool_results,
             "answer": full_answer,
             "passed": result.passed,
+            "status": result.status,
+            "failure_category": result.failure_category,
+            "evaluation_contract": EVALUATION_CONTRACT,
+            "requests": result.requests,
+            "result_set": (
+                None
+                if result.result_set_score is None
+                else {
+                    "passed": result.result_set_score.passed,
+                    "reason": result.result_set_score.reason,
+                }
+            ),
+            "turns": [
+                {
+                    "turn": index + 1,
+                    "tool_calls": record.tool_calls,
+                    "tool_results": record.tool_results,
+                    "answer": record.answer,
+                    "error": record.error,
+                    "requests": record.requests,
+                    "passed": (
+                        result.turn_results[index].passed
+                        if index < len(result.turn_results)
+                        else None
+                    ),
+                    "result_set_reason": (
+                        score.reason
+                        if index < len(result.turn_results)
+                        and (score := result.turn_results[index].result_set_score)
+                        is not None
+                        else None
+                    ),
+                }
+                for index, record in enumerate(records)
+            ],
             "recovery_events": result.recovery_events,
             "contract": (
                 None
@@ -2890,10 +3066,9 @@ def _write_trace(
 
 _PLANNED_EVAL_ROLES = (
     "planner",
-    "simple_executor",
-    "complex_executor",
+    "executor",
     "synthesizer",
-    "fallback_executor",
+    "fallback",
 )
 
 
@@ -3026,6 +3201,7 @@ async def _run_planned_case(
                 return result
             record = TurnRecord()
             record_appended = False
+            terminals: list[dict[str, Any]] = []
             async for event in iter_planned_read_events(
                 prepared,
                 scope={},
@@ -3040,6 +3216,11 @@ async def _run_planned_case(
                     records.append(record)
                     record_appended = True
                 events.append(event)
+                if terminals:
+                    record.error = "planned_events_after_completion"
+                    record.failure_category = "harness_failure"
+                if event["type"] in {"error", "done"}:
+                    terminals.append(event)
                 if event["type"] == "tool_call":
                     record.tool_calls.append(
                         {"name": event["name"], "args": dict(event["args"])}
@@ -3048,6 +3229,48 @@ async def _run_planned_case(
                     record.tool_results.append(event["result"])
                 elif event["type"] == "text_chunk":
                     record.answer_chunks.append(str(event["content"]))
+                elif event["type"] == "error" and record.error is None:
+                    code = str(event.get("code", "planned_error"))
+                    record.error = code
+                    record.failure_category = terminal_failure_categories(event).get(
+                        code, "harness_failure"
+                    )
+            if not terminals:
+                record.error = "planned_stream_without_completion"
+                record.failure_category = "harness_failure"
+            elif len(terminals) == 1 and record.failure_category != "harness_failure":
+                terminal_event = terminals[0]
+                origins = (
+                    prepared.result.reason_origins
+                    if prepared.result is not None
+                    else {}
+                )
+                terminal_origin = None
+                if (
+                    prepared.result is not None
+                    and terminal_event.get("type") == "error"
+                ):
+                    first_task = next(iter(prepared.result.reasons), None)
+                    if first_task is not None and prepared.result.reasons[
+                        first_task
+                    ] == terminal_event.get("code"):
+                        terminal_origin = origins.get(first_task)
+                categories = terminal_failure_categories(
+                    terminal_event,
+                    terminal_origin=terminal_origin,
+                    reason_origins=origins,
+                )
+                if categories:
+                    reason, category = next(
+                        (
+                            (reason, category)
+                            for reason, category in categories.items()
+                            if category != "model_task_failure"
+                        ),
+                        next(iter(categories.items())),
+                    )
+                    record.error = reason
+                    record.failure_category = category
             if not record_appended:
                 records.append(record)
             if prepared.result is not None:
@@ -3062,7 +3285,11 @@ async def _run_planned_case(
         KeyError,
         OSError,
     ) as exc:
-        result = EvalResult(case=case, error=str(exc))
+        result = EvalResult(case=case, error=str(exc) or type(exc).__name__)
+        if isinstance(exc, InvalidPlanError):
+            result.failure_category = terminal_failure_categories(
+                {"type": "error", "code": exc.code}
+            ).get(exc.code)
         result.tool_calls, result.tool_results, result.answer = _aggregate_records(
             records
         )
@@ -3177,11 +3404,13 @@ async def _run_legacy_case(
     trace_writer: EvalTraceWriter | None = None,
     run_metadata: dict[str, Any] | None = None,
     recover_missing_tools: bool = False,
+    max_tool_iterations: int | None = None,
 ) -> EvalResult:
     """Run the established legacy eval path without planned orchestration."""
     system_prompt = build_system_prompt()
     history: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
     records: list[TurnRecord] = []
+    provider_messages = [Message(role="system", content=system_prompt)]
 
     try:
         _stream_line(stream, f"=== {case.name} ===")
@@ -3192,21 +3421,29 @@ async def _run_legacy_case(
             if user_text:
                 _stream_line(stream, f"user: {user_text}")
                 history.append({"role": "user", "content": user_text})
+                provider_messages.append(Message(role="user", content=user_text))
                 record = await _run_turn(
                     provider,
                     list(history),
                     tool_defs,
                     stream=stream,
                     recover_missing_tools=recover_missing_tools,
+                    max_tool_iterations=max_tool_iterations,
+                    provider_messages=provider_messages,
                 )
                 records.append(record)
                 if record.answer:
                     history.append({"role": "assistant", "content": record.answer})
+                    provider_messages.append(
+                        Message(role="assistant", content=record.answer)
+                    )
+                if record.error:
+                    break
         if stream is not None:
             stream.write("\n")
             stream.flush()
     except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
-        result = EvalResult(case=case, error=str(exc))
+        result = EvalResult(case=case, error=str(exc) or type(exc).__name__)
         result.recovery_events = [
             event for record in records for event in record.recovery_events
         ]
@@ -3241,8 +3478,11 @@ async def run_case(
     recover_missing_tools: bool = False,
     strategy: str = "legacy",
     role_overrides: dict[str, PlannedEvalRoleOverride] | None = None,
+    max_tool_iterations: int | None = None,
 ) -> EvalResult:
     """Run one case with either the legacy or planned evaluation strategy."""
+    if expectation_error := _expectation_error(case):
+        return EvalResult(case=case, error=expectation_error)
     if strategy == "planned":
         return await _run_planned_case(
             provider,
@@ -3263,6 +3503,7 @@ async def run_case(
         trace_writer=trace_writer,
         run_metadata=run_metadata,
         recover_missing_tools=recover_missing_tools,
+        max_tool_iterations=max_tool_iterations,
     )
 
 
@@ -3334,28 +3575,42 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
     lines: list[str] = []
     total = len(results)
     passed = sum(1 for r in results if r.passed)
+    scored_results = [
+        item for result in results for item in [result, *result.turn_results]
+    ]
     contract_pass = sum(
-        1 for r in results if r.contract_score is not None and r.contract_score.passed
+        1
+        for r in scored_results
+        if r.contract_score is not None and r.contract_score.passed
     )
-    contract_total = sum(1 for r in results if r.contract_score is not None)
+    contract_total = sum(1 for r in scored_results if r.contract_score is not None)
     tool_pass = sum(
-        1 for r in results if r.tool_score is not None and r.tool_score.passed
+        1 for r in scored_results if r.tool_score is not None and r.tool_score.passed
     )
-    tool_total = sum(1 for r in results if r.tool_score is not None)
+    tool_total = sum(1 for r in scored_results if r.tool_score is not None)
     result_pass = sum(
-        1 for r in results if r.result_score is not None and r.result_score.passed
+        1
+        for r in scored_results
+        if r.result_score is not None and r.result_score.passed
     )
-    result_total = sum(1 for r in results if r.result_score is not None)
+    result_total = sum(1 for r in scored_results if r.result_score is not None)
     answer_pass = sum(
-        1 for r in results if r.answer_score is not None and r.answer_score.passed
+        1
+        for r in scored_results
+        if r.answer_score is not None and r.answer_score.passed
     )
-    answer_total = sum(1 for r in results if r.answer_score is not None)
+    answer_total = sum(1 for r in scored_results if r.answer_score is not None)
+    exact_scores = [
+        item.result_set_score
+        for item in scored_results
+        if item.result_set_score is not None
+    ]
     sense_pass = sum(
         1
-        for r in results
+        for r in scored_results
         if r.contract_score is not None and r.contract_score.answer_sense.passed
     )
-    sense_total = sum(1 for r in results if r.contract_score is not None)
+    sense_total = sum(1 for r in scored_results if r.contract_score is not None)
 
     lines.append(f"{'Dimension':<20} {'Pass':>6} {'Total':>6} {'Rate':>8}")
     lines.append("-" * 42)
@@ -3374,8 +3629,17 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
     lines.append(
         f"{'Answer sense':<20} {sense_pass:>6} {sense_total:>6} {_pct(sense_pass, sense_total):>8}"
     )
+    if exact_scores:
+        exact_pass = sum(score.passed for score in exact_scores)
+        lines.append(
+            f"{'Exact result sets':<20} {exact_pass:>6} {len(exact_scores):>6} {_pct(exact_pass, len(exact_scores)):>8}"
+        )
     lines.append("-" * 42)
     lines.append(f"{'Overall':<20} {passed:>6} {total:>6} {_pct(passed, total):>8}")
+    lines.append(
+        f"Outcomes: {passed} PASS, {sum(r.status == 'fail' for r in results)} FAIL, "
+        f"{sum(r.status == 'unscored' for r in results)} UNSCORED ({EVALUATION_CONTRACT})"
+    )
 
     if verbose:
         failures = [r for r in results if not r.passed]
@@ -3386,6 +3650,25 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
                 lines.append(f"  {r.case.name}: {r.case.description}")
                 if r.error:
                     lines.append(f"    error: {r.error}")
+                if r.result_set_score and not r.result_set_score.passed:
+                    lines.append(f"    result set: {r.result_set_score.reason}")
+                for index, turn in enumerate(r.turn_results, start=1):
+                    if not turn.passed:
+                        lines.append(f"    turn {index}: failed")
+                        if turn.error:
+                            lines.append(f"      error: {turn.error}")
+                        if turn.result_set_score and not turn.result_set_score.passed:
+                            lines.append(
+                                f"      result set: {turn.result_set_score.reason}"
+                            )
+                        if turn.answer_score and not turn.answer_score.passed:
+                            lines.append(
+                                f"      answer: missing={turn.answer_score.missing}; "
+                                f"unexpected={turn.answer_score.unexpected}"
+                            )
+                        if turn.contract_score and not turn.contract_score.passed:
+                            for violation in turn.contract_score.violations:
+                                lines.append(f"      contract: {violation}")
                 if r.contract_score:
                     for violation in r.contract_score.violations:
                         lines.append(f"    contract: {violation}")

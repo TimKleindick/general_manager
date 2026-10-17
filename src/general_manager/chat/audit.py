@@ -10,16 +10,18 @@ from typing import Any
 
 from django.utils.module_loading import import_string
 
+from general_manager.chat.audit_identity import (
+    planned_audit_lineage_id as planned_audit_lineage_id,
+)
 from general_manager.chat.settings import get_chat_settings
 
 
 _PLANNED_ROLES = frozenset(
     (
         "planner",
-        "simple_executor",
-        "complex_executor",
+        "executor",
         "synthesizer",
-        "fallback_executor",
+        "fallback",
     )
 )
 _PLANNED_MATCH_SOURCES = frozenset(
@@ -43,6 +45,7 @@ _PLANNED_PROGRESS = frozenset(
         "no_progress",
         "task_blocked",
         "task_resolved",
+        "task_awaiting_clarification",
     )
 )
 _PLANNED_EVENT_FIELDS = {
@@ -72,6 +75,8 @@ _PLANNED_EVENT_FIELDS = {
             "evidence_counts",
             "coverage",
             "terminal_reason",
+            "reason_origin",
+            "validation_cycle",
         )
     ),
     "route": frozenset(
@@ -131,7 +136,7 @@ _PLANNED_EVENT_FIELDS = {
     ),
     "evidence": frozenset(("plan_id", "task_id", "evidence_counts", "progress")),
     "coverage": frozenset(("plan_id", "coverage", "terminal_reason")),
-    "terminal": frozenset(("plan_id", "coverage", "terminal_reason")),
+    "terminal": frozenset(("plan_id", "coverage", "terminal_reason", "reason_origin")),
 }
 _PLANNED_REASONS = frozenset(
     (
@@ -142,6 +147,7 @@ _PLANNED_REASONS = frozenset(
         "deadline_exceeded",
         "provider_failed",
         "synthesis_failed",
+        "clarification_required",
     )
 )
 
@@ -223,20 +229,6 @@ def _planned_nonnegative_int(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
     return value
-
-
-def _planned_identifier(value: object) -> str | None:
-    if not isinstance(value, str) or not value or len(value) > 128:
-        return None
-    return value
-
-
-def planned_audit_lineage_id(value: object) -> str | None:
-    """Return a deterministic opaque audit identifier for planner-controlled IDs."""
-    identifier = _planned_identifier(value)
-    if identifier is None:
-        return None
-    return hashlib.sha256(identifier.encode()).hexdigest()
 
 
 def _planned_count_mapping(value: object, allowed: set[str]) -> dict[str, int] | None:
@@ -362,6 +354,40 @@ def _sanitize_planned_audit_payload(
         and payload.get("terminal_reason") in _PLANNED_REASONS
     ):
         sanitized["terminal_reason"] = payload["terminal_reason"]
+    if (
+        "reason_origin" in allowed
+        and isinstance(payload.get("reason_origin"), str)
+        and payload["reason_origin"]
+        in {
+            "model_declared_block",
+            "provider_exception",
+            "scheduler",
+            "synthesizer",
+            "scheduler_validation_cycle",
+        }
+    ):
+        sanitized["reason_origin"] = payload["reason_origin"]
+    cycle = payload.get("validation_cycle")
+    if "validation_cycle" in allowed and isinstance(cycle, dict):
+        hashes = ("action_sha256", "feedback_sha256", "evidence_sha256")
+        if (
+            set(cycle)
+            == {*hashes, "first_pass", "repeated_pass", "feedback_delivered_pass"}
+            and all(
+                isinstance(cycle.get(key), str)
+                and len(cycle[key]) == 64
+                and all(c in "0123456789abcdef" for c in cycle[key])
+                for key in hashes
+            )
+            and type(cycle.get("first_pass")) is int
+            and type(cycle.get("repeated_pass")) is int
+            and type(cycle.get("feedback_delivered_pass")) is int
+            and 0
+            < cycle["first_pass"]
+            < cycle["feedback_delivered_pass"]
+            <= cycle["repeated_pass"]
+        ):
+            sanitized["validation_cycle"] = dict(cycle)
     return sanitized
 
 

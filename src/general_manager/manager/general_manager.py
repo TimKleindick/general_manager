@@ -26,6 +26,7 @@ from general_manager.manager.meta import (
     _validate_rule_templates_before_public_use,
 )
 from general_manager.manager.bulk_create import CreateManyBatchResult
+from general_manager.utils.executable_contract import executable_signature
 
 
 class UnsupportedUnionOperandError(TypeError):
@@ -879,3 +880,17 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         if set(identification) == {"id"}:
             return identification["id"]
         return dict(identification)
+
+
+# Retain the defining common functions before any manager or API customization.
+_COMMON_MANAGER_ALL = GeneralManager.__dict__["all"].__func__
+_COMMON_MANAGER_FILTER = GeneralManager.__dict__["filter"].__func__
+_COMMON_MANAGER_GETATTR = GeneralManager.__dict__["__getattr__"]
+_COMMON_MANAGER_EXECUTABLES = tuple(
+    (function, executable_signature(function))
+    for function in (
+        _COMMON_MANAGER_ALL,
+        _COMMON_MANAGER_FILTER,
+        _COMMON_MANAGER_GETATTR,
+    )
+)

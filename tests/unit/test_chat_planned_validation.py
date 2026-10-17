@@ -41,7 +41,34 @@ def requirement(
         "kind": kind,
         "description": description,
         "operation": operation,
+        **(
+            {
+                "binding": {
+                    "source_requirement_ids": [
+                        "aggregate"
+                        if operation in {"difference", "ratio", "percentage"}
+                        else "query_1"
+                    ],
+                    "value_path": None
+                    if operation in {"difference", "ratio", "percentage"}
+                    else []
+                    if operation == "count"
+                    else ["value"],
+                    "group_by": [],
+                    "unit_path": None,
+                }
+            }
+            if kind == "calculation"
+            else {}
+        ),
     }
+
+
+def calculation_requirements(operation: str) -> list[dict[str, object]]:
+    sources = [requirement("query_1")]
+    if operation in {"difference", "ratio", "percentage"}:
+        sources.append(requirement("aggregate", kind="calculation", operation="sum"))
+    return [*sources, requirement(kind="calculation", operation=operation)]
 
 
 def task(
@@ -170,7 +197,7 @@ def test_task_requires_every_structural_field(missing: str) -> None:
 
 def test_task_rejects_unknown_structural_keys() -> None:
     raw_task = task()
-    raw_task["provider_role"] = "simple_executor"
+    raw_task["provider_role"] = "executor"
 
     with pytest.raises(PlanValidationError):
         validate_plan(plan([raw_task]))
@@ -335,10 +362,18 @@ def test_requirement_rejects_unknown_structural_keys() -> None:
 def test_supported_requirement_kinds_are_preserved(kind: str) -> None:
     operation = "sum" if kind == "calculation" else None
     validated = validate_plan(
-        plan([task(requirements=[requirement(kind=kind, operation=operation)])])
+        plan(
+            [
+                task(
+                    requirements=calculation_requirements("sum")
+                    if kind == "calculation"
+                    else [requirement(kind=kind, operation=operation)]
+                )
+            ]
+        )
     )
 
-    assert validated.tasks[0].requirements[0].kind == kind
+    assert validated.tasks[0].requirements[-1].kind == kind
 
 
 @pytest.mark.parametrize("operation", CALCULATION_OPERATIONS)
@@ -346,12 +381,10 @@ def test_only_allow_list_calculation_operations_are_supported(
     operation: str,
 ) -> None:
     validated = validate_plan(
-        plan(
-            [task(requirements=[requirement(kind="calculation", operation=operation)])]
-        )
+        plan([task(requirements=calculation_requirements(operation))])
     )
 
-    assert validated.tasks[0].requirements[0].operation == operation
+    assert validated.tasks[0].requirements[-1].operation == operation
 
 
 @pytest.mark.parametrize(
@@ -418,6 +451,88 @@ def test_invalid_plan_error_has_stable_public_semantics() -> None:
     assert caught.value.code == "invalid_plan"
     assert str(caught.value) == "invalid_plan"
     assert caught.value.detail
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "path", "expected_fragment"),
+    [
+        ("operation", "query", "$.tasks[0].requirements[0].operation", "null"),
+        ("kind", "clarification", "$.tasks[0].requirements[0].kind", "query"),
+        ("description", " ", "$.tasks[0].requirements[0].description", "non-empty"),
+        (
+            "requirement_id",
+            None,
+            "$.tasks[0].requirements[0].requirement_id",
+            "non-empty",
+        ),
+    ],
+)
+def test_requirement_rejections_identify_the_exact_field_and_expected_form(
+    field: str, value: object, path: str, expected_fragment: str
+) -> None:
+    raw_requirement = requirement()
+    raw_requirement[field] = value
+    with pytest.raises(PlanValidationError) as caught:
+        validate_plan(plan([task(requirements=[raw_requirement])]))
+    assert caught.value.path == path
+    assert expected_fragment in caught.value.expected
+    assert path in caught.value.detail
+    assert str(caught.value) == "invalid_plan"
+
+
+@pytest.mark.parametrize("operation", [None, "add", "aggregate", 42])
+def test_calculation_rejection_lists_allowed_operations(operation: object) -> None:
+    raw_requirement = requirement(kind="calculation")
+    raw_requirement["operation"] = operation
+    with pytest.raises(PlanValidationError) as caught:
+        validate_plan(plan([task(requirements=[raw_requirement])]))
+    assert caught.value.path == "$.tasks[0].requirements[0].operation"
+    for allowed in CALCULATION_OPERATIONS:
+        assert allowed in caught.value.expected
+
+
+@pytest.mark.parametrize(
+    ("bad_task", "path", "expected_fragment"),
+    [
+        (
+            task(completion_criteria=["Return matching records."]),
+            "$.tasks[0].completion_criteria",
+            "requirement_1",
+        ),
+        (
+            task(completion_criteria=["other_task_requirement"]),
+            "$.tasks[0].completion_criteria",
+            "own",
+        ),
+        (task(depends_on=["nonexistent"]), "$.tasks[0].depends_on[0]", "earlier root"),
+        (
+            task(routing_features=["has_dependency"]),
+            "$.tasks[0].routing_features",
+            "[]",
+        ),
+    ],
+)
+def test_reference_and_routing_errors_include_path_and_exact_expected_form(
+    bad_task: dict[str, object], path: str, expected_fragment: str
+) -> None:
+    with pytest.raises(PlanValidationError) as caught:
+        validate_plan(plan([bad_task]))
+    assert caught.value.path == path
+    assert expected_fragment in caught.value.expected
+
+
+def test_missing_field_and_nested_non_json_values_have_precise_paths() -> None:
+    missing = requirement()
+    del missing["operation"]
+    with pytest.raises(PlanValidationError) as caught:
+        validate_plan(plan([task(requirements=[missing])]))
+    assert caught.value.path == "$.tasks[0].requirements[0].operation"
+    assert "required" in caught.value.expected
+    payload = plan([task(objective=float("nan"))])
+    with pytest.raises(PlanValidationError) as caught:
+        validate_plan(payload)
+    assert caught.value.path == "$.tasks[0].objective"
+    assert "finite" in caught.value.expected
 
 
 def test_dynamic_children_are_bounded_owned_and_non_recursive() -> None:
@@ -713,3 +828,15 @@ def test_dynamic_children_limit_is_cumulative_across_repeated_calls() -> None:
             child_payload(task("child_3"), task("child_4")),
             {parent, *first},
         )
+
+
+def test_model_calculation_cannot_omit_or_invent_its_binding():
+    requirements = calculation_requirements("sum")
+    requirements[-1].pop("binding")
+    with pytest.raises(PlanValidationError) as error:
+        validate_plan(plan([task(requirements=requirements)]))
+    assert error.value.path.endswith(".binding")
+    requirements = calculation_requirements("sum")
+    requirements[-1]["binding"]["source_requirement_ids"] = ["foreign"]
+    with pytest.raises(PlanValidationError):
+        validate_plan(plan([task(requirements=requirements)]))

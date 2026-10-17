@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
+from copy import deepcopy
+from graphql import parse
 from unittest.mock import patch
 
 import graphene
 import pytest
+from tests.utils.chat_schema import registered_schema, install_registered_schema
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
 
@@ -30,9 +34,32 @@ class _RecordingSchema:
         self.result = result
         self.calls: list[dict[str, object]] = []
 
-    def execute(self, query_text: str, context_value=None):  # type: ignore[no-untyped-def]
-        self.calls.append({"query": query_text, "context": context_value})
-        return self.result
+    @property
+    def graphql_schema(self):
+        return registered_schema().graphql_schema
+
+    def execute(
+        self, query_text: str, context_value=None, variable_values=None, middleware=None
+    ):  # type: ignore[no-untyped-def]
+        self.calls.append(
+            {
+                "query": " ".join(query_text.split()),
+                "context": context_value,
+                "variables": variable_values,
+            }
+        )
+        result = deepcopy(self.result)
+        if result.data and variable_values:
+            root = parse(query_text).definitions[0].selection_set.selections[0]
+            args = {
+                item.name.value: variable_values[item.value.name.value]
+                for item in root.arguments
+            }
+            if "page" in args and "pageSize" in args:
+                page, size = args["page"], args["pageSize"]
+                for value in result.data.values():
+                    value["items"] = value["items"][(page - 1) * size : page * size]
+        return result
 
 
 class ChatQueryToolTests(SimpleTestCase):
@@ -48,12 +75,28 @@ class ChatQueryToolTests(SimpleTestCase):
         class HiddenManager(GeneralManager):
             chat_exposed = False
 
+        class MaterialType(graphene.ObjectType):
+            name = graphene.String()
+
+        class PartType(graphene.ObjectType):
+            name = graphene.String()
+            material = graphene.Field(MaterialType)
+
+        class PartFilter(graphene.InputObjectType):
+            name__icontains = graphene.String()
+            density__gt = graphene.Float()
+            material__name = graphene.String()
+            active = graphene.Boolean()
+
+        GraphQL.graphql_type_registry = {"PartManager": PartType}
+        GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
         self.PartManager = PartManager
         self.HiddenManager = HiddenManager
         GraphQL.manager_registry = {
             "PartManager": PartManager,
             "HiddenManager": HiddenManager,
         }
+        install_registered_schema()
 
     def tearDown(self) -> None:
         GraphQL.reset_registry()
@@ -82,7 +125,7 @@ class ChatQueryToolTests(SimpleTestCase):
 
         result = query(
             manager="PartManager",
-            filters={"name__icontains": "st", "active": True},
+            filters={"name_Icontains": "st", "active": True},
             fields=["name", {"material": ["name"]}],
             limit=2,
             offset=1,
@@ -96,12 +139,16 @@ class ChatQueryToolTests(SimpleTestCase):
             ],
             "total_count": 5,
             "has_more": True,
+            "complete": False,
         }
         assert schema.calls[0]["context"] is context
         query_text = str(schema.calls[0]["query"])
         assert "partmanagerList" in query_text
-        assert 'filter: {name_Icontains: "st", active: true}' in query_text
-        assert "pageSize: 3" in query_text
+        assert {"name_Icontains": "st", "active": True} in schema.calls[0][
+            "variables"
+        ].values()
+        assert 2 in schema.calls[0]["variables"].values()
+        assert len(schema.calls) == 2
         assert "items { name material { name } }" in query_text
         assert "pageInfo { totalCount }" in query_text
 
@@ -197,6 +244,7 @@ class ChatQueryToolTests(SimpleTestCase):
             name = graphene.String()
 
         GraphQL.graphql_type_registry = {"PartManager": PartType}
+        install_registered_schema()
 
         with patch("general_manager.chat.tools.query") as query_mock:
             with pytest.raises(ValueError, match=r"^limit must be a positive integer$"):
@@ -214,12 +262,13 @@ class ChatQueryToolTests(SimpleTestCase):
             name = graphene.String()
 
         GraphQL.graphql_type_registry = {"PartManager": PartType}
+        install_registered_schema()
 
         tools = {tool["name"]: tool for tool in get_tool_definitions()}
         properties = tools["query_partmanager"]["input_schema"]["properties"]
 
-        assert properties["limit"] == {"type": "integer", "minimum": 1}
-        assert properties["offset"] == {"type": "integer", "minimum": 0}
+        assert properties["limit"]["minimum"] == 1
+        assert properties["offset"]["minimum"] == 0
 
     def test_query_preserves_graphql_filter_keys_that_are_already_shaped(self) -> None:
         schema = _RecordingSchema(
@@ -241,8 +290,7 @@ class ChatQueryToolTests(SimpleTestCase):
         )
 
         assert result["data"] == [{"name": "Bolt"}]
-        query_text = str(schema.calls[0]["query"])
-        assert "density_Gt: 7" in query_text
+        assert {"density_Gt": 7} in schema.calls[0]["variables"].values()
 
     def test_query_preserves_indexed_graphql_filter_keys_that_are_already_shaped(
         self,
@@ -274,10 +322,9 @@ class ChatQueryToolTests(SimpleTestCase):
         )
 
         assert result["data"] == [{"name": "Bolt"}]
-        query_text = str(schema.calls[0]["query"])
-        assert "density_Gt: 7" in query_text
+        assert {"density_Gt": 7} in schema.calls[0]["variables"].values()
 
-    def test_query_translates_relation_lookup_filters_to_graphene_names(self) -> None:
+    def test_query_uses_native_relation_lookup_filters(self) -> None:
         schema = _RecordingSchema(
             _Result(
                 data={
@@ -292,15 +339,14 @@ class ChatQueryToolTests(SimpleTestCase):
 
         result = query(
             manager="PartManager",
-            filters={"material__name": "Steel"},
+            filters={"material_Name": "Steel"},
             fields=["name"],
         )
 
         assert result["data"] == [{"name": "Bolt"}]
-        query_text = str(schema.calls[0]["query"])
-        assert 'material_Name: "Steel"' in query_text
+        assert {"material_Name": "Steel"} in schema.calls[0]["variables"].values()
 
-    def test_query_normalizes_single_underscore_lookup_when_schema_filter_exists(
+    def test_query_uses_exact_native_operator_name(
         self,
     ) -> None:
         class PartType(graphene.ObjectType):
@@ -325,13 +371,13 @@ class ChatQueryToolTests(SimpleTestCase):
 
         result = query(
             manager="PartManager",
-            filters={"density_gt": 5},
+            filters={"density_Gt": 5},
             fields=["name"],
         )
 
         assert result["data"] == [{"name": "Bolt"}]
         query_text = str(schema.calls[0]["query"])
-        assert "density_Gt: 5" in query_text
+        assert {"density_Gt": 5} in schema.calls[0]["variables"].values()
         assert "densityGt: 5" not in query_text
 
     def test_query_expands_wildcard_field_selection_to_indexed_scalar_fields(
@@ -362,7 +408,7 @@ class ChatQueryToolTests(SimpleTestCase):
 
         assert result["data"] == [{"name": "Bolt", "density": 5.0}]
         query_text = str(schema.calls[0]["query"])
-        assert "items { density name }" in query_text
+        assert "items { name density }" in query_text
         assert "*" not in query_text
 
     def test_query_rejects_field_selection_injection(self) -> None:
@@ -372,7 +418,7 @@ class ChatQueryToolTests(SimpleTestCase):
         GraphQL.graphql_type_registry = {"PartManager": PartType}
         GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="Invalid chat query field"):
+        with pytest.raises(ValueError, match="Unknown GraphQL field"):
             query(
                 manager="PartManager",
                 filters={},
@@ -388,7 +434,7 @@ class ChatQueryToolTests(SimpleTestCase):
         GraphQL.graphql_type_registry = {"PartManager": PartType}
         GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="Unknown chat query field: missing"):
+        with pytest.raises(ValueError, match="Unknown GraphQL field"):
             query(manager="PartManager", filters={}, fields=["missing"])
 
     def test_query_rejects_unknown_filter_when_schema_filter_exists(self) -> None:
@@ -402,7 +448,7 @@ class ChatQueryToolTests(SimpleTestCase):
         GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
         GraphQL._schema = _RecordingSchema(_Result(data={}))  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="Unknown chat query filter: status"):
+        with pytest.raises(ValueError, match="is not defined"):
             query(manager="PartManager", filters={"status": "active"}, fields=["name"])
 
     def test_query_rejects_scalar_filter_mapping_before_execute(self) -> None:
@@ -417,7 +463,7 @@ class ChatQueryToolTests(SimpleTestCase):
         GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
         GraphQL._schema = schema  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="does not accept nested filters"):
+        with pytest.raises(ValueError, match="cannot represent"):
             query(
                 manager="PartManager",
                 filters={"name": {"unknown": "x"}},
@@ -438,10 +484,10 @@ class ChatQueryToolTests(SimpleTestCase):
         GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
         GraphQL._schema = schema  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="does not accept nested filters"):
+        with pytest.raises(ValueError, match="cannot represent"):
             query(
                 manager="PartManager",
-                filters={"name__in": [{"bad } injected {": "x"}]},
+                filters={"name_In": [{"bad } injected {": "x"}]},
                 fields=["name"],
             )
 
@@ -462,7 +508,7 @@ class ChatQueryToolTests(SimpleTestCase):
         GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
         GraphQL._schema = schema  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="Unknown chat query filter"):
+        with pytest.raises(ValueError, match="is not defined"):
             query(
                 manager="PartManager",
                 filters={"material": {"bad } injected {": "x"}},
@@ -488,7 +534,7 @@ class ChatQueryToolTests(SimpleTestCase):
         GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
         GraphQL._schema = schema  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="Unknown chat query filter: status"):
+        with pytest.raises(ValueError, match="is not defined"):
             query(
                 manager="PartManager",
                 filters={"material": {"status": "active"}},
@@ -512,7 +558,7 @@ class ChatQueryToolTests(SimpleTestCase):
         GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
         GraphQL._schema = schema  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="does not accept nested filters"):
+        with pytest.raises(ValueError, match="cannot represent"):
             query(
                 manager="PartManager",
                 filters={"material": {"name": {"unknown": "x"}}},
@@ -538,10 +584,10 @@ class ChatQueryToolTests(SimpleTestCase):
         GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
         GraphQL._schema = schema  # type: ignore[assignment]
 
-        with pytest.raises(ValueError, match="does not accept nested filters"):
+        with pytest.raises(ValueError, match="cannot represent"):
             query(
                 manager="PartManager",
-                filters={"material": {"name__in": [{"bad } injected {": "x"}]}},
+                filters={"material": {"name_In": [{"bad } injected {": "x"}]}},
                 fields=["name"],
             )
 
@@ -578,7 +624,7 @@ class ChatQueryToolTests(SimpleTestCase):
         )
 
         assert result["data"] == [{"name": "Bolt"}]
-        assert 'filter: {material: {name: "Steel"}}' in str(schema.calls[0]["query"])
+        assert {"material": {"name": "Steel"}} in schema.calls[0]["variables"].values()
 
     def test_query_allows_valid_nested_relation_selection(self) -> None:
         class MaterialType(graphene.ObjectType):
@@ -614,31 +660,11 @@ class ChatQueryToolTests(SimpleTestCase):
         assert result["data"] == [{"name": "Bolt", "material": {"name": "Steel"}}]
         assert "material { name }" in str(schema.calls[0]["query"])
 
-    def test_query_rejects_nested_wildcard_field_selection_before_execute(
-        self,
-    ) -> None:
-        class MaterialType(graphene.ObjectType):
-            name = graphene.String()
-
-        class PartType(graphene.ObjectType):
-            name = graphene.String()
-            material = graphene.Field(MaterialType)
-
-        GraphQL.graphql_type_registry = {
-            "PartManager": PartType,
-            "MaterialManager": MaterialType,
-        }
-        GraphQL.manager_registry.setdefault("MaterialManager", self.PartManager)
+    def test_query_rejects_python_filter_alias(self) -> None:
         schema = _RecordingSchema(_Result(data={}))
-        GraphQL._schema = schema  # type: ignore[assignment]
-
-        with pytest.raises(ValueError, match="Invalid chat query field"):
-            query(
-                manager="PartManager",
-                filters={},
-                fields=[{"material": ["*"]}],
-            )
-
+        GraphQL._schema = schema
+        with pytest.raises(ValueError, match="is not defined"):
+            query(manager="PartManager", filters={"density__gt": 5}, fields=["name"])
         assert schema.calls == []
 
     @override_settings(
@@ -679,9 +705,10 @@ class ChatQueryToolTests(SimpleTestCase):
             "data": [{"name": "Screw"}, {"name": "Nut"}],
             "total_count": 9,
             "has_more": True,
+            "complete": False,
         }
-        query_text = str(schema.calls[0]["query"])
-        assert "pageSize: 3" in query_text
+        assert 2 in schema.calls[0]["variables"].values()
+        assert len(schema.calls) == 2
 
     @override_settings(
         GENERAL_MANAGER={
@@ -694,6 +721,15 @@ class ChatQueryToolTests(SimpleTestCase):
     )
     def test_query_ignores_boolean_planned_statement_timeout(self) -> None:
         events: list[str] = []
+        wrappers = []
+
+        @contextmanager
+        def execute_wrapper(wrapper):
+            wrappers.append(wrapper)
+            try:
+                yield
+            finally:
+                assert wrappers.pop() is wrapper
 
         schema = _RecordingSchema(
             _Result(
@@ -707,9 +743,14 @@ class ChatQueryToolTests(SimpleTestCase):
         )
         original_execute = schema.execute
 
-        def execute(query_text: str, context_value=None):  # type: ignore[no-untyped-def]
+        def execute(
+            query_text: str, context_value=None, variable_values=None, middleware=None
+        ):  # type: ignore[no-untyped-def]
             events.append("execute")
-            return original_execute(query_text, context_value=context_value)
+            cursor.execute("SELECT query_rows", [])
+            return original_execute(
+                query_text, context_value=context_value, variable_values=variable_values
+            )
 
         schema.execute = execute  # type: ignore[method-assign]
         GraphQL._schema = schema  # type: ignore[assignment]
@@ -719,8 +760,21 @@ class ChatQueryToolTests(SimpleTestCase):
                 self.calls: list[tuple[str, list[int]]] = []
 
             def execute(self, sql: str, params: list[int]) -> None:
-                events.append("set_timeout")
-                self.calls.append((sql, params))
+                def actual(sql, params, many, context):
+                    events.append(
+                        "set_timeout" if sql.startswith("SET LOCAL") else "sql"
+                    )
+                    self.calls.append((sql, params))
+
+                for wrapper in reversed(wrappers):
+                    previous = actual
+
+                    def actual(
+                        sql, params, many, context, hook=wrapper, inner=previous
+                    ):
+                        return hook(inner, sql, params, many, context)
+
+                actual(sql, params, False, {})
 
             def __enter__(self) -> "_Cursor":
                 return self
@@ -743,7 +797,11 @@ class ChatQueryToolTests(SimpleTestCase):
         with (
             patch(
                 "general_manager.chat.tools.connection",
-                SimpleNamespace(vendor="postgresql", cursor=lambda: cursor),
+                SimpleNamespace(
+                    vendor="postgresql",
+                    cursor=lambda: cursor,
+                    execute_wrapper=execute_wrapper,
+                ),
             ),
             patch("django.db.transaction.atomic", return_value=_Atomic()),
         ):
@@ -755,5 +813,15 @@ class ChatQueryToolTests(SimpleTestCase):
             )
 
         assert result["data"] == [{"name": "Bolt"}]
-        assert events == ["atomic_enter", "set_timeout", "execute", "atomic_exit"]
-        assert cursor.calls == [("SET LOCAL statement_timeout = %s", [2000])]
+        assert events == [
+            "execute",
+            "atomic_enter",
+            "set_timeout",
+            "sql",
+            "atomic_exit",
+        ]
+        assert cursor.calls == [
+            ("SET LOCAL statement_timeout = %s", [2000]),
+            ("SELECT query_rows", []),
+        ]
+        assert not wrappers

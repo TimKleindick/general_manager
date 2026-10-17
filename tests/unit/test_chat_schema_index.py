@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import graphene
 import pytest
+from tests.utils.chat_schema import install_registered_schema
 
 from general_manager.api.graphql import GraphQL
 from general_manager.chat.schema_index import (
@@ -45,6 +46,7 @@ def test_build_schema_index_cache_key_changes_when_registry_contents_change() ->
     GraphQL.manager_registry = {"PartManager": PartManager}  # type: ignore[assignment]
     GraphQL.graphql_type_registry = {"PartManager": PartType}
 
+    install_registered_schema()
     first = build_schema_index()
 
     class ProjectManager:
@@ -58,6 +60,7 @@ def test_build_schema_index_cache_key_changes_when_registry_contents_change() ->
     GraphQL.manager_registry["ProjectManager"] = ProjectManager  # type: ignore[assignment]
     GraphQL.graphql_type_registry["ProjectManager"] = ProjectType
 
+    install_registered_schema()
     second = build_schema_index()
 
     assert "ProjectManager" not in first
@@ -94,17 +97,21 @@ def test_build_schema_index_cache_key_changes_when_graphql_metadata_changes() ->
     }
     GraphQL.graphql_filter_type_registry = {"PartManager": PartFilter}
 
+    install_registered_schema()
     first = build_schema_index()["PartManager"]
 
-    PartType.__doc__ = "Updated part summary."
+    PartType._meta.__dict__["description"] = "Updated part summary."
     PartType._meta.fields["sku"] = graphene.Field(graphene.String)
     PartType._meta.fields["material"] = graphene.Field(MaterialType)
     PartFilter._meta.fields["sku"] = graphene.InputField(graphene.String)
 
+    install_registered_schema()
     second = build_schema_index()["PartManager"]
 
     assert first["description"] == "Inventory part."
     assert second["description"] == "Updated part summary."
     assert second["fields"] == ["name", "sku"]
-    assert second["relations"] == [{"name": "material", "target": "MaterialManager"}]
+    assert second["relations"] == [
+        {"name": "material", "target": "MaterialManager", "path": ["material"]}
+    ]
     assert second["filters"] == ["name", "sku"]

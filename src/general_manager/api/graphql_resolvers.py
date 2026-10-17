@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
-from types import UnionType
+from types import FunctionType, MethodType, UnionType
 from typing import (
     Awaitable,
     Annotated,
@@ -30,6 +30,7 @@ from typing import (
     get_args,
     get_origin,
 )
+from weakref import WeakKeyDictionary
 
 from graphql import GraphQLError, OperationType
 from graphql.language.ast import FieldNode, FragmentSpreadNode, InlineFragmentNode
@@ -40,7 +41,12 @@ from general_manager.bucket._materialized_bucket import MaterializedBucket
 from general_manager.bucket.group_bucket import GroupBucket
 from general_manager.bucket._ordering import sort_items
 from general_manager.bucket.request_bucket import RequestBucket
-from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.general_manager import (
+    GeneralManager,
+    _COMMON_MANAGER_ALL,
+    _COMMON_MANAGER_FILTER,
+    _COMMON_MANAGER_EXECUTABLES,
+)
 from general_manager.manager.group_manager import GroupManager
 from general_manager.measurement.measurement import Measurement
 from general_manager.api.property import GraphQLProperty
@@ -65,6 +71,10 @@ from general_manager.api.graphql_ordering import (
 )
 from general_manager.utils.filter_parser import UnknownInputFieldError
 from general_manager.utils.type_checks import safe_issubclass
+from general_manager.utils.executable_contract import (
+    executable_matches,
+    executable_signature,
+)
 
 if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
@@ -119,6 +129,25 @@ class UnsupportedGroupedFieldError(GraphQLError):
     @classmethod
     def field(cls, field_name: str) -> "UnsupportedGroupedFieldError":
         return cls(field_name)
+
+
+_FIELD_RESOLVER_BINDINGS: WeakKeyDictionary[FunctionType, tuple[str, str, object]] = (
+    WeakKeyDictionary()
+)
+_LIST_RESOLVER_BINDINGS: WeakKeyDictionary[
+    FunctionType,
+    tuple[
+        BaseListGetter,
+        type[GeneralManager],
+        ManagerFilterNormalizer | None,
+        GroupingValidator | None,
+        object,
+    ],
+] = WeakKeyDictionary()
+_ROOT_POPULATION_OWNERS: WeakKeyDictionary[
+    FunctionType,
+    tuple[type[GeneralManager], object, object, object, object, object, object],
+] = WeakKeyDictionary()
 
 
 def _ensure_as_of_compatible(value: object) -> None:
@@ -1304,6 +1333,77 @@ def resolve_measurement_output(
     return measurement_to_graphql_payload(value, target_unit)
 
 
+_COMMON_VALUE_PERMISSION = resolve_with_read_permission
+_COMMON_VALUE_AS_OF = _ensure_as_of_compatible
+_COMMON_MEASUREMENT_OUTPUT = resolve_measurement_output
+_COMMON_MEASUREMENT_PAYLOAD = measurement_to_graphql_payload
+_COMMON_VALUE_EXECUTABLES = tuple(
+    (function, executable_signature(function))
+    for function in (
+        _COMMON_VALUE_PERMISSION,
+        _COMMON_VALUE_AS_OF,
+        _COMMON_MEASUREMENT_OUTPUT,
+        _COMMON_MEASUREMENT_PAYLOAD,
+    )
+)
+
+
+def field_value_source(resolver: object) -> tuple[str, str] | None:
+    """Only the exact generated getter can attest its attribute/transform."""
+    if not isinstance(resolver, FunctionType):
+        return None
+    binding = _FIELD_RESOLVER_BINDINGS.get(resolver)
+    if (
+        binding is None
+        or not executable_matches(resolver, binding[2])
+        or resolver.__closure__ is None
+        or resolve_with_read_permission is not _COMMON_VALUE_PERMISSION
+        or _ensure_as_of_compatible is not _COMMON_VALUE_AS_OF
+        or not all(
+            executable_matches(function, signature)
+            for function, signature in _COMMON_VALUE_EXECUTABLES[:2]
+        )
+        or not all(
+            executable_matches(function, signature)
+            for function, signature in _COMMON_FIELD_FACTORIES
+        )
+        or (
+            binding[1] == "measurement"
+            and (
+                resolve_measurement_output is not _COMMON_MEASUREMENT_OUTPUT
+                or measurement_to_graphql_payload is not _COMMON_MEASUREMENT_PAYLOAD
+                or not all(
+                    executable_matches(function, signature)
+                    for function, signature in _COMMON_VALUE_EXECUTABLES[2:]
+                )
+            )
+        )
+    ):
+        return None
+
+    captures = dict(
+        zip(
+            resolver.__code__.co_freevars,
+            (cell.cell_contents for cell in resolver.__closure__),
+            strict=True,
+        )
+    )
+    if binding[1] == "identity":
+        # Member-filtered collections do not attest an unchanged attribute value.
+        if (
+            captures.keys() != {"authorize_manager_collection", "field_name"}
+            or captures["authorize_manager_collection"] is not False
+            or captures["field_name"] != binding[0]
+        ):
+            return None
+    elif binding[1] == "measurement":
+        if captures != {"field_name": binding[0]}:
+            return None
+    else:
+        return None
+    return binding[:2]
+
+
 def create_measurement_resolver(field_name: str) -> Resolver:
     """
     Return a resolver for a :class:`~general_manager.measurement.Measurement` field.
@@ -1336,6 +1436,11 @@ def create_measurement_resolver(field_name: str) -> Resolver:
             resolve_measurement,
         )
 
+    _FIELD_RESOLVER_BINDINGS[cast(FunctionType, resolver)] = (
+        field_name,
+        "measurement",
+        executable_signature(resolver),
+    )
     return resolver
 
 
@@ -1379,7 +1484,19 @@ def create_normal_resolver(
             resolve_normal,
         )
 
+    if authorize_manager_collection is False:
+        _FIELD_RESOLVER_BINDINGS[cast(FunctionType, resolver)] = (
+            field_name,
+            "identity",
+            executable_signature(resolver),
+        )
     return resolver
+
+
+_COMMON_FIELD_FACTORIES = tuple(
+    (function, executable_signature(function))
+    for function in (create_normal_resolver, create_measurement_resolver)
+)
 
 
 def create_list_resolver(
@@ -1718,7 +1835,136 @@ def create_list_resolver(
             "pageInfo": page_info,
         }
 
+    _LIST_RESOLVER_BINDINGS[cast(FunctionType, resolver)] = (
+        base_getter,
+        fallback_manager_class,
+        filter_normalizer,
+        grouping_validator,
+        executable_signature(resolver),
+    )
     return resolver
+
+
+_COMMON_LIST_FACTORY = create_list_resolver
+_COMMON_LIST_FACTORY_SIGNATURE = executable_signature(create_list_resolver)
+
+
+def create_root_list_resolver(
+    manager_class: type[GeneralManager],
+    *,
+    resolver_factory: Callable[[BaseListGetter, type[GeneralManager]], Resolver]
+    | None = None,
+) -> Resolver:
+    """Bind an entire manager root to the exact common predicate executor."""
+    from general_manager.api.graphql_search import (
+        normalize_filter_input,
+        _COMMON_FILTER_NORMALIZER,
+    )
+
+    def all_items(_root: object, include_inactive: bool) -> Bucket[GeneralManager]:
+        return (
+            manager_class.filter(include_inactive=True)
+            if include_inactive
+            else manager_class.all()
+        )
+
+    resolver = (
+        create_list_resolver(all_items, manager_class, normalize_filter_input)
+        if resolver_factory is None
+        else resolver_factory(all_items, manager_class)
+    )
+    proof = (
+        _LIST_RESOLVER_BINDINGS.get(resolver)
+        if isinstance(resolver, FunctionType)
+        else None
+    )
+    if (
+        proof is not None
+        and executable_matches(resolver, proof[4])
+        and create_list_resolver is _COMMON_LIST_FACTORY
+        and executable_matches(create_list_resolver, _COMMON_LIST_FACTORY_SIGNATURE)
+        and proof[0] is all_items
+        and proof[1] is manager_class
+        and proof[2] is _COMMON_FILTER_NORMALIZER
+        and proof[3] is None
+    ):
+        interface = getattr(manager_class, "Interface", None)
+        entrypoint = getattr(interface, "filter", None)
+        if entrypoint is not None:
+            _ROOT_POPULATION_OWNERS[cast(FunctionType, resolver)] = (
+                manager_class,
+                interface,
+                entrypoint.__func__
+                if isinstance(entrypoint, MethodType)
+                else entrypoint,
+                entrypoint.__self__ if isinstance(entrypoint, MethodType) else None,
+                executable_signature(resolver),
+                executable_signature(all_items),
+                executable_signature(
+                    entrypoint.__func__
+                    if isinstance(entrypoint, MethodType)
+                    else entrypoint
+                ),
+            )
+    return resolver
+
+
+_COMMON_ROOT_FACTORY = create_root_list_resolver
+_COMMON_ROOT_FACTORY_SIGNATURE = executable_signature(create_root_list_resolver)
+
+
+def root_population_owner(resolver: object) -> type[GeneralManager] | None:
+    """Return authority only for the exact registered common root function."""
+    if not isinstance(resolver, FunctionType):
+        return None
+    binding = _ROOT_POPULATION_OWNERS.get(resolver)
+    if binding is None:
+        return None
+    from general_manager.api import graphql_search
+
+    if not graphql_search.common_filter_execution_valid():
+        return None
+    manager, interface, function, receiver, resolver_key, getter_key, interface_key = (
+        binding
+    )
+    proof = _LIST_RESOLVER_BINDINGS.get(resolver)
+    if (
+        proof is None
+        or not executable_matches(resolver, proof[4])
+        or not executable_matches(resolver, resolver_key)
+        or not executable_matches(proof[0], getter_key)
+        or not executable_matches(function, interface_key)
+        or create_list_resolver is not _COMMON_LIST_FACTORY
+        or not executable_matches(create_list_resolver, _COMMON_LIST_FACTORY_SIGNATURE)
+        or create_root_list_resolver is not _COMMON_ROOT_FACTORY
+        or not executable_matches(
+            create_root_list_resolver, _COMMON_ROOT_FACTORY_SIGNATURE
+        )
+        or not all(
+            executable_matches(common, signature)
+            for common, signature in _COMMON_MANAGER_EXECUTABLES
+        )
+        or not isinstance(manager.all, MethodType)
+        or manager.all.__func__ is not _COMMON_MANAGER_ALL
+        or manager.all.__self__ is not manager
+        or not isinstance(manager.filter, MethodType)
+        or manager.filter.__func__ is not _COMMON_MANAGER_FILTER
+        or manager.filter.__self__ is not manager
+        or manager.Interface is not interface
+    ):
+        return None
+    entrypoint = manager.Interface.filter
+    current_function = (
+        entrypoint.__func__ if isinstance(entrypoint, MethodType) else entrypoint
+    )
+    current_receiver = (
+        entrypoint.__self__ if isinstance(entrypoint, MethodType) else None
+    )
+    return (
+        manager
+        if current_function is function and current_receiver is receiver
+        else None
+    )
 
 
 def selection_includes_path(

@@ -16,6 +16,7 @@ from django.core.exceptions import ObjectDoesNotExist
 
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement import Measurement
+from general_manager.utils.executable_contract import executable_signature
 
 if TYPE_CHECKING:
     from general_manager.bucket.base_bucket import Bucket
@@ -1277,3 +1278,10 @@ def _prepare_normalized_identification(
         else:
             prepared[name] = value
     return prepared
+
+
+# Pin the defining common identifier coercion before API or manager customization.
+_COMMON_INPUT_EXECUTABLES = tuple(
+    (function, executable_signature(function))
+    for function in (Input.cast, Input.normalize)
+)

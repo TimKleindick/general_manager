@@ -1,0 +1,294 @@
+{
+  "provenance": {
+    "source_report_sha256": "bdce9731b08cac37bece63215a1335b16bf495dee5a89f9d060e87d7354fed8f",
+    "description": "Reduced original E072 user, answer and query events. Offline protocol control only; not a replay, live result or historical rescore."
+  },
+  "user": "Quels projets utilisent du laiton, et non du cuivre ?",
+  "answer": "Un seul projet accessible utilise du laiton et aucun cuivre, tous statuts confondus :\n\n| Code | Projet | Matériau associé |\n|---|---|---|\n| P11 | Iris Brass | M03 — Brass (laiton) |\n\nLa liste complète des matériaux associés à ce projet contient uniquement le laiton ; aucun matériau de la famille cuivre n’y figure.",
+  "query_events": [
+    {
+      "type": "tool_call",
+      "task_id": "task_1",
+      "id": "call_qzFoAjrWDhwxtL76CKreNP67",
+      "name": "query",
+      "args": {
+        "fields": [
+          "id",
+          "code",
+          "name",
+          {
+            "materialsList": [
+              {
+                "items": [
+                  "id",
+                  "code",
+                  "name",
+                  "family"
+                ]
+              },
+              {
+                "pageInfo": [
+                  "totalCount"
+                ]
+              }
+            ]
+          }
+        ],
+        "limit": 1000,
+        "manager": "Project"
+      }
+    },
+    {
+      "type": "tool_result",
+      "task_id": "task_1",
+      "id": "call_qzFoAjrWDhwxtL76CKreNP67",
+      "name": "query",
+      "result": {
+        "data": [
+          {
+            "id": "1",
+            "code": "P01",
+            "name": "Aurora",
+            "materialsList": {
+              "items": [
+                {
+                  "id": "1",
+                  "code": "M01",
+                  "name": "Copper",
+                  "family": "copper"
+                }
+              ],
+              "pageInfo": {
+                "totalCount": 1
+              }
+            }
+          },
+          {
+            "id": "2",
+            "code": "P02",
+            "name": "Borealis",
+            "materialsList": {
+              "items": [
+                {
+                  "id": "2",
+                  "code": "M02",
+                  "name": "Steel",
+                  "family": "steel"
+                }
+              ],
+              "pageInfo": {
+                "totalCount": 1
+              }
+            }
+          },
+          {
+            "id": "3",
+            "code": "P03",
+            "name": "Cobalt",
+            "materialsList": {
+              "items": [
+                {
+                  "id": "1",
+                  "code": "M01",
+                  "name": "Copper",
+                  "family": "copper"
+                }
+              ],
+              "pageInfo": {
+                "totalCount": 1
+              }
+            }
+          },
+          {
+            "id": "4",
+            "code": "P04",
+            "name": "Delta",
+            "materialsList": {
+              "items": [
+                {
+                  "id": "1",
+                  "code": "M01",
+                  "name": "Copper",
+                  "family": "copper"
+                }
+              ],
+              "pageInfo": {
+                "totalCount": 1
+              }
+            }
+          },
+          {
+            "id": "5",
+            "code": "P05",
+            "name": "Echo",
+            "materialsList": {
+              "items": [
+                {
+                  "id": "1",
+                  "code": "M01",
+                  "name": "Copper",
+                  "family": "copper"
+                }
+              ],
+              "pageInfo": {
+                "totalCount": 1
+              }
+            }
+          },
+          {
+            "id": "6",
+            "code": "P06",
+            "name": "Fjord",
+            "materialsList": {
+              "items": [
+                {
+                  "id": "1",
+                  "code": "M01",
+                  "name": "Copper",
+                  "family": "copper"
+                }
+              ],
+              "pageInfo": {
+                "totalCount": 1
+              }
+            }
+          },
+          {
+            "id": "7",
+            "code": "P07",
+            "name": "Gaia",
+            "materialsList": {
+              "items": [
+                {
+                  "id": "1",
+                  "code": "M01",
+                  "name": "Copper",
+                  "family": "copper"
+                }
+              ],
+              "pageInfo": {
+                "totalCount": 1
+              }
+            }
+          },
+          {
+            "id": "8",
+            "code": "P08",
+            "name": "Helios",
+            "materialsList": {
+              "items": [
+                {
+                  "id": "2",
+                  "code": "M02",
+                  "name": "Steel",
+                  "family": "steel"
+                }
+              ],
+              "pageInfo": {
+                "totalCount": 1
+              }
+            }
+          },
+          {
+            "id": "9",
+            "code": "P11",
+            "name": "Iris Brass",
+            "materialsList": {
+              "items": [
+                {
+                  "id": "3",
+                  "code": "M03",
+                  "name": "Brass",
+                  "family": "brass"
+                }
+              ],
+              "pageInfo": {
+                "totalCount": 1
+              }
+            }
+          }
+        ],
+        "total_count": 9,
+        "has_more": false,
+        "complete": true
+      }
+    },
+    {
+      "type": "tool_call",
+      "task_id": "task_1",
+      "id": "call_okN7ZeDvvmSuuudWBry0IRU9",
+      "name": "query",
+      "args": {
+        "fields": [
+          "id",
+          "code",
+          "name",
+          "family",
+          "aliases",
+          "active",
+          "isActive"
+        ],
+        "limit": 1000,
+        "manager": "Material"
+      }
+    },
+    {
+      "type": "tool_result",
+      "task_id": "task_1",
+      "id": "call_okN7ZeDvvmSuuudWBry0IRU9",
+      "name": "query",
+      "result": {
+        "data": [
+          {
+            "id": "1",
+            "code": "M01",
+            "name": "Copper",
+            "family": "copper",
+            "aliases": "Kupfer | cuivre | red metal | rotes Metall | CU-ETP | métal rouge",
+            "active": true,
+            "isActive": true
+          },
+          {
+            "id": "2",
+            "code": "M02",
+            "name": "Steel",
+            "family": "steel",
+            "aliases": "Stahl | acier",
+            "active": true,
+            "isActive": true
+          },
+          {
+            "id": "3",
+            "code": "M03",
+            "name": "Brass",
+            "family": "brass",
+            "aliases": "Messing | laiton",
+            "active": true,
+            "isActive": true
+          },
+          {
+            "id": "4",
+            "code": "M04",
+            "name": "StainlessSteel",
+            "family": "steel",
+            "aliases": "stainless steel | Edelstahl | acier inoxydable",
+            "active": true,
+            "isActive": true
+          },
+          {
+            "id": "5",
+            "code": "M05",
+            "name": "LegacySteel",
+            "family": "steel",
+            "aliases": "legacy steel | Altstahl | acier historique",
+            "active": false,
+            "isActive": true
+          }
+        ],
+        "total_count": 5,
+        "has_more": false,
+        "complete": true
+      }
+    }
+  ]
+}

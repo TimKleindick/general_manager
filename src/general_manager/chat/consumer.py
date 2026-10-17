@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 import inspect
 import json
@@ -21,21 +22,22 @@ from general_manager.chat.grounding import (
     should_recover_answer_without_query,
     should_recover_missing_tool_call,
 )
-from general_manager.chat.planned.catalog import load_manager_catalog
 from general_manager.chat.planned.config import get_planned_chat_settings
 from general_manager.chat.planned.scheduler import (
     SchedulerCallbacks,
     iter_planned_read_events,
     prepare_planned_turn,
 )
+from general_manager.chat.providers._shared import completed_events
 from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
     TextChunkEvent,
+    TokenUsage,
     ToolCallEvent,
     ToolDefinition,
 )
-from general_manager.chat.schema_index import build_schema_index
+from general_manager.chat.schema_index import planner_catalog_summary
 from general_manager.chat.rate_limits import enforce_chat_rate_limit
 from general_manager.chat.signals import (
     emit_chat_error,
@@ -94,12 +96,16 @@ async def _iter_provider_events(
     provider: Any,
     messages: list[Message],
     tools: list[ToolDefinition],
+    *,
+    on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
 ) -> Any:
     """Yield provider events while enforcing first-chunk and stall timeouts."""
     provider_config = get_chat_settings().get("provider_config", {})
     request_timeout = float(provider_config.get("timeout_seconds", 60))
     stream_timeout = float(provider_config.get("stream_timeout_seconds", 30))
-    stream = provider.complete(messages, tools).__aiter__()
+    stream = completed_events(
+        provider.complete(messages, tools), on_usage=on_usage
+    ).__aiter__()
     first_chunk = True
     try:
         while True:
@@ -247,7 +253,7 @@ class ChatConsumer(_ChatConsumerBase):
         self._history_cache.append({"role": role, "content": content})
 
     async def connect(self) -> None:
-        """Initialize provider, permissions, and persistent chat state."""
+        """Initialize permissions and chat state without creating a write provider."""
         try:
             permission = get_chat_permission()
             if (
@@ -262,8 +268,7 @@ class ChatConsumer(_ChatConsumerBase):
                 await sync_to_async(session.save)()
                 session_key = getattr(session, "session_key", None)
             self.session_key = session_key
-            provider_cls = import_provider()
-            self.provider = provider_cls()
+            self.provider = None
             self._active_turn: asyncio.Future[None] | None = None
             self._pending_confirmation = None
             self._confirmation_waiter = None
@@ -388,8 +393,8 @@ class ChatConsumer(_ChatConsumerBase):
 
                 messages = await prepare_conversation_messages(
                     self.conversation,
-                    self.provider,
-                    allow_summarization=not get_planned_chat_settings().enabled,
+                    None,
+                    allow_summarization=False,
                     scope=self.scope,
                     turn_state=turn_state,
                 )
@@ -420,6 +425,12 @@ class ChatConsumer(_ChatConsumerBase):
                 and not self._active_turn.done()
             ):
                 self._active_turn.set_result(None)
+
+    def _get_mutation_provider(self) -> Any:
+        """Construct the retained write provider only when that workflow needs it."""
+        if getattr(self, "provider", None) is None:
+            self.provider = import_provider()()
+        return self.provider
 
     async def _stream_provider_turn(
         self,
@@ -463,10 +474,22 @@ class ChatConsumer(_ChatConsumerBase):
             )
             return
         self._provider_task = asyncio.current_task()
+
+        async def account_usage(usage: TokenUsage) -> None:
+            nonlocal rate_limited
+            turn_state.record_usage(usage)
+            rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+                self.scope,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                count_request=False,
+            )
+
         provider_events = _iter_provider_events(
-            self.provider,
+            self._get_mutation_provider(),
             messages,
             self._build_tool_definitions() if allow_tools else [],
+            on_usage=account_usage,
         )
         try:
             async for event in provider_events:
@@ -480,13 +503,6 @@ class ChatConsumer(_ChatConsumerBase):
                     provider_tool_events.append(event)
                     continue
                 elif isinstance(event, DoneEvent):
-                    turn_state.record_usage(event.usage)
-                    rate_limited = await sync_to_async(enforce_chat_rate_limit)(
-                        self.scope,
-                        input_tokens=event.usage.input_tokens,
-                        output_tokens=event.usage.output_tokens,
-                        count_request=False,
-                    )
                     # Account completion before cleanup, but do not continue or finish first.
                     await provider_events.aclose()
                     if isinstance(rate_limited, dict):
@@ -650,22 +666,7 @@ class ChatConsumer(_ChatConsumerBase):
     @staticmethod
     def _planned_catalog_summary(settings: Any) -> dict[str, Any]:
         """Build inert catalog/schema reference data for the planner request."""
-        schema_index = build_schema_index()
-        catalog = load_manager_catalog(
-            getattr(settings, "catalog_source", None), schema_index
-        )
-        return {
-            "catalog": {
-                name: {
-                    "domain": entry.domain,
-                    "aliases": list(entry.aliases),
-                    "use_when": entry.use_when,
-                    "distinguish_from": list(entry.distinguish_from),
-                }
-                for name, entry in catalog.entries.items()
-            },
-            "schema": schema_index,
-        }
+        return planner_catalog_summary(settings)
 
     async def _stream_message_turn(
         self,
@@ -675,15 +676,12 @@ class ChatConsumer(_ChatConsumerBase):
         *,
         turn_state: TurnState | None = None,
     ) -> bool:
-        """Plan after admission, retaining the unchanged legacy turn as fallback."""
+        """Start Planned orchestration after admission for every new message."""
         planned_settings = get_planned_chat_settings()
-        if not planned_settings.enabled:
-            await self._stream_provider_turn(
-                messages, history, tool_retries=0, turn_state=turn_state
-            )
-            return False
         self._provider_task = asyncio.create_task(
-            self._stream_planned_turn(text, messages, history, planned_settings)
+            self._stream_planned_turn(
+                text, messages, history, planned_settings, turn_state=turn_state
+            )
         )
         return True
 
@@ -693,6 +691,8 @@ class ChatConsumer(_ChatConsumerBase):
         messages: list[Message],
         history: list[dict[str, str]],
         planned_settings: Any,
+        *,
+        turn_state: TurnState | None = None,
     ) -> None:
         """Own planning and execution in one cancellable websocket task."""
         planned_messages = messages
@@ -703,7 +703,7 @@ class ChatConsumer(_ChatConsumerBase):
 
                 planned_messages = await prepare_conversation_messages(
                     self.conversation,
-                    self.provider,
+                    None,
                     allow_summarization=False,
                     scope=self.scope,
                 )
@@ -716,7 +716,17 @@ class ChatConsumer(_ChatConsumerBase):
                 scope=self.scope,
             )
             if planned_turn.mutation_plan is not None:
-                await self._stream_provider_turn(messages, history, tool_retries=0)
+                if self.conversation is not None:
+                    messages = await prepare_conversation_messages(
+                        self.conversation,
+                        self._get_mutation_provider(),
+                        scope=self.scope,
+                        turn_state=turn_state,
+                    )
+                    history = await self._load_history()
+                await self._stream_provider_turn(
+                    messages, history, tool_retries=0, turn_state=turn_state
+                )
                 return
             async for event in iter_planned_read_events(
                 planned_turn,
@@ -1275,7 +1285,7 @@ class ChatConsumer(_ChatConsumerBase):
                 if isinstance(self.conversation, ChatConversation):
                     messages = await prepare_conversation_messages(
                         self.conversation,
-                        self.provider,
+                        self._get_mutation_provider(),
                         scope=self.scope,
                         turn_state=pending.get("turn_state"),
                     )
