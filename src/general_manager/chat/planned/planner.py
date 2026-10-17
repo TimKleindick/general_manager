@@ -37,6 +37,7 @@ from general_manager.chat.planned.choice_context import (
     envelope_schema,
     validate_choices,
     definition_source,
+    user_quote_sources,
     with_user_source,
 )
 from general_manager.chat.planned.provider_calls import (
@@ -290,6 +291,7 @@ def _request_messages(
     )
     if questions or definition_context:
         reference["choice_questions"] = list(questions)
+        reference["user_sources"] = user_quote_sources(visible_history)
         reference["required_json_schema"] = envelope_schema(
             _PLAN_SCHEMA, questions, configured_context=definition_context
         )
