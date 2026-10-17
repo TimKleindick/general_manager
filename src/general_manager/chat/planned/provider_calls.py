@@ -34,6 +34,13 @@ class InvalidProviderRoundTimeoutError(ValueError):
     """Raised when a planned round receives an invalid deadline value."""
 
 
+class ProviderStreamError(RuntimeError):
+    """Opt-in provenance for a provider stream exception, never local validation."""
+
+    def __init__(self) -> None:
+        super().__init__("provider_failed")
+
+
 @dataclass(frozen=True)
 class ProviderRoundResult:
     """The only valid outcomes of one planned provider request."""
@@ -91,6 +98,8 @@ async def complete_provider_round(
     messages: list[Message],
     tools: list[ToolDefinition],
     timeout_seconds: float,
+    *,
+    classify_provider_errors: bool = False,
 ) -> ProviderRoundResult:
     """Buffer one bounded provider stream without changing legacy iteration.
 
@@ -106,7 +115,26 @@ async def complete_provider_round(
     usage = TokenUsage()
 
     async with asyncio.timeout(timeout):
-        async for event in provider.complete(compact_messages(messages), tools):
+        prepared_messages = compact_messages(messages)
+        try:
+            stream = aiter(provider.complete(prepared_messages, tools))
+        except (InvalidProviderRoundError, InvalidProviderRoundTimeoutError):
+            raise
+        except Exception as exc:
+            if classify_provider_errors:
+                raise ProviderStreamError() from exc
+            raise
+        while True:
+            try:
+                event = await anext(stream)
+            except StopAsyncIteration:
+                break
+            except (InvalidProviderRoundError, InvalidProviderRoundTimeoutError):
+                raise
+            except Exception as exc:
+                if classify_provider_errors:
+                    raise ProviderStreamError() from exc
+                raise
             if done_count:
                 _invalid("a done event must be terminal.", usage)
             if isinstance(event, TextChunkEvent):
@@ -152,5 +180,6 @@ async def complete_provider_round(
 __all__ = [
     "InvalidProviderRoundError",
     "ProviderRoundResult",
+    "ProviderStreamError",
     "complete_provider_round",
 ]
