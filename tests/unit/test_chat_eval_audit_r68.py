@@ -992,3 +992,54 @@ def test_executor_observation_survives_own_stage_cancel_and_is_accounted_once(
         ]
 
     asyncio.run(check())
+
+
+def test_executor_stage_cancel_settles_one_already_observed_quota_dispatch(monkeypatch):
+    from general_manager.chat.planned import scheduler
+    from tests.unit.test_chat_planned_tool_feedback import _runner
+
+    async def check():
+        closed = asyncio.Event()
+        waiting = asyncio.Event()
+        accounted = []
+        dispatches = []
+
+        def quota(*_args, **kwargs):
+            accounted.append(kwargs)
+
+        async def queued(function, args, kwargs):
+            if function is quota:
+                dispatches.append(True)
+                waiting.set()
+                await closed.wait()
+            return function(*args, **kwargs)
+
+        class Provider:
+            calls = 0
+
+            async def complete(self, messages, tools):
+                self.calls += 1
+                try:
+                    yield DoneEvent(TokenUsage(7, 11))
+                    await asyncio.Event().wait()
+                finally:
+                    closed.set()
+
+        provider = Provider()
+        monkeypatch.setattr(scheduler, "build_profile_provider", lambda *_: provider)
+        executor = _runner(lambda *_: pytest.fail("no tool is requested"))
+        executor.callbacks = replace(
+            executor.callbacks, enforce_rate_limit=quota, run_sync=queued
+        )
+        executor.clock = asyncio.get_running_loop().time
+        executor.deadline = executor.clock() + 0.05
+        await executor.run()
+        assert waiting.is_set() and closed.is_set()
+        assert executor.runtimes["task_1"].reason == "deadline_exceeded"
+        assert provider.calls == len(dispatches) == 1
+        assert executor.usage == TokenUsage(7, 11)
+        assert accounted == [
+            {"input_tokens": 7, "output_tokens": 11, "count_request": False}
+        ]
+
+    asyncio.run(check())

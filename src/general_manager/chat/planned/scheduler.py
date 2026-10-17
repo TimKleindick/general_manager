@@ -1106,6 +1106,7 @@ class _Runner:
     events: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
     runtimes: dict[str, _TaskRuntime] = field(default_factory=dict)
     usage: TokenUsage = field(default_factory=TokenUsage)
+    _usage_accounts: set[asyncio.Task[None]] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.usage = self.prepared.usage
@@ -1162,18 +1163,29 @@ class _Runner:
     async def account_usage(self, usage: TokenUsage) -> None:
         self.usage = _add_usage(self.usage, usage)
         if self.callbacks.enforce_rate_limit is not None:
+            account = asyncio.create_task(self._account_quota(usage))
+            self._usage_accounts.add(account)
             try:
-                await _call_sync(
-                    self.callbacks,
-                    self.callbacks.enforce_rate_limit,
-                    dict(self.scope),
-                    input_tokens=usage.input_tokens,
-                    output_tokens=usage.output_tokens,
-                    count_request=False,
-                )
-            except Exception:  # noqa: BLE001, S110
-                # Usage is already committed locally; a limiter outage is private.
-                pass
+                # Stage cancellation must stop provider work without cancelling
+                # an already observed usage booking, even before its dispatch.
+                await asyncio.shield(account)
+            finally:
+                if account.done():
+                    self._usage_accounts.discard(account)
+
+    async def _account_quota(self, usage: TokenUsage) -> None:
+        try:
+            await _call_sync(
+                self.callbacks,
+                cast(Callable[..., Any], self.callbacks.enforce_rate_limit),
+                dict(self.scope),
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                count_request=False,
+            )
+        except Exception:  # noqa: BLE001, S110
+            # Usage is already committed locally; a limiter outage is private.
+            pass
 
     def _selected_records(self, runtime: _TaskRuntime) -> tuple[EvidenceRecord, ...]:
         return selected_evidence(
@@ -2476,6 +2488,9 @@ class _Runner:
                 task.cancel()
             if active:
                 await asyncio.gather(*active, return_exceptions=True)
+            if self._usage_accounts:
+                await asyncio.gather(*self._usage_accounts, return_exceptions=True)
+                self._usage_accounts.clear()
 
     def result(self) -> PlannedExecutionResult:
         statuses = {

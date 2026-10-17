@@ -75,6 +75,9 @@ that did not invoke the observer. The planning stage retains those observations
 outside its cancellable await and uses its existing quota owner on stage timeout.
 The executor also accounts each observation before its own stage cancellation;
 the result and exception paths book usage only when no observation was received.
+The runner owns each dispatched quota task, shields it from stage cancellation
+and awaits it during cleanup after provider work stops. Each observation is
+dispatched once; provider deadlines and cancellation remain unchanged.
 Synthesis preserves its outer stage deadline and reports expiry after even one
 admitted attempt as `deadline_exceeded`. No attempt is duplicated or extended.
 
