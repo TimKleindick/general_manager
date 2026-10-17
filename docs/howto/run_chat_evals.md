@@ -40,9 +40,9 @@ against a development-only configuration.
 
 The wheel includes `basic_queries`, `demo_readiness`, `edge_cases`,
 `follow_ups`, `large_schema`, `multi_hop`, and `planned_orchestration`. The
-legacy CLI runs the six provider-backed datasets by default. The
+CLI runs the six provider-backed datasets through production Planned orchestration by default. The
 `planned_orchestration` dataset is packaged separately for deterministic,
-role-pinned tests and is not part of the legacy CLI suite. The `basic_queries`
+role-pinned tests and is not selected by the provider-backed CLI. The `basic_queries`
 dataset can use the built-in toy schema and data:
 
 ```bash
@@ -56,7 +56,7 @@ python -m general_manager.chat.evals \
 ```
 
 Omit `--provider` to use the provider configured in
-`GENERAL_MANAGER["CHAT"]`. Omit `--dataset` to run every legacy-compatible
+`GENERAL_MANAGER["CHAT"]`. Omit `--dataset` to run every provider-backed
 shipped dataset whose managers and expectations fit the configured project.
 Selecting `--dataset planned_orchestration` in this CLI is rejected; use the
 deterministic test command in section 6 instead. Use `--fixture large` with
@@ -106,9 +106,10 @@ See the [chat prompt and eval model](../concepts/chat_prompting.md), the
 
 ## 5. Roll out planned chat safely
 
-Keep planned chat disabled by default while you validate the application's
-catalog, profile construction, role mappings, and single trust group. The
-smallest rollout uses the legacy provider as the implicit `default` profile:
+Validate the application's catalog, profile construction, role mappings and
+single trust group before enabling chat traffic. Every new read already uses
+Planned orchestration. The configured provider supplies the implicit `default`
+profile:
 
 ```python
 GENERAL_MANAGER = {
@@ -203,23 +204,66 @@ for exact payload and error contracts.
 
 ## 6. Run deterministic planned orchestration evaluations
 
-The shipped `planned_orchestration` dataset is intentionally unavailable to the
-legacy provider CLI. It is exercised by deterministic role-pinned fake providers
-in the test suite, not by a network provider. It covers alias resolution, a
-one-edge dependency, dynamic children, calculation, partial answers, budget and
-deadline exhaustion, duplicate calls, no-progress termination, and mutation
-fallback. Run it with the legacy eval regressions and sanitized-diagnostic
-checks:
+The shipped `planned_orchestration` dataset requires explicit deterministic
+role pins and is excluded from the network-provider CLI. Tests replace provider
+and tool IO while running the same production scheduler. They cover aliases,
+dependencies, dynamic children, calculations, partial answers, deadlines,
+duplicate calls and failed-operation cycles:
 
 ```bash
 python -m pytest \
   tests/unit/test_chat_planned_evals.py \
-  tests/unit/test_chat_evals.py \
+  tests/unit/test_chat_eval_execution.py \
   tests/unit/test_chat_eval_diagnostics.py -q
 ```
 
-These tests require a role override for every planned role and reject mixed
-trust groups. They assert deterministic fingerprints, aggregate provider usage,
-public coverage, and traces with profile and trust-group values removed. The
-legacy strategy remains a separate adapter, so existing `_run_turn` behavior
-and event shape remain covered independently.
+Role pins must cover every role in one trust group. The archived
+`legacy_stability` and `mutation_fallback` definitions remain readable, but no
+legacy evaluator or mutation fallback executes them. A mutation plan in this
+read-only evaluator returns `read_only_eval_mutation_plan`; application writes
+continue to use the production permission and confirmation workflow.
+
+## 7. Migrate older evaluation integrations
+
+The module CLI, source-checkout helper and readiness driver now use one thin
+adapter over the real production scheduler and exposed GraphQL tools. Ollama
+and custom no-argument provider classes remain supported. The selected provider
+is pinned to planner, executor, synthesizer and fallback; execution is serial.
+Do not substitute the deterministic fixture adapter for a provider comparison.
+
+New runs identify `chat-evaluation/3`. Earlier `/1` and `/2` summaries and raw
+traces remain readable and retain their original meaning; establish a new
+baseline rather than compare different execution contracts. Dataset expectations
+and historical result files are unchanged.
+
+Internal `run_case(..., strategy="legacy")`, `recover_missing_tools=True` and
+arbitrary custom tool definitions now fail with an explicit migration error.
+Omit `tool_defs` to use the scheduler-owned definitions. `None`, an empty list
+and the exact current `get_tool_definitions()` list are compatibility sentinels,
+not tool overrides. Modified schemas, subsets and duplicates are rejected before
+any provider call. Returned tool definitions own their nested schema data;
+editing them cannot change the native contract or another tool's definition.
+Discovery is refreshed from the current exposed schema for
+every conversation turn, as it is in the application transports.
+No harness code injects queries, rewrites arguments or manufactures an answer.
+`max_provider_requests` is a hard per-turn dispatch cap (default 10, range 1–64)
+across all four roles, including failed attempts. `max_tool_iterations` is a
+compatibility alias for that cap; passing both names is rejected. It no longer
+means executor-only iterations and cannot authorize an extra final-answer call.
+The SIWC suite explicitly retains its 16-request per-turn and existing per-case
+transport ceilings. Native deadlines, completion checks and transport STOP
+latches remain authoritative.
+
+The separate experimental `experiments.siwc_eval.runner --live` toy entry has
+been removed. Its old flags fail with status 2 before setup or authentication;
+its three-request limit has not been silently enlarged. For an offline infrastructure proof in a source checkout, use a fresh output
+directory:
+
+```bash
+PYTHONPATH=src:. python -m experiments.gm_eval harness \
+  --case E101 --profile weak-only --output /tmp/gm-eval-native-smoke
+```
+
+This uses scripted providers and the real production scheduler; it does not
+log in, call a live model or measure answer accuracy. Explicit live SIWC runs
+still require their existing transport and admission gates.

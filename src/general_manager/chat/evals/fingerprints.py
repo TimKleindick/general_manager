@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Any
 
-EVALUATION_CONTRACT = "chat-evaluation/2"
+EVALUATION_CONTRACT = "chat-evaluation/3"
 
 
 def stable_hash(payload: Any, *, length: int = 16) -> str:

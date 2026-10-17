@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import re
 import secrets
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
@@ -63,77 +62,120 @@ def cases() -> list[Any]:
     ]
 
 
+def synthetic_steps(
+    *,
+    manager: str = "MaterialManager",
+    answer: str,
+    filters: dict[str, Any] | None = None,
+) -> list[Any]:
+    """Offline neutral responses for the real planner/executor/synthesizer protocol."""
+    from general_manager.chat.providers.base import TextChunkEvent, ToolCallEvent
+
+    plan = {
+        "intent": "read",
+        "tasks": [
+            {
+                "task_id": "task_1",
+                "objective": "Read " + manager,
+                "depends_on": [],
+                "requirements": [
+                    {
+                        "requirement_id": "records",
+                        "kind": "query",
+                        "description": "Requested names",
+                        "operation": None,
+                    }
+                ],
+                "completion_criteria": ["records"],
+                "routing_features": [],
+            }
+        ],
+    }
+    args: dict[str, Any] = {"manager": manager, "fields": ["name"]}
+    if filters:
+        args["filters"] = filters
+    return [
+        TextChunkEvent(json.dumps(plan)),
+        ToolCallEvent(
+            "schema", "get_manager_schema", {"manager": manager, "view": "full"}
+        ),
+        ToolCallEvent("query", "query", args),
+        TextChunkEvent(
+            json.dumps({"action": "complete", "evidence_ids": ["task_1:query:1"]})
+        ),
+        TextChunkEvent(
+            json.dumps({"answer": answer, "evidence_ids": ["task_1:query:1"]})
+        ),
+    ]
+
+
+def synthetic_wire(step: Any) -> list[dict[str, Any]]:
+    """Encode one offline response; this never executes an application tool."""
+    from general_manager.chat.providers.base import ToolCallEvent
+
+    if isinstance(step, ToolCallEvent):
+        return [
+            {
+                "type": "function_call",
+                "call_id": step.id,
+                "namespace": "gm",
+                "name": step.name,
+                "arguments": json.dumps(step.args),
+            }
+        ]
+    return [
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": step.content, "annotations": []}
+            ],
+        }
+    ]
+
+
 class ReplayTransport:
-    """Synthetic wire fixture, not a model quality baseline."""
+    """Synthetic wire fixture for current orchestration, never a quality baseline."""
 
     def __init__(self, steel: bool) -> None:
-        self.steel = steel
         self.calls = 0
+        self.steps = synthetic_steps(
+            answer="Steel" if steel else "Steel, Aluminum, Cobalt",
+            filters={"name": "Steel"} if steel else None,
+        )
 
     async def stream(
         self, body: dict[str, Any]
     ) -> AsyncGenerator[dict[str, Any], None]:
+        step = self.steps[self.calls]
         self.calls += 1
-        output: list[dict[str, Any]]
-        if self.calls == 1:
-            args: dict[str, Any] = {"manager": "MaterialManager", "fields": ["name"]}
-            if self.steel:
-                args["filters"] = {"name": "Steel"}
-            output = [
-                {
-                    "type": "function_call",
-                    "call_id": "synthetic_call",
-                    "namespace": "gm",
-                    "name": "query",
-                    "arguments": json.dumps(args),
-                }
-            ]
-        else:
-            answer = "Steel" if self.steel else "Steel, Aluminum, Cobalt"
-            yield {"type": "response.output_text.delta", "delta": answer}
-            output = [
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [
-                        {"type": "output_text", "text": answer, "annotations": []}
-                    ],
-                }
-            ]
         yield {
             "type": "response.completed",
             "response": {
-                "output": output,
+                "output": synthetic_wire(step),
                 "usage": {"input_tokens": 0, "output_tokens": 0},
             },
         }
 
 
 class NeutralFixture:
-    """Independent fixture exercising the harness's neutral provider interface."""
+    """Independent neutral fixture driving the same production execution path."""
 
     def __init__(self, steel: bool, *, wrong: bool = False) -> None:
-        self.steel = steel
-        self.wrong = wrong
         self.requests = 0
-
-    async def complete(self, messages: Any, tools: Any) -> AsyncIterator[Any]:
-        from general_manager.chat.providers.base import (
-            ToolCallEvent,
-            TextChunkEvent,
-            DoneEvent,
-            TokenUsage,
+        self.steps = synthetic_steps(
+            answer="unrelated answer"
+            if wrong
+            else ("Steel" if steel else "Steel, Aluminum, Cobalt"),
+            filters={"name": "Steel"} if steel else None,
         )
 
+    async def complete(self, messages: Any, tools: Any) -> AsyncIterator[Any]:
+        from general_manager.chat.providers.base import DoneEvent, TokenUsage
+
+        step = self.steps[self.requests]
         self.requests += 1
-        if self.requests == 1:
-            args: dict[str, Any] = {"manager": "MaterialManager", "fields": ["name"]}
-            if self.steel:
-                args["filters"] = {"name": "Steel"}
-            yield ToolCallEvent("fixture_call", "query", args)
-        else:
-            answer = "Steel" if self.steel else "Steel, Aluminum, Cobalt"
-            yield TextChunkEvent("unrelated answer" if self.wrong else answer)
+        yield step
         yield DoneEvent(TokenUsage())
 
 
@@ -156,7 +198,7 @@ async def evaluate(provider: Any, case: Any, label: str) -> dict[str, Any]:
     ).hexdigest()
     details = {}
     try:
-        result = await run_case(provider, case, definitions)
+        result = await run_case(provider, case)
         passed = result.passed
         error = "harness_error" if result.error else None
     except EvalError as failure:
@@ -182,75 +224,14 @@ async def offline() -> dict[str, Any]:
         steel = case.name.endswith("steel")
         for label, provider in [
             ("neutral-fixture", NeutralFixture(steel)),
-            ("responses-replay", Provider("offline-fixture", ReplayTransport(steel))),
+            (
+                "responses-replay",
+                Provider("offline-fixture", ReplayTransport(steel), max_requests=5),
+            ),
             ("negative-control", NeutralFixture(steel, wrong=True)),
         ]:
             rows.append(await evaluate(provider, case, label))
     return {"mode": "offline", "quality_comparison": False, "results": rows}
-
-
-def confirm(message: str) -> None:
-    if input(message + "\nZur Bestätigung exakt JA eingeben: ") != "JA":
-        raise EvalError("user_declined")
-
-
-def live(case_index: int) -> dict[str, Any]:
-    from .provider import Provider
-    from .auth import login
-    from .http import API, LiveTransport, json_request
-
-    confirm(
-        "Nur auf deinem eigenen Rechner ausführen. ChatGPT-Anmeldung und Registrierung erlauben? "
-        "Host-/Kontozuordnung wird lokal gespeichert; Tokens bleiben nur im Speicher. "
-        "Keine Firmendaten verwenden."
-    )
-    session = login()
-    transport = None
-    try:
-        catalog = json_request(API + "/models", token=session.access_token())
-        models = [
-            item["slug"]
-            for item in catalog.get("models", [])
-            if item.get("visibility") == "list"
-            and isinstance(item.get("slug"), str)
-            and re.fullmatch(r"[a-zA-Z0-9_.:-]{1,100}", item["slug"])
-        ]
-        if not models:
-            raise EvalError("no_eligible_models")
-        print("Verfügbare Modell-Slugs:")
-        for index, slug in enumerate(models, 1):
-            print(f"{index}: {slug}")
-        selected = int(input("Modellnummer: ")) - 1
-        if not 0 <= selected < len(models):
-            raise EvalError("invalid_model_selection")
-        model = models[selected]
-        confirm(
-            f"Ein synthetischer Fall, maximal 3 Inferenz-Requests mit {model}. "
-            "Verbraucht ChatGPT-Plan-Kontingent; Limits vorher in ChatGPT Settings prüfen. Starten?"
-        )
-        transport = LiveTransport(session.access_token())
-        provider = Provider(model, transport, max_requests=3)
-        result = asyncio.run(evaluate(provider, cases()[case_index], "siwc"))
-        return {
-            "mode": "live",
-            "model": model,
-            "quality_comparison": False,
-            "settings": {
-                "store": False,
-                "stream": True,
-                "automatic_retries": 0,
-                "max_requests": 3,
-                "unsupported_sampling_parameters": "omitted",
-            },
-            "results": [result],
-        }
-    finally:
-        if transport:
-            transport.close()
-        if not session.logout():
-            print(
-                "Lokale Tokens verworfen; Remote-Widerruf nicht bestätigt. App in ChatGPT Settings trennen."
-            )
 
 
 def main() -> int:
@@ -258,20 +239,21 @@ def main() -> int:
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Explicit local interactive OAuth and one synthetic case",
+        help=argparse.SUPPRESS,
     )
-    parser.add_argument("--case", choices=["all", "steel"], default="all")
+    parser.add_argument(
+        "--case", choices=["all", "steel"], default=None, help=argparse.SUPPRESS
+    )
     args = parser.parse_args()
+    if args.live or args.case is not None:
+        parser.error(
+            "The legacy standalone live evaluator was removed; use the active "
+            "experiments.gm_eval harness (see experiments/gm_eval/README.md)."
+        )
     try:
         configure()
-        report = (
-            live(0 if args.case == "all" else 1)
-            if args.live
-            else asyncio.run(offline())
-        )
+        report = asyncio.run(offline())
         print(json.dumps(report, indent=2, sort_keys=True))
-        if args.live:
-            return 0 if report["results"][0]["passed"] else 1
         return (
             0
             if all(

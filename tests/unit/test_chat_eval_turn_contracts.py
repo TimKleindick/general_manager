@@ -17,7 +17,6 @@ from general_manager.chat.evals.runner import (
 from general_manager.chat.evals.diagnostics import classify_result
 from general_manager.chat.providers.base import (
     DoneEvent,
-    TextChunkEvent,
     TokenUsage,
     ToolCallEvent,
 )
@@ -218,45 +217,6 @@ def test_failed_or_missing_query_is_not_an_empty_result():
     assert not _score_case(case, [bad]).passed
 
 
-def test_larger_budget_applies_per_turn_and_retains_tool_history():
-    class Provider:
-        def __init__(self):
-            self.count = 0
-            self.histories = []
-
-        async def complete(self, messages, tools):
-            self.histories.append(list(messages))
-            self.count += 1
-            if self.count % 8:
-                yield ToolCallEvent(
-                    f"call-{self.count}",
-                    "query",
-                    {"manager": "PartManager", "fields": ["name"]},
-                )
-            else:
-                yield TextChunkEvent("Bolt, Bearing, Gear")
-            yield DoneEvent(TokenUsage())
-
-    setup_toy_schema()
-    provider = Provider()
-    case = EvalCase(
-        "two",
-        "",
-        [{"user": "first"}, {"user": "second"}],
-        {
-            "turns": [
-                {"answer_contains": ["Bolt"]},
-                {"answer_contains": ["Gear"]},
-            ]
-        },
-    )
-    result = asyncio.run(
-        run_case(provider, case, get_tool_definitions(), max_tool_iterations=16)
-    )
-    assert result.passed and provider.count == 16
-    assert any(message.role == "tool" for message in provider.histories[8])
-
-
 def test_budget_exhaustion_is_an_explicit_harness_outcome():
     class Endless:
         async def complete(self, messages, tools):
@@ -275,32 +235,6 @@ def test_budget_exhaustion_is_an_explicit_harness_outcome():
     assert result.error == "turn_request_budget_exhausted"
     diagnostic = classify_result(result)
     assert diagnostic is not None and diagnostic.owner == "harness"
-
-
-def test_explicit_request_budget_also_bounds_optional_recovery():
-    class Endless:
-        count = 0
-
-        async def complete(self, messages, tools):
-            self.count += 1
-            yield ToolCallEvent(
-                "call", "query", {"manager": "PartManager", "fields": ["name"]}
-            )
-            yield DoneEvent(TokenUsage())
-
-    setup_toy_schema()
-    provider = Endless()
-    result = asyncio.run(
-        run_case(
-            provider,
-            strict_case(),
-            get_tool_definitions(),
-            max_tool_iterations=1,
-            recover_missing_tools=True,
-        )
-    )
-    assert provider.count == 1
-    assert result.error == "turn_request_budget_exhausted"
 
 
 def test_budget_failure_retains_completed_turn_diagnostics():

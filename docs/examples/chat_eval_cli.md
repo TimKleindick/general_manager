@@ -1,6 +1,8 @@
 # Installed Chat Eval Commands
 
-These commands use datasets packaged with GeneralManager. Replace
+These commands use packaged datasets through the real production Planned
+scheduler. Ollama remains supported; runs are read-only and carry execution
+contract `chat-evaluation/3`. Historical reports remain readable. Replace
 `myproject.settings` and provider paths with importable modules from the Django
 project where the command runs.
 

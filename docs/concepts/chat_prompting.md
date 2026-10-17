@@ -47,7 +47,7 @@ contract.
 The chat eval suite is a product behavior contract first and a model benchmark
 second.
 
-- Tier 0: toy contract cases that verify the harness, tool loop, prompt basics,
+- Tier 0: toy contract cases that verify native orchestration, prompt basics,
   and safety invariants.
 - Tier 1: local demo readiness cases that should pass before showing the
   prototype with a weaker local Ollama model.
@@ -139,8 +139,8 @@ checks; a correct first answer or query cannot satisfy a later request. The
 turn's `answer_contains` entries are all required, overriding the older aggregate
 judge's 80% keyword threshold. Keyword checks still do not prove semantic
 correctness; exclusions also match terms inside explanatory negations.
-The legacy harness carries the complete assistant/tool exchange into subsequent
-turns. Top-level expectations remain aggregate checks for backward compatibility.
+The evaluator carries observed, paired assistant/tool exchanges into subsequent
+turns through the production planner context projection. Top-level expectations remain aggregate checks for backward compatibility.
 
 For data requests, `result_set` checks the last query to the named manager in
 that turn. It compares an unordered multiset, so missing rows, extra rows, and

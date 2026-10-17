@@ -64,7 +64,7 @@ def test_suite_distinguishes_budget_from_quality_failures(
 
     async def run_case(provider, case, definitions, **kwargs):
         assert provider.provider_config["max_requests"] == 16
-        assert kwargs["max_tool_iterations"] == 16
+        assert kwargs["max_provider_requests"] == 16
         kwargs["trace_writer"].write_case({"turns": [{"answer": "Bearing"}]})
         return EvalResult(
             case=case,

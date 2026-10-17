@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from general_manager.chat.evals.fingerprints import EVALUATION_CONTRACT
+
 from collections.abc import AsyncIterator
 from copy import deepcopy
 import hashlib
@@ -58,6 +60,7 @@ class _RecordingProvider(Provider):
         super().__init__(model, transport, max_requests=max_requests)
         self.artifact = artifact
         self.path = path
+        self.failure: EvalError | None = None
 
     async def complete(
         self, messages: list[Message], tools: list[ToolDefinition]
@@ -96,6 +99,10 @@ class _RecordingProvider(Provider):
                     if isinstance(event, DoneEvent):
                         partial["response_completed"] = True
                     yield event
+        except EvalError as error:
+            if self.failure is None:
+                self.failure = error
+            raise
         finally:
             partial["requests"] = self.requests
             save_report(self.path, self.artifact)
@@ -182,6 +189,7 @@ async def _evaluate_case(
     row: dict[str, Any] = {
         "dataset": dataset,
         "case": case.name,
+        "execution_contract": EVALUATION_CONTRACT,
         "fixture_sha256": datasets.fixture_fingerprint(dataset),
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
         "case_sha256": hashlib.sha256(
@@ -200,6 +208,7 @@ async def _evaluate_case(
                 "prompt": prompt,
                 "tools": definitions,
                 "fixture": datasets.fixture_fingerprint(dataset),
+                "execution_contract": EVALUATION_CONTRACT,
             }
         ),
         "reference_sha256": answer_judge.fingerprint(references),
@@ -213,6 +222,7 @@ async def _evaluate_case(
     }
     artifact = {
         "eval_revision": EVAL_REVISION,
+        "execution_contract": EVALUATION_CONTRACT,
         "model": model,
         "dataset": dataset,
         "case": case.name,
@@ -241,7 +251,7 @@ async def _evaluate_case(
         result = await run_case(
             provider,
             case,
-            definitions,
+            None,
             trace_writer=capture,
             run_metadata={
                 "model": model,
@@ -249,7 +259,7 @@ async def _evaluate_case(
                 "score_authority": "legacy_diagnostics_only",
                 "eval_revision": EVAL_REVISION,
             },
-            max_tool_iterations=REQUESTS_PER_TURN,
+            max_provider_requests=REQUESTS_PER_TURN,
         )
         row["legacy_diagnostics"] = {
             **score_summary(result),
@@ -257,6 +267,10 @@ async def _evaluate_case(
         }
         artifact["legacy_trace"] = capture.payload
         save_report(artifact_path, artifact)
+        if provider.failure is not None:
+            # Native orchestration returns an outcome; the transport's existing
+            # STOP still owns the suite and retains its original diagnostic.
+            raise provider.failure
         if result.error:
             row["error"] = row["legacy_diagnostics"]["error"]
             row["outcome"] = (
@@ -306,6 +320,8 @@ async def evaluate_answer_suite(
     prepared = _prepare_cases(names)
     judge = answer_judge.AnswerJudge(transport)
     report["eval_revision"] = EVAL_REVISION
+    report["execution_contract"] = EVALUATION_CONTRACT
+    report["strategy"] = "planned"
     report["primary_metric"] = "per_turn_answer_correctness"
     report["judge"] = answer_judge.judge_metadata()
     report["judge_rubric"] = answer_judge.JUDGE_PROMPT

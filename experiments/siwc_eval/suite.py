@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from general_manager.chat.evals.fingerprints import EVALUATION_CONTRACT
+
 import argparse
 import asyncio
 from collections.abc import AsyncGenerator
@@ -122,9 +124,10 @@ def main() -> int:
         "datasets": datasets,
         "max_requests_per_turn": REQUESTS_PER_TURN,
         "eval_revision": EVAL_REVISION,
+        "execution_contract": EVALUATION_CONTRACT,
         "history": "full_tool_exchanges",
         "automatic_retries": 0,
-        "strategy": "legacy",
+        "strategy": "planned",
         "mutations_enabled": False,
         "completed": False,
         "results": [],
