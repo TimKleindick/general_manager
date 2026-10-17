@@ -562,7 +562,7 @@ finally:
     )
     assert all(turn["persistence_verified"] for turn in result["turns"])
     assert result["trace"]["provider_calls"]
-    assert result["reference_version"] == "1.14"
+    assert result["reference_version"] == "1.15"
     for name in (
         "contract.py",
         "models.py",

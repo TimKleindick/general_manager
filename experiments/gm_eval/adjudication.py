@@ -70,6 +70,15 @@ _RESULT_MEMBERSHIP_DESCRIPTION = (
     "Preserve extra entities actually included in the requested result. "
     "All explanatory claims remain subject to answer_supported."
 )
+_SINGLE_WINNER_COMPARISONS_DESCRIPTION = (
+    " This question requests a single winner. When the answer clearly selects "
+    "one winner, result_ids, ranked_ids and values describe that asserted winner; "
+    "other projects in explanatory comparison prose or a comparison table are "
+    "not additional selected winners. Do not discard an extra or contradictory "
+    "winner actually asserted, infer a missing winner from a table, or repair "
+    "a wrong winner or value. Every comparison, table cell, order, scope and "
+    "completeness claim remains independently required under answer_supported."
+)
 JUDGE_INSTRUCTION = "".join(
     (
         """You independently review one saved candidate answer.
@@ -316,7 +325,13 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
         str(name): _shape(str(name), value)
         for name, value in expectation["facts"].items()
     }
-    revised = expectation.get("schema_version") in {"1.11", "1.12", "1.13", "1.14"}
+    revised = expectation.get("schema_version") in {
+        "1.11",
+        "1.12",
+        "1.13",
+        "1.14",
+        "1.15",
+    }
     if revised:
         for field, components in expectation.get("fact_components", {}).items():
             shapes[field] = {
@@ -457,7 +472,7 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
             if path["manager"] == manager and path["path"][0] == "constraints"
         ]
         explicit_targets = (
-            expectation.get("schema_version") in {"1.13", "1.14"}
+            expectation.get("schema_version") in {"1.13", "1.14", "1.15"}
             and "selection_target_paths" in descriptor
         )
         if explicit_targets:
@@ -523,7 +538,7 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
             "Preserve the asserted order, missing/extra identities and unresolved names. "
             "Never fill a missing list or replace its order from tools or a reference."
         )
-        if expectation.get("schema_version") == "1.14":
+        if expectation.get("schema_version") in {"1.14", "1.15"}:
             shapes["ranked_ids"]["description"] = _PROSE_RANKED_IDS_DESCRIPTION
     if "ranking_coverage" in shapes:
         shapes["ranking_coverage"] = {
@@ -541,6 +556,12 @@ def fact_schemas(expectation: Mapping[str, Any]) -> dict[str, Any]:
             shapes[name]["description"] = (
                 shapes[name].get("description", "") + _RESULT_MEMBERSHIP_DESCRIPTION
             )
+            if (
+                expectation.get("schema_version") == "1.15"
+                and expectation.get("result_claim_scope")
+                == "single_winner_with_comparisons"
+            ):
+                shapes[name]["description"] += _SINGLE_WINNER_COMPARISONS_DESCRIPTION
     if "constraints" in shapes:
         shapes["constraints"]["description"] = (
             "The effective selection scope asserted by the current answer: combine the current "
@@ -1713,14 +1734,28 @@ def judge_messages(request: Mapping[str, Any]) -> list[Message]:
     # The exact description is already request-hash bound. Archived 1.14
     # requests retain their original system text rather than being reinterpreted.
     if (
-        request.get("reference_version") == "1.14"
+        request.get("reference_version") in {"1.14", "1.15"}
         and isinstance(ranking, Mapping)
         and ranking.get("description")
-        == _PROSE_RANKED_IDS_DESCRIPTION + _RESULT_MEMBERSHIP_DESCRIPTION
+        in {
+            _PROSE_RANKED_IDS_DESCRIPTION + _RESULT_MEMBERSHIP_DESCRIPTION,
+            _PROSE_RANKED_IDS_DESCRIPTION
+            + _RESULT_MEMBERSHIP_DESCRIPTION
+            + _SINGLE_WINNER_COMPARISONS_DESCRIPTION,
+        }
     ):
         instruction = instruction.replace(
             _LEGACY_RANKED_IDS_INSTRUCTION, _PROSE_RANKED_IDS_INSTRUCTION, 1
         )
+    if (
+        request.get("reference_version") == "1.15"
+        and isinstance(ranking, Mapping)
+        and ranking.get("description")
+        == _PROSE_RANKED_IDS_DESCRIPTION
+        + _RESULT_MEMBERSHIP_DESCRIPTION
+        + _SINGLE_WINNER_COMPARISONS_DESCRIPTION
+    ):
+        instruction += "\n" + _SINGLE_WINNER_COMPARISONS_DESCRIPTION.strip() + "\n"
     return compact_messages([Message(role="system", content=instruction), message])
 
 
@@ -1804,7 +1839,7 @@ def build_adjudication_request(
         "observation": observation,
         "model_performance_measured": run.get("model_performance_measured") is True,
     }
-    if expectation.get("schema_version") in {"1.11", "1.12", "1.13", "1.14"}:
+    if expectation.get("schema_version") in {"1.11", "1.12", "1.13", "1.14", "1.15"}:
         request["reference_version"] = expectation["schema_version"]
     schema_sources = _schema_history_sources(run, turn_index, schema, history)
     if schema_sources:
