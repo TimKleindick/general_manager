@@ -1,5 +1,5 @@
 {
-  "reference_version": "1.14",
+  "reference_version": "1.15",
   "original_catalog_sha256": "972636e1e2a7ebebdab2fc03d7d17fac73cd60c6c6b8d6c5857a8dc4452b4f6f",
   "catalog_sha256": "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11",
   "corrections": [
@@ -451,6 +451,16 @@
         "expected": "Return exactly projects supplied through parts by supplier Nord and containing Copper; approval is not an implicit filter. Require the full Supplier–Part–ProjectPart relation and Project/Material evidence; preserve wrong, missing or extra supplier, material, project and narrowing claims."
       },
       "rationale": "Tim explicitly approved the bundled plan on 2026-10-16 at 21:17 UTC (Sentinel_6f59812b98a88191adb7fe84c83b64b8). Version the reference against the unchanged natural question and actual visible definitions. Preserve frozen catalog bytes, source fixtures, prior reference selectors and historical reports; no retroactive live pass claim."
+    },
+    {
+      "id": "E099-winner-comparison-membership-1.15",
+      "case_id": "E099",
+      "status": "resolved",
+      "version": "1.15",
+      "field": "winner_and_comparison_claim_scope",
+      "before": "A clear single-winner headline accompanied by comparison projects could be extracted as several requested winners.",
+      "after": "For the two resolved E099 winner questions, extract the visibly selected winner separately from clearly explanatory comparison prose/table. Preserve wrong, missing, extra or contradictory winner assertions. The existing answer_supported owner must verify every volunteered comparison, value, identity, order, population, scope and completeness claim.",
+      "rationale": "Tim explicitly accepted a correct winner with clearly recognizable comparison projects, conditional on every fact being correct (Sentinel_ca8180b46db88191b3de8d32a670071c and Sentinel_5451e723ece481918accebd11824330f). Source facts, exact winner/value checks, frozen catalog, and all historical reports remain unchanged. Any offline reassessment is a new version-bound artifact, never a live rerun or overwrite."
     }
   ],
   "original_case_count": 100,
@@ -849,6 +859,16 @@
         "E086"
       ],
       "rationale": "Only E086 supplier approval semantics change. Default public selectors migrate to 1.14; explicit 1.10–1.13 contracts and blind extraction shapes remain exact. Current question, runtime definitions and Gold consistently omit implicit approval. Identity, relation, material, completeness and evidence checks remain strict."
+    },
+    {
+      "version": "1.15",
+      "adjudication_schema": "1.5",
+      "evaluation_revision": "measurement-contracts-9",
+      "field": "single_winner_with_comparisons",
+      "case_ids": [
+        "E099"
+      ],
+      "rationale": "Version the authorized answer-claim boundary in oracle and blind extraction descriptions. Reuse the existing mandatory answer_supported check for all comparison details and contradictions. Default public selectors migrate to 1.15; explicit 1.10–1.14 contracts and blind shapes stay exact. No Gold arithmetic, score threshold, source evidence, timeout, or historical outcome changes; no new live performance measured."
     }
   ]
 }
