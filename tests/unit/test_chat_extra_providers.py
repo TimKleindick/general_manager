@@ -62,6 +62,7 @@ class _OpenAIChatCompletions:
                 SimpleNamespace(
                     choices=[
                         SimpleNamespace(
+                            finish_reason="tool_calls",
                             delta=SimpleNamespace(
                                 content=None,
                                 tool_calls=[
@@ -72,7 +73,7 @@ class _OpenAIChatCompletions:
                                         )
                                     )
                                 ],
-                            )
+                            ),
                         )
                     ],
                     usage=None,
@@ -175,8 +176,10 @@ class _AnthropicMessages:
                 ),
                 SimpleNamespace(
                     type="message_delta",
+                    delta=SimpleNamespace(stop_reason="tool_use"),
                     usage=SimpleNamespace(input_tokens=7, output_tokens=11),
                 ),
+                SimpleNamespace(type="message_stop"),
             ]
         )
 
@@ -217,8 +220,10 @@ class _AnthropicFragmentedMessages:
                 SimpleNamespace(type="content_block_stop", index=0),
                 SimpleNamespace(
                     type="message_delta",
+                    delta=SimpleNamespace(stop_reason="tool_use"),
                     usage=SimpleNamespace(input_tokens=7, output_tokens=11),
                 ),
+                SimpleNamespace(type="message_stop"),
             ]
         )
 
@@ -260,8 +265,10 @@ class _AnthropicSplitUsageMessages:
                 SimpleNamespace(type="content_block_stop", index=0),
                 SimpleNamespace(
                     type="message_delta",
+                    delta=SimpleNamespace(stop_reason="tool_use"),
                     usage=SimpleNamespace(output_tokens=89),
                 ),
+                SimpleNamespace(type="message_stop"),
             ]
         )
 
@@ -290,6 +297,7 @@ class _GeminiModels:
                         prompt_token_count=2,
                         candidates_token_count=4,
                     ),
+                    candidates=[SimpleNamespace(finish_reason="STOP")],
                 ),
             ]
         )
@@ -314,6 +322,7 @@ class _GeminiFunctionCallModels:
                         ),
                         SimpleNamespace(name="invalid_path", args="[1, 2]"),
                     ],
+                    candidates=[SimpleNamespace(finish_reason="STOP")],
                 )
             ]
         )

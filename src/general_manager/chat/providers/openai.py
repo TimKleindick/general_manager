@@ -14,6 +14,8 @@ from general_manager.chat.providers._shared import (
     ChatEvent,
     DoneEvent,
     Message,
+    ProviderCompletionError,
+    close_async_resource,
     StreamingToolCallBuilder,
     TextChunkEvent,
     TokenUsage,
@@ -136,59 +138,78 @@ class OpenAIProvider(BaseLLMProvider):
         )
         usage = TokenUsage()
         tool_call_builders: dict[tuple[int, int], StreamingToolCallBuilder] = {}
-        async for chunk in stream:
-            content = get_attr(chunk, "choices")
-            if isinstance(content, list):
-                for index, choice in enumerate(content):
-                    choice_index = getattr(choice, "index", index)
-                    if not isinstance(choice_index, int):
-                        choice_index = index
-                    delta = getattr(choice, "delta", None)
-                    text = getattr(delta, "content", None)
-                    if isinstance(text, str) and text:
-                        yield TextChunkEvent(content=text)
-                    tool_calls = getattr(delta, "tool_calls", None)
-                    if isinstance(tool_calls, list):
-                        for tool_index, tool_call in enumerate(tool_calls):
-                            call_index = getattr(tool_call, "index", tool_index)
-                            if not isinstance(call_index, int):
-                                call_index = tool_index
-                            key = (choice_index, call_index)
-                            call_id = getattr(tool_call, "id", None)
-                            builder = tool_call_builders.get(key)
-                            if builder is None:
-                                fallback_id = f"openai-tool-{choice_index}-{call_index}"
-                                builder = StreamingToolCallBuilder(
-                                    call_id=call_id
-                                    if isinstance(call_id, str) and call_id
-                                    else fallback_id
-                                )
-                                tool_call_builders[key] = builder
-                            elif isinstance(call_id, str) and call_id:
-                                builder.call_id = call_id
-                            function = getattr(tool_call, "function", None)
-                            builder.append(
-                                name=getattr(function, "name", None),
-                                arguments=getattr(function, "arguments", None),
+        seen_choices: set[int] = set()
+        completed_choices: set[int] = set()
+        try:
+            async for chunk in stream:
+                content = get_attr(chunk, "choices")
+                if isinstance(content, list):
+                    for index, choice in enumerate(content):
+                        choice_index = getattr(choice, "index", index)
+                        if not isinstance(choice_index, int):
+                            choice_index = index
+                        seen_choices.add(choice_index)
+                        reason = getattr(choice, "finish_reason", None)
+                        if reason in {"stop", "tool_calls"}:
+                            completed_choices.add(choice_index)
+                        elif reason is not None:
+                            raise ProviderCompletionError(
+                                "provider_response_incomplete"
                             )
-                    if getattr(choice, "finish_reason", None) == "tool_calls":
-                        for key in [
-                            key for key in tool_call_builders if key[0] == choice_index
-                        ]:
-                            event = tool_call_builders.pop(key).build()
-                            if event is not None:
-                                yield event
-            chunk_usage = getattr(chunk, "usage", None)
-            if chunk_usage is not None:
-                usage = TokenUsage(
-                    input_tokens=int(getattr(chunk_usage, "prompt_tokens", 0)),
-                    output_tokens=int(getattr(chunk_usage, "completion_tokens", 0)),
-                )
-        for key in sorted(tool_call_builders):
-            event = tool_call_builders[key].build()
-            if event is not None:
-                yield event
-        yield DoneEvent(usage=usage)
+                        delta = getattr(choice, "delta", None)
+                        text = getattr(delta, "content", None)
+                        if isinstance(text, str) and text:
+                            yield TextChunkEvent(content=text)
+                        tool_calls = getattr(delta, "tool_calls", None)
+                        if isinstance(tool_calls, list):
+                            for tool_index, tool_call in enumerate(tool_calls):
+                                call_index = getattr(tool_call, "index", tool_index)
+                                if not isinstance(call_index, int):
+                                    call_index = tool_index
+                                key = (choice_index, call_index)
+                                call_id = getattr(tool_call, "id", None)
+                                builder = tool_call_builders.get(key)
+                                if builder is None:
+                                    fallback_id = (
+                                        f"openai-tool-{choice_index}-{call_index}"
+                                    )
+                                    builder = StreamingToolCallBuilder(
+                                        call_id=call_id
+                                        if isinstance(call_id, str) and call_id
+                                        else fallback_id
+                                    )
+                                    tool_call_builders[key] = builder
+                                elif isinstance(call_id, str) and call_id:
+                                    builder.call_id = call_id
+                                function = getattr(tool_call, "function", None)
+                                builder.append(
+                                    name=getattr(function, "name", None),
+                                    arguments=getattr(function, "arguments", None),
+                                )
+                        if getattr(choice, "finish_reason", None) == "tool_calls":
+                            for key in [
+                                key
+                                for key in tool_call_builders
+                                if key[0] == choice_index
+                            ]:
+                                event = tool_call_builders.pop(key).build()
+                                if event is not None:
+                                    yield event
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage is not None:
+                    usage = TokenUsage(
+                        input_tokens=int(getattr(chunk_usage, "prompt_tokens", 0)),
+                        output_tokens=int(getattr(chunk_usage, "completion_tokens", 0)),
+                    )
+            if not seen_choices or seen_choices != completed_choices:
+                raise ProviderCompletionError()
+            for key in sorted(tool_call_builders):
+                event = tool_call_builders[key].build()
+                if event is not None:
+                    yield event
+            yield DoneEvent(usage=usage)
+        finally:
+            await close_async_resource(stream)
 
 
 __all__ = ["OpenAIDependencyImportError", "OpenAIProvider"]

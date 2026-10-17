@@ -116,7 +116,11 @@ def _rounds(
     calls: list[tuple[str, list[Message]]] = []
 
     async def complete(
-        provider: Any, messages: list[Message], _tools: object, _timeout: float
+        provider: Any,
+        messages: list[Message],
+        _tools: object,
+        _timeout: float,
+        **_kwargs: Any,
     ) -> ProviderRoundResult:
         calls.append((provider.role, deepcopy(messages)))
         response = next(pending)

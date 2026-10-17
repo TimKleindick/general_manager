@@ -364,7 +364,23 @@ def test_every_planned_dataset_case_executes_its_declared_contract(
         )
     )
 
-    assert result.error is None
+    expected_error = (
+        expected["terminal_reason"]
+        if case_name
+        in {
+            "budget_exhaustion",
+            "deadline_exhaustion",
+            "two_pass_no_progress",
+            "partial_independent_answer",
+        }
+        else None
+    )
+    assert result.error == expected_error
+    if expected_error is not None:
+        assert not result.passed
+        assert result.status == (
+            "fail" if expected_error == "manager_unresolved" else "unscored"
+        )
     if case_name == "mutation_fallback":
         assert result.diagnostics["orchestration"]["coverage"] == expected["coverage"]
         assert (

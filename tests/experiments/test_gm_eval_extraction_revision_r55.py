@@ -42,7 +42,7 @@ def test_all_149_historical_expectations_and_blind_shapes_remain_exact():
     assert len(baseline) == 149
 
 
-@pytest.mark.parametrize("version", [None, True, 1.11, "1.16", "1.9", ""])
+@pytest.mark.parametrize("version", [None, True, 1.11, "1.17", "1.9", ""])
 def test_reference_selector_rejects_unknown_or_mistyped_versions(version):
     with pytest.raises(ValueError, match="reference version"):
         oracle.expected_turn(case("E079"), 0, reference_version=version)
@@ -55,7 +55,7 @@ def test_catalog_and_report_preserve_the_selected_legacy_version():
     assert report["catalog_validation"]["reference_version"] == "1.10"
     assert {e["schema_version"] for e in report["oracles"]} == {"1.10"}
     assert not any(c["version"] == "1.11" for c in report["reference_corrections"])
-    assert catalog.REFERENCE_VERSION == "1.15"
+    assert catalog.REFERENCE_VERSION == "1.16"
     assert catalog.catalog_sha256() == catalog.REVIEWED_SHA256
     assert any(c["version"] == "1.11" for c in catalog.reference_corrections())
 

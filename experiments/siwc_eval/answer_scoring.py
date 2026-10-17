@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from general_manager.chat.evals.runner import EvalCase
+from general_manager.chat.providers._shared import closing_async_resource
 from general_manager.chat.evals.traces import EvalTraceWriter
 from general_manager.chat.providers.base import (
     ChatEvent,
@@ -82,16 +83,19 @@ class _RecordingProvider(Provider):
         self.artifact["partial_transcript"] = partial
         save_report(self.path, self.artifact)
         try:
-            async for event in super().complete(messages, tools):
-                if isinstance(event, TextChunkEvent):
-                    partial["assistant_reply"]["content"] += event.content
-                if isinstance(event, ToolCallEvent):
-                    partial["assistant_reply"]["tool_calls"].append(
-                        {"id": event.id, "name": event.name, "args": event.args}
-                    )
-                if isinstance(event, DoneEvent):
-                    partial["response_completed"] = True
-                yield event
+            async with closing_async_resource(
+                super().complete(messages, tools)
+            ) as events:
+                async for event in events:
+                    if isinstance(event, TextChunkEvent):
+                        partial["assistant_reply"]["content"] += event.content
+                    if isinstance(event, ToolCallEvent):
+                        partial["assistant_reply"]["tool_calls"].append(
+                            {"id": event.id, "name": event.name, "args": event.args}
+                        )
+                    if isinstance(event, DoneEvent):
+                        partial["response_completed"] = True
+                    yield event
         finally:
             partial["requests"] = self.requests
             save_report(self.path, self.artifact)

@@ -75,14 +75,25 @@ def classify_result(result: EvalResult) -> FailureDiagnostic | None:
             message=result.error,
             next_action="Repair the per-turn expectations before running inference.",
         )
-    if result.error:
+    if result.error is not None:
+        if result.failure_category == "model_task_failure":
+            return FailureDiagnostic(
+                case=result.case.name,
+                owner="prompt",
+                category="model_task_failure",
+                severity="hard",
+                failure_class="model_demo_reliability",
+                message=result.error,
+                next_action="Inspect the completed plan, model action and grounding evidence.",
+            )
         return FailureDiagnostic(
             case=result.case.name,
             owner="provider",
             category="provider_error",
             severity="hard",
             failure_class="eval_or_harness",
-            message=result.error,
+            message=result.error
+            or "Provider execution failed without diagnostic text.",
             next_action=(
                 "Verify the provider is reachable, the model is installed, and the "
                 "readiness command uses the intended base URL."
@@ -133,7 +144,11 @@ def classify_result(result: EvalResult) -> FailureDiagnostic | None:
             if diagnostic is not None:
                 return diagnostic
 
-    if result.tool_score is not None and not result.tool_score.passed:
+    if (
+        contract is None
+        and result.tool_score is not None
+        and not result.tool_score.passed
+    ):
         message = "; ".join(result.tool_score.mismatches)
         return FailureDiagnostic(
             case=result.case.name,

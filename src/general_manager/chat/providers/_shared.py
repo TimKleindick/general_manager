@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
+from inspect import isawaitable
 import json
-from typing import Any
+from typing import Any, TypeVar
 
 from general_manager.chat.providers.base import (
     ChatEvent,
@@ -15,6 +18,86 @@ from general_manager.chat.providers.base import (
     TokenUsage,
     ToolDefinition,
 )
+
+
+async def close_async_resource(resource: Any) -> None:
+    """Close an owned SDK stream or iterator through its supported public closer."""
+    close = getattr(resource, "aclose", None)
+    if not callable(close):
+        close = getattr(resource, "close", None)
+    if callable(close):
+        result = close()
+        if isawaitable(result):
+            await result
+
+
+_Resource = TypeVar("_Resource")
+
+
+@asynccontextmanager
+async def closing_async_resource(resource: _Resource) -> AsyncIterator[_Resource]:
+    """Await owned-stream cleanup on every exit, retaining a primary failure."""
+    try:
+        yield resource
+    except BaseException as exc:
+        with suppress(Exception):
+            await close_async_resource(resource)
+        # An inner generator's failing finally may replace the CancelledError
+        # it received. A pending task cancellation still owns the outcome.
+        task = asyncio.current_task()
+        if isinstance(exc, Exception) and task is not None and task.cancelling():
+            raise asyncio.CancelledError() from exc
+        raise
+    else:
+        await close_async_resource(resource)
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise asyncio.CancelledError()
+
+
+class ProviderCompletionError(ValueError):
+    """A response cannot prove successful, terminal protocol completion."""
+
+    public_reason = "provider_failed"
+
+    def __init__(self, code: str = "stream_without_completion") -> None:
+        self.code = code
+        super().__init__(code)
+
+
+async def completed_events(
+    events: AsyncIterator[ChatEvent],
+    *,
+    on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
+) -> AsyncIterator[ChatEvent]:
+    """Require exactly one terminal DoneEvent and close the owned iterator.
+
+    Buffer the terminal until EOF so consumers cannot execute tools or declare
+    success before late events or stream failures have been checked. Adapters
+    prove vendor completion; callers retain deadlines, validation and STOP policy.
+    """
+    done = None
+    async with closing_async_resource(events):
+        async for event in events:
+            if done is not None:
+                raise ProviderCompletionError("events_after_completion")
+            if isinstance(event, DoneEvent):
+                if not isinstance(event.usage, TokenUsage):
+                    raise ProviderCompletionError("invalid_completion_usage")
+                done = event
+                # Accounting is an observation, not admission of a successful
+                # response. Retain known usage even if later validation fails.
+                if on_usage is not None:
+                    await on_usage(event.usage)
+            elif isinstance(event, (TextChunkEvent, ToolCallEvent)):
+                yield event
+            else:
+                raise ProviderCompletionError("unsupported_provider_event")
+        if done is None:
+            raise ProviderCompletionError()
+    # Cleanup is part of completion admission; do not require a consumer's next
+    # anext/aclose to surface an SDK close failure after receiving success.
+    yield done
 
 
 def parse_tool_arguments(arguments: Any) -> dict[str, Any]:
@@ -72,11 +155,14 @@ __all__ = [
     "ChatEvent",
     "DoneEvent",
     "Message",
+    "ProviderCompletionError",
     "StreamingToolCallBuilder",
     "TextChunkEvent",
     "TokenUsage",
     "ToolCallEvent",
     "ToolDefinition",
+    "close_async_resource",
+    "completed_events",
     "get_attr",
     "parse_tool_arguments",
 ]

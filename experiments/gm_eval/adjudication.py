@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from .reporting import DIMENSIONS
 from .catalog import validate_reference_version
+from .outcomes import terminal_failure_categories, runtime_failure_provenance
 from .semantic_contracts import (
     ADJUDICATION_SCHEMA_VERSION,
     RANKING_COVERAGE,
@@ -265,7 +266,7 @@ def _extraction_policy(expectation: Mapping[str, Any], requested: str | None) ->
     """Select prospective extraction semantics independently of business Gold."""
     fields = expectation.get("entity_identity_reference", {}).get("fields", {})
     eligible = (
-        expectation.get("schema_version") == "1.15"
+        expectation.get("schema_version") in {"1.15", "1.16"}
         and all(name in expectation["facts"] for name in _RECOMMENDATION_DESCRIPTIONS)
         and all(
             fields.get(name) == {"manager": "Customer", "shape": "mapping_keys"}
@@ -390,6 +391,7 @@ def fact_schemas(
         "1.13",
         "1.14",
         "1.15",
+        "1.16",
     }
     if revised:
         for field, components in expectation.get("fact_components", {}).items():
@@ -531,7 +533,7 @@ def fact_schemas(
             if path["manager"] == manager and path["path"][0] == "constraints"
         ]
         explicit_targets = (
-            expectation.get("schema_version") in {"1.13", "1.14", "1.15"}
+            expectation.get("schema_version") in {"1.13", "1.14", "1.15", "1.16"}
             and "selection_target_paths" in descriptor
         )
         if explicit_targets:
@@ -597,7 +599,7 @@ def fact_schemas(
             "Preserve the asserted order, missing/extra identities and unresolved names. "
             "Never fill a missing list or replace its order from tools or a reference."
         )
-        if expectation.get("schema_version") in {"1.14", "1.15"}:
+        if expectation.get("schema_version") in {"1.14", "1.15", "1.16"}:
             shapes["ranked_ids"]["description"] = _PROSE_RANKED_IDS_DESCRIPTION
     if "ranking_coverage" in shapes:
         shapes["ranking_coverage"] = {
@@ -616,7 +618,7 @@ def fact_schemas(
                 shapes[name].get("description", "") + _RESULT_MEMBERSHIP_DESCRIPTION
             )
             if (
-                expectation.get("schema_version") == "1.15"
+                expectation.get("schema_version") in {"1.15", "1.16"}
                 and expectation.get("result_claim_scope")
                 == "single_winner_with_comparisons"
             ):
@@ -1367,8 +1369,35 @@ def _validated_failure_flags(value: Any) -> list[dict[str, Any]]:
     return deepcopy(value)
 
 
-def _candidate_failures(
+def _candidate_failure_provenance(
     run: Mapping[str, Any], turn: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    terminal = next(
+        (
+            event
+            for event in reversed(turn.get("events", []))
+            if event.get("type") in {"done", "error"}
+        ),
+        None,
+    )
+    if not isinstance(terminal, Mapping):
+        return None
+    trace = run.get("trace", {})
+    events = trace.get("events", []) if isinstance(trace, Mapping) else []
+    if not isinstance(events, list) or any(
+        not isinstance(event, Mapping) for event in events
+    ):
+        _invalid("invalid_candidate_runtime_audit")
+    proof = runtime_failure_provenance(terminal, events, turn=turn["turn"])
+    return {**proof, "terminal": deepcopy(terminal)}
+
+
+def _candidate_failures(
+    run: Mapping[str, Any],
+    turn: Mapping[str, Any],
+    *,
+    reference_version: str | None = None,
+    provenance: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     # A run aggregates later-turn failures. An explicit per-turn list, even an
     # empty one, is authoritative for this turn and prevents backward leakage.
@@ -1411,33 +1440,21 @@ def _candidate_failures(
     if "terminal" in turn and turn["terminal"] != terminal:
         _invalid("invalid_saved_trace_terminal")
     if not flags and isinstance(terminal, Mapping):
-        reasons = {terminal.get("code")} if terminal.get("type") == "error" else set()
-        reasons.update(
-            item.get("reason")
-            for item in terminal.get("orchestration", {}).get("unresolved", [])
+        if reference_version == "1.16" and provenance is None:
+            provenance = _candidate_failure_provenance(run, turn)
+        categories = terminal_failure_categories(
+            terminal,
+            legacy_deadline_transport=reference_version != "1.16",
+            terminal_origin=(provenance or {}).get("terminal_origin"),
+            reason_origins=(provenance or {}).get("reason_origins"),
         )
-        classes = {
-            "budget_exhausted": "budget_exhausted",
-            "provider_failed": "transport_failure",
-            "deadline_exceeded": "transport_failure",
-            "rate_limited": "transport_failure",
-            "chat_error": "harness_failure",
-            "invalid_plan": "model_task_failure",
-            "synthesis_failed": "model_task_failure",
-            "manager_unresolved": "model_task_failure",
-            "dependency_blocked": "model_task_failure",
-        }
         flags.extend(
             {
-                "category": classes[reason],
+                "category": category,
                 "phase": "candidate",
                 "reason": f"Saved terminal event records {reason}.",
             }
-            for reason in sorted(
-                reason
-                for reason in reasons
-                if isinstance(reason, str) and reason in classes
-            )
+            for reason, category in categories.items()
         )
     return flags, status
 
@@ -1449,6 +1466,10 @@ def _request_digest(request: Mapping[str, Any]) -> str:
     for name in ("schema_transport_sources", "reference_version"):
         if name in request:
             keys.append(name)
+    if request.get("reference_version") == "1.16":
+        keys.extend(("case_id", "turn_index"))
+        if "candidate_failure_provenance" in request:
+            keys.append("candidate_failure_provenance")
     return _digest({key: request.get(key) for key in keys})
 
 
@@ -1621,6 +1642,19 @@ def _schema_history_sources(
                 }
             )
     return sources
+
+
+def _schema_origin_calls(sources: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Project schema calls from the same verified history-origin representation."""
+    calls = {}
+    for proof in sources:
+        for origin in proof.get("origins", [proof]):
+            call = origin["call"]
+            if call["name"] == "get_manager_schema":
+                if call["id"] in calls and _json(calls[call["id"]]) != _json(call):
+                    _invalid("conflicting_historical_schema_origin")
+                calls[call["id"]] = call
+    return calls
 
 
 def _validated_schema_history_origin(
@@ -1796,7 +1830,7 @@ def judge_messages(request: Mapping[str, Any]) -> list[Message]:
     # The exact description is already request-hash bound. Archived 1.14
     # requests retain their original system text rather than being reinterpreted.
     if (
-        request.get("reference_version") in {"1.14", "1.15"}
+        request.get("reference_version") in {"1.14", "1.15", "1.16"}
         and isinstance(ranking, Mapping)
         and ranking.get("description")
         in {
@@ -1810,7 +1844,7 @@ def judge_messages(request: Mapping[str, Any]) -> list[Message]:
             _LEGACY_RANKED_IDS_INSTRUCTION, _PROSE_RANKED_IDS_INSTRUCTION, 1
         )
     if (
-        request.get("reference_version") == "1.15"
+        request.get("reference_version") in {"1.15", "1.16"}
         and isinstance(ranking, Mapping)
         and ranking.get("description")
         == _PROSE_RANKED_IDS_DESCRIPTION
@@ -1842,6 +1876,14 @@ def build_adjudication_request(
     history = _visible_history(turn)
     context = {"current_question": turn["user"], "visible_history": history}
     old_calls, originals, reused = _history_sources(run, turn_index, schema, history)
+    schema_sources = _schema_history_sources(run, turn_index, schema, history)
+    # Reuse the same separately verified origins used by the lossless Judge
+    # transport. Chronology prevents later schemas from typing earlier queries.
+    historical_schemas = _schema_origin_calls(schema_sources)
+    history_calls = sorted(
+        [*historical_schemas.values(), *old_calls],
+        key=lambda call: (call["source_turn"], int(call["id"].rsplit("-", 1)[1])),
+    )
     observation = {
         "answer": turn["answer"],
         "facts": None,
@@ -1856,7 +1898,7 @@ def build_adjudication_request(
                 _historical_discovery_calls(run, turn_index, schema, history),
                 reused_queries=old_calls,
             ),
-            "tool_calls": [*calls, *old_calls],
+            "tool_calls": [*history_calls, *calls],
             "evidence": [*evidence, *reused],
             "history_evidence": originals,
         },
@@ -1894,7 +1936,17 @@ def build_adjudication_request(
         [row["id"] for row in packet["evidence"]],
         packet["grounding_contract"]["data_fields"],
     )
-    failure_flags, candidate_status = _candidate_failures(run, turn)
+    provenance = (
+        _candidate_failure_provenance(run, turn)
+        if expectation.get("schema_version") == "1.16"
+        else None
+    )
+    failure_flags, candidate_status = _candidate_failures(
+        run,
+        turn,
+        reference_version=expectation.get("schema_version"),
+        provenance=provenance,
+    )
     request = {
         "schema_version": SCHEMA_VERSION,
         "case_id": expectation["case_id"],
@@ -1905,11 +1957,19 @@ def build_adjudication_request(
         "observation": observation,
         "model_performance_measured": run.get("model_performance_measured") is True,
     }
-    if expectation.get("schema_version") in {"1.11", "1.12", "1.13", "1.14", "1.15"}:
+    if expectation.get("schema_version") in {
+        "1.11",
+        "1.12",
+        "1.13",
+        "1.14",
+        "1.15",
+        "1.16",
+    }:
         request["reference_version"] = expectation["schema_version"]
-    schema_sources = _schema_history_sources(run, turn_index, schema, history)
     if schema_sources:
         request["schema_transport_sources"] = schema_sources
+    if provenance is not None:
+        request["candidate_failure_provenance"] = provenance
     request["request_sha256"] = _request_digest(request)
     return request
 
@@ -1917,6 +1977,19 @@ def build_adjudication_request(
 def _validate_request(request: Mapping[str, Any]) -> None:
     packet = request.get("packet")
     observation = request.get("observation")
+    if (
+        not isinstance(packet, Mapping)
+        or not isinstance(packet.get("case_id"), str)
+        or not packet["case_id"]
+        or type(packet.get("turn_index")) is not int
+        or packet["turn_index"] < 0
+        or any(
+            type(request.get(key)) is not type(packet.get(key))
+            or request.get(key) != packet.get(key)
+            for key in ("case_id", "turn_index")
+        )
+    ):
+        _invalid("inconsistent_adjudication_scope")
     _validated_failure_flags(request.get("candidate_failure_flags"))
     if request.get("candidate_status") is not None and not isinstance(
         request["candidate_status"], str
@@ -1933,10 +2006,32 @@ def _validate_request(request: Mapping[str, Any]) -> None:
         _invalid("stale_adjudication_request")
     if "reference_version" in request:
         validate_reference_version(request["reference_version"])
+    if "candidate_failure_provenance" in request:
+        proof = request["candidate_failure_provenance"]
+        if (
+            request.get("reference_version") != "1.16"
+            or not isinstance(proof, Mapping)
+            or set(proof)
+            != {"turn", "terminal", "terminal_origin", "reason_origins", "audit_events"}
+            or type(proof.get("turn")) is not int
+            or proof["turn"] != request["turn_index"] + 1
+            or not isinstance(proof.get("terminal"), Mapping)
+            or not isinstance(proof.get("audit_events"), list)
+            or any(not isinstance(event, Mapping) for event in proof["audit_events"])
+        ):
+            _invalid("invalid_candidate_runtime_provenance")
+        expected_proof = {
+            **runtime_failure_provenance(
+                proof["terminal"], proof["audit_events"], turn=proof["turn"]
+            ),
+            "terminal": proof["terminal"],
+        }
+        if _json(proof) != _json(expected_proof):
+            _invalid("inconsistent_candidate_runtime_provenance")
     if "extraction_policy" in packet:
         if packet["extraction_policy"] != _RECOMMENDATION_POLICY:
             _invalid("unknown_extraction_policy")
-        if request.get("reference_version") != "1.15" or any(
+        if request.get("reference_version") not in {"1.15", "1.16"} or any(
             packet.get("fact_fields", {}).get(name, {}).get("description") != meaning
             for name, meaning in _RECOMMENDATION_DESCRIPTIONS.items()
         ):
@@ -1958,6 +2053,15 @@ def _validate_request(request: Mapping[str, Any]) -> None:
         _invalid("stale_adjudication_evidence")
     if "schema_transport_sources" in request:
         _judge_schema_slots(request)
+    proven = _schema_origin_calls(request.get("schema_transport_sources", []))
+    for call in packet.get("tool_calls", []):
+        if (
+            call.get("name") == "get_manager_schema"
+            and type(call.get("source_turn")) is int
+            and call["source_turn"] < request["turn_index"]
+            and _json(proven.get(call.get("id"))) != _json(call)
+        ):
+            _invalid("unbound_historical_schema")
 
 
 def _matches_shape(value: Any, schema: Mapping[str, Any]) -> bool:

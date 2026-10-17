@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 import inspect
 import json
@@ -27,10 +28,12 @@ from general_manager.chat.planned.scheduler import (
     iter_planned_read_events,
     prepare_planned_turn,
 )
+from general_manager.chat.providers._shared import completed_events
 from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
     TextChunkEvent,
+    TokenUsage,
     ToolCallEvent,
     ToolDefinition,
 )
@@ -93,12 +96,16 @@ async def _iter_provider_events(
     provider: Any,
     messages: list[Message],
     tools: list[ToolDefinition],
+    *,
+    on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
 ) -> Any:
     """Yield provider events while enforcing first-chunk and stall timeouts."""
     provider_config = get_chat_settings().get("provider_config", {})
     request_timeout = float(provider_config.get("timeout_seconds", 60))
     stream_timeout = float(provider_config.get("stream_timeout_seconds", 30))
-    stream = provider.complete(messages, tools).__aiter__()
+    stream = completed_events(
+        provider.complete(messages, tools), on_usage=on_usage
+    ).__aiter__()
     first_chunk = True
     try:
         while True:
@@ -467,10 +474,22 @@ class ChatConsumer(_ChatConsumerBase):
             )
             return
         self._provider_task = asyncio.current_task()
+
+        async def account_usage(usage: TokenUsage) -> None:
+            nonlocal rate_limited
+            turn_state.record_usage(usage)
+            rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+                self.scope,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                count_request=False,
+            )
+
         provider_events = _iter_provider_events(
             self._get_mutation_provider(),
             messages,
             self._build_tool_definitions() if allow_tools else [],
+            on_usage=account_usage,
         )
         try:
             async for event in provider_events:
@@ -484,13 +503,6 @@ class ChatConsumer(_ChatConsumerBase):
                     provider_tool_events.append(event)
                     continue
                 elif isinstance(event, DoneEvent):
-                    turn_state.record_usage(event.usage)
-                    rate_limited = await sync_to_async(enforce_chat_rate_limit)(
-                        self.scope,
-                        input_tokens=event.usage.input_tokens,
-                        output_tokens=event.usage.output_tokens,
-                        count_request=False,
-                    )
                     # Account completion before cleanup, but do not continue or finish first.
                     await provider_events.aclose()
                     if isinstance(rate_limited, dict):

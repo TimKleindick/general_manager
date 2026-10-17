@@ -49,6 +49,7 @@ from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
     TextChunkEvent,
+    TokenUsage,
     ToolCallEvent,
 )
 from general_manager.chat.rate_limits import enforce_chat_rate_limit
@@ -428,9 +429,22 @@ async def _iter_provider_turn_events(
         ):
             yield next_event
 
+    async def account_usage(usage: TokenUsage) -> None:
+        nonlocal rate_limited
+        turn_state.record_usage(usage)
+        rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+            scope,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            count_request=False,
+        )
+
     async with aclosing(
         _iter_provider_events(
-            provider, messages, _build_tool_definitions() if allow_tools else []
+            provider,
+            messages,
+            _build_tool_definitions() if allow_tools else [],
+            on_usage=account_usage,
         )
     ) as provider_events:
         async for event in provider_events:
@@ -443,13 +457,6 @@ async def _iter_provider_turn_events(
                 provider_tool_events.append(event)
                 continue
             if isinstance(event, DoneEvent):
-                turn_state.record_usage(event.usage)
-                rate_limited = await sync_to_async(enforce_chat_rate_limit)(
-                    scope,
-                    input_tokens=event.usage.input_tokens,
-                    output_tokens=event.usage.output_tokens,
-                    count_request=False,
-                )
                 # Account completion before cleanup, but do not continue or finish first.
                 await provider_events.aclose()
                 if isinstance(rate_limited, dict):

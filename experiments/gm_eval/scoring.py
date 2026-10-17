@@ -88,6 +88,30 @@ def _matches(expected: Any, actual: Any, comparison: str = "exact") -> bool:
             and len(actual) == len(set(actual))
             and set(expected) <= set(actual)
         )
+    if comparison == "constraints":
+        # Logical conjunctions/exclusions are sets; every other filter retains
+        # exact semantics. Unknown, extra, missing or duplicate values still fail.
+        return (
+            isinstance(actual, dict)
+            and isinstance(expected, dict)
+            and set(actual) == set(expected)
+            and all(
+                _matches(
+                    value,
+                    actual[key],
+                    "set"
+                    if key
+                    in {
+                        "all_materials",
+                        "any_materials",
+                        "excluded_materials",
+                        "supplier_ids",
+                    }
+                    else "exact",
+                )
+                for key, value in expected.items()
+            )
+        )
     if comparison == "set":
         if not isinstance(actual, list) or not isinstance(expected, list):
             return False
@@ -1094,7 +1118,7 @@ def score_turn(
             extraction.get("reference_version") == expectation.get("schema_version")
             if "reference_version" in extraction
             else expectation.get("schema_version")
-            not in {"1.11", "1.12", "1.13", "1.14", "1.15"}
+            not in {"1.11", "1.12", "1.13", "1.14", "1.15", "1.16"}
         )
         and isinstance(extraction.get("validator"), str)
         and bool(extraction.get("validator"))
@@ -1654,8 +1678,10 @@ def score_turn(
         "unit_normalization": unit_audit,
         "designation_normalization": designation_audit,
         "selection_scope": scope_audit,
-        "evaluation_revision": "measurement-contracts-9"
-        if expectation.get("schema_version") == "1.15"
+        "evaluation_revision": "measurement-contracts-10"
+        if expectation.get("schema_version") == "1.16"
+        else "measurement-contracts-9"
+        if expectation.get("schema_version") in {"1.15", "1.16"}
         else "measurement-contracts-8"
         if expectation.get("schema_version") == "1.14"
         else "measurement-contracts-7"

@@ -176,6 +176,7 @@ class ExperimentProvider:
     async def complete(
         self, messages: list[Message], tools: list[ToolDefinition]
     ) -> AsyncIterator[ChatEvent]:
+        from general_manager.chat.providers._shared import closing_async_resource
         from general_manager.chat.providers.base import (
             DoneEvent,
             TextChunkEvent,
@@ -217,26 +218,29 @@ class ExperimentProvider:
         try:
             provider = factory(self._config)
             record["request_count"] = 1
-            async for event in provider.complete(messages, tools):
-                if isinstance(event, TextChunkEvent):
-                    record["text"] += event.content
-                elif isinstance(event, ToolCallEvent):
-                    record["tool_calls"].append(
-                        {
-                            "id": event.id,
-                            "name": event.name,
-                            "args": sanitize(event.args),
-                        }
-                    )
-                elif isinstance(event, DoneEvent):
-                    record["completed"] = True
-                    if not hasattr(provider, "reported_usage"):
-                        record["reported_usage"] = {
-                            "input_tokens": event.usage.input_tokens,
-                            "output_tokens": event.usage.output_tokens,
-                            "reasoning_tokens": None,
-                        }
-                yield event
+            async with closing_async_resource(
+                provider.complete(messages, tools)
+            ) as events:
+                async for event in events:
+                    if isinstance(event, TextChunkEvent):
+                        record["text"] += event.content
+                    elif isinstance(event, ToolCallEvent):
+                        record["tool_calls"].append(
+                            {
+                                "id": event.id,
+                                "name": event.name,
+                                "args": sanitize(event.args),
+                            }
+                        )
+                    elif isinstance(event, DoneEvent):
+                        record["completed"] = True
+                        if not hasattr(provider, "reported_usage"):
+                            record["reported_usage"] = {
+                                "input_tokens": event.usage.input_tokens,
+                                "output_tokens": event.usage.output_tokens,
+                                "reasoning_tokens": None,
+                            }
+                    yield event
         except BaseException as error:
             record["error_type"] = type(error).__name__
             from experiments.siwc_eval.errors import EvalError
@@ -322,8 +326,13 @@ def siwc_factory(transport: Any) -> ProviderFactory:
         async def complete(
             self, messages: list[Message], tools: list[ToolDefinition]
         ) -> AsyncIterator[ChatEvent]:
-            async for event in self.provider.complete(messages, tools):
-                yield event
+            from general_manager.chat.providers._shared import closing_async_resource
+
+            async with closing_async_resource(
+                self.provider.complete(messages, tools)
+            ) as events:
+                async for event in events:
+                    yield event
 
     def construct(config: Mapping[str, Any]) -> BaseLLMProvider:
         reasoning = str(config.get("reasoning", "medium"))

@@ -20,6 +20,7 @@ from general_manager.chat.evals.diagnostics import summarize_failure_class_cases
 from general_manager.chat.evals.diagnostics import summarize_failure_classes
 from general_manager.chat.evals.diagnostics import summarize_diagnostics
 from general_manager.chat.evals.runner import EvalResult, is_forbidden_recovery_event
+from general_manager.chat.evals.fingerprints import EVALUATION_CONTRACT
 
 _ANSWER_PROMPT_RECOVERY_EVENTS = frozenset(
     {
@@ -84,6 +85,9 @@ def build_summary(
         event for events in forbidden_recovery_by_case.values() for event in events
     ]
     return ReadinessSummary(
+        evaluation_contract=EVALUATION_CONTRACT,
+        failed=sum(result.status == "fail" for result in results),
+        unscored=sum(result.status == "unscored" for result in results),
         run_hash=str(run_metadata["run_hash"]),
         gate=gate,
         provider=str(run_metadata["provider"]),
@@ -236,6 +240,10 @@ def readiness_exit_code(
         return 1
     if summary.forbidden_recovery_total:
         return 1
-    if fail_on_regression and comparison is not None and comparison.regressed:
+    if (
+        fail_on_regression
+        and comparison is not None
+        and (not comparison.comparable or comparison.regressed)
+    ):
         return 1
     return 0
