@@ -210,7 +210,7 @@ def test_judge_projection_restores_every_text_role_index_and_digest():
     }
     assert root["sha256"] == messages[1].reference_binding.sha256
     assert root["text_format"] is None
-    assert len(projection["occurrences"][1:]) == 2
+    assert len(projection["occurrences"][1:]) == 3
     assert [
         (row["path"], row["source"], row["binding"])
         for row in projection["occurrences"][1:]
@@ -314,11 +314,12 @@ def test_native_default_overview_call_has_a_bound_schema_slot():
                 event["args"].pop("view")
         turn["durable_messages"][-1]["tool_args"].pop("view")
     messages = api.judge_messages(schema_request(run))
-    assert len(messages[1].schema_slots) == 2
+    assert len(messages[1].schema_slots) == 3
     assert messages[1].logical_content is not None
 
 
-def test_request_build_and_binding_validation_need_no_django_or_provider_setup():
+@pytest.mark.parametrize("partial", [False, True])
+def test_request_build_and_binding_validation_need_no_django_or_provider_setup(partial):
     import os
     import subprocess
     import sys
@@ -326,12 +327,28 @@ def test_request_build_and_binding_validation_need_no_django_or_provider_setup()
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    script = f"""
+from hashlib import sha256
+from tests.experiments.test_gm_eval_judge_transport import schema_request, schema_run
+from experiments.gm_eval.adjudication import _validate_request
+run = schema_run()
+if {partial!r}:
+    terminal = run['turns'][1]['events'][-1]
+    terminal['orchestration'] = {{'unresolved': [{{'task_id': 'task_2', 'reason': 'provider_failed'}}]}}
+    run['turns'][1]['terminal'] = terminal
+    run['trace'] = {{'events': [{{'turn': 2, 'category': 'audit', 'event_type': 'planned_task_progress', 'task_id': sha256(b'task_2').hexdigest(), 'terminal_reason': 'provider_failed', 'reason_origin': 'model_declared_block'}}]}}
+r = schema_request(run)
+_validate_request(r)
+assert r['schema_transport_sources']
+if {partial!r}:
+    assert r['candidate_failure_provenance']['reason_origins'] == {{'task_2': 'model_declared_block'}}
+"""
     result = subprocess.run(  # noqa: S603 -- fixed interpreter and test script, no user input
         [
             sys.executable,
             "-B",
             "-c",
-            "from tests.experiments.test_gm_eval_judge_transport import schema_request; from experiments.gm_eval.adjudication import _validate_request; r=schema_request(); _validate_request(r); assert r['schema_transport_sources']",
+            script,
         ],
         env=env,
         capture_output=True,
@@ -373,12 +390,24 @@ def test_distinct_snapshots_and_definitions_are_preserved_by_transport():
         logical_messages(messages)[1].content.removeprefix("REFERENCE_DATA=")
     )
     assert restored == {"request_sha256": req["request_sha256"], **req["packet"]}
-    assert restored["tool_calls"][0]["output"]["snapshot"] == "b" * 64
-    assert restored["tool_calls"][0]["output"]["types"]["Status"]["values"] == [
+    current = next(
+        call
+        for call in restored["tool_calls"]
+        if call["name"] == "get_manager_schema"
+        and call["source_turn"] == req["turn_index"]
+    )
+    historical = next(
+        call
+        for call in restored["tool_calls"]
+        if call["name"] == "get_manager_schema" and call["source_turn"] == 0
+    )
+    assert historical["output"]["snapshot"] == "a" * 64
+    assert current["output"]["snapshot"] == "b" * 64
+    assert current["output"]["types"]["Status"]["values"] == [
         "OPEN",
         "ARCHIVED",
     ]
-    assert len(messages[1].schema_slots) == 2
+    assert len(messages[1].schema_slots) == 3
 
 
 def test_ambiguous_historical_schema_origin_remains_literal():

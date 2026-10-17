@@ -13,6 +13,8 @@ from general_manager.chat.providers._shared import (
     ChatEvent,
     DoneEvent,
     Message,
+    ProviderCompletionError,
+    close_async_resource,
     parse_tool_arguments,
     TextChunkEvent,
     ToolCallEvent,
@@ -182,31 +184,46 @@ class GeminiProvider(BaseLLMProvider):
             config=request_config,
         )
         usage = TokenUsage()
-        async for chunk in stream:
-            text = getattr(chunk, "text", None)
-            if isinstance(text, str) and text:
-                yield TextChunkEvent(content=text)
-            for index, tool_call in enumerate(_normalize_tool_calls(chunk)):
-                name = _get_call_value(tool_call, "name")
-                args = parse_tool_arguments(_get_call_value(tool_call, "args", {}))
-                if isinstance(name, str):
-                    call_id = _get_call_value(tool_call, "id")
-                    yield ToolCallEvent(
-                        id=call_id
-                        if isinstance(call_id, str) and call_id
-                        else f"gemini-tool-{index}",
-                        name=name,
-                        args=args,
+        completed = False
+        try:
+            async for chunk in stream:
+                for candidate in getattr(chunk, "candidates", None) or []:
+                    reason = getattr(candidate, "finish_reason", None)
+                    label = getattr(reason, "name", reason)
+                    if label == "STOP":
+                        completed = True
+                    elif label not in (None, "FINISH_REASON_UNSPECIFIED"):
+                        raise ProviderCompletionError("provider_response_incomplete")
+                text = getattr(chunk, "text", None)
+                if isinstance(text, str) and text:
+                    yield TextChunkEvent(content=text)
+                for index, tool_call in enumerate(_normalize_tool_calls(chunk)):
+                    name = _get_call_value(tool_call, "name")
+                    args = parse_tool_arguments(_get_call_value(tool_call, "args", {}))
+                    if isinstance(name, str):
+                        call_id = _get_call_value(tool_call, "id")
+                        yield ToolCallEvent(
+                            id=call_id
+                            if isinstance(call_id, str) and call_id
+                            else f"gemini-tool-{index}",
+                            name=name,
+                            args=args,
+                        )
+                usage_metadata = getattr(chunk, "usage_metadata", None)
+                if usage_metadata is not None:
+                    usage = TokenUsage(
+                        input_tokens=int(
+                            getattr(usage_metadata, "prompt_token_count", 0)
+                        ),
+                        output_tokens=int(
+                            getattr(usage_metadata, "candidates_token_count", 0)
+                        ),
                     )
-            usage_metadata = getattr(chunk, "usage_metadata", None)
-            if usage_metadata is not None:
-                usage = TokenUsage(
-                    input_tokens=int(getattr(usage_metadata, "prompt_token_count", 0)),
-                    output_tokens=int(
-                        getattr(usage_metadata, "candidates_token_count", 0)
-                    ),
-                )
-        yield DoneEvent(usage=usage)
+            if not completed:
+                raise ProviderCompletionError()
+            yield DoneEvent(usage=usage)
+        finally:
+            await close_async_resource(stream)
 
 
 GoogleProvider = GeminiProvider

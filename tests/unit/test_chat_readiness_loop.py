@@ -49,6 +49,8 @@ def test_build_summary_counts_contract_and_overall_passes() -> None:
     )
 
     assert summary == ReadinessSummary(
+        evaluation_contract="chat-evaluation/2",
+        failed=1,
         run_hash="hash1",
         gate="demo",
         provider="OllamaProvider",
@@ -163,7 +165,8 @@ def test_build_summary_does_not_count_passing_diagnostics_as_failure_classes() -
     )
 
     assert summary.passed == 1
-    assert summary.diagnostics == {"prompt": {"tool_sequence_mismatch": 1}}
+    assert summary.diagnostics == {}
+    assert results[0].tool_score is not None and not results[0].tool_score.passed
     assert summary.failure_classes == {}
     assert summary.failure_class_cases == {}
 
@@ -629,7 +632,7 @@ def test_readiness_exit_code_fails_on_failed_cases_and_regressions() -> None:
         product_contract_passed=1,
         diagnostics={},
     )
-    comparison = type("Comparison", (), {"regressed": True})()
+    comparison = type("Comparison", (), {"regressed": True, "comparable": True})()
 
     assert (
         readiness_exit_code(

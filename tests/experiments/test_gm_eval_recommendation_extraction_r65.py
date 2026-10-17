@@ -74,7 +74,7 @@ def test_new_requests_bind_only_three_corrected_field_descriptions():
     assert "enum" not in criterion
 
 
-@pytest.mark.parametrize("version", catalog.REFERENCE_VERSIONS)
+@pytest.mark.parametrize("version", ["1.10", "1.11", "1.12", "1.13", "1.14", "1.15"])
 def test_legacy_shapes_and_all_business_contracts_remain_exact(version):
     hashes = {
         "1.10": "b1283d9f0715bea738164774021b8a699e2bb4ac7399052e08bf968fede1732f",

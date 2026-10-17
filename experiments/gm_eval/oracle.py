@@ -357,7 +357,12 @@ class _Contract:
     ) -> None:
         self.fact("R", "result_ids", identifiers, "set", entity_manager=manager)
         if constraints:
-            self.fact("R", "constraints", constraints)
+            self.fact(
+                "R",
+                "constraints",
+                constraints,
+                "constraints" if self.value["schema_version"] == "1.16" else "exact",
+            )
             # Paths describe identity semantics, never the expected identity value.
             for name, entity in {
                 "project": "Project",
@@ -690,7 +695,7 @@ def expected_turn(
             {"start": f"{year}-01-01", "end_exclusive": f"{year + 1}-01-01"},
         )
         if (
-            reference_version in {"1.12", "1.13", "1.14", "1.15"}
+            reference_version in {"1.12", "1.13", "1.14", "1.15", "1.16"}
             and case["id"] == "E116"
         ):
             # This question requests a summary, not the explicit WBS grouping
@@ -847,8 +852,8 @@ def expected_turn(
         elif resolved == "supplier_path":
             # Reference 1.14 follows the actual question: supplier approval is
             # not an implied selection predicate. Prior references stay exact.
-            require_approved = reference_version not in {"1.14", "1.15"}
-            if reference_version in {"1.14", "1.15"}:
+            require_approved = reference_version not in {"1.14", "1.15", "1.16"}
+            if reference_version in {"1.14", "1.15", "1.16"}:
                 require_approved = case.get("supplier_approval_required", False)
                 if type(require_approved) is not bool:
                     message = "Supplier approval declaration must be a boolean"
@@ -902,6 +907,7 @@ def expected_turn(
                 "1.13",
                 "1.14",
                 "1.15",
+                "1.16",
             }:
                 identifiers = [
                     code
@@ -931,15 +937,23 @@ def expected_turn(
             contract.fact(
                 "R", "material_ids", sorted(materials), "set", entity_manager="Material"
             )
-            if reference_version in {"1.13", "1.14", "1.15"}:
+            if reference_version in {"1.13", "1.14", "1.15", "1.16"}:
                 # Positive target identities are distinct from independently
                 # required exclusions of the same manager type.
                 contract.value["entity_identity_reference"]["fields"]["material_ids"][
                     "selection_target_paths"
                 ] = [["constraints", "all_materials"]]
         contract.selection(identifiers, manager="Project", **constraints)
-        if resolved == "copper_projects":
-            contract.fact("C", "ranked_ids", identifiers, entity_manager="Project")
+        if resolved == "copper_projects" and not (
+            reference_version == "1.16" and case["id"] == "E074"
+        ):
+            contract.fact(
+                "C",
+                "ranked_ids",
+                identifiers,
+                "exact",
+                entity_manager="Project",
+            )
     elif resolved in {"shipments", "weight", "returns", "mixed", "provenance"}:
         rows = _shipments(data, [aurora], 2025)
         gross = _quantity(rows)
@@ -985,6 +999,7 @@ def expected_turn(
             "1.13",
             "1.14",
             "1.15",
+            "1.16",
         }:
             contract.value["fact_components"] = {
                 "values": {
@@ -1105,7 +1120,7 @@ def expected_turn(
                     required_fields={"Project": ["fx_rate", "fx_as_of", "fx_source"]},
                 )
     elif resolved in {"top_material", "three_turn"}:
-        if resolved == "three_turn" and reference_version == "1.15":
+        if resolved == "three_turn" and reference_version in {"1.15", "1.16"}:
             contract.value["result_claim_scope"] = "single_winner_with_comparisons"
             support = next(
                 check

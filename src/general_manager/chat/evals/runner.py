@@ -21,7 +21,8 @@ from general_manager.chat.evals.diagnostics import (
     sanitize_planned_trace,
     summarize_diagnostics,
 )
-from general_manager.chat.evals.fingerprints import stable_hash
+from general_manager.chat.evals.fingerprints import EVALUATION_CONTRACT, stable_hash
+from general_manager.chat.evals.outcomes import terminal_failure_categories
 from general_manager.chat.evals.judges.answer_quality import (
     AnswerQualityScore,
     judge_answer_quality,
@@ -42,6 +43,10 @@ from general_manager.chat.evals.judges.tool_sequence import (
     ToolSequenceScore,
     judge_tool_sequence,
 )
+from general_manager.chat.providers._shared import (
+    completed_events,
+    closing_async_resource,
+)
 from general_manager.chat.providers.base import (
     DoneEvent,
     Message,
@@ -53,6 +58,7 @@ from general_manager.chat.providers.base import (
 from general_manager.chat.planned.catalog import ManagerCatalog, ManagerCatalogEntry
 from general_manager.chat.planned.config import PlannedChatSettings, ProviderProfile
 from general_manager.chat.planned.resolver import ManagerResolver
+from general_manager.chat.planned.planner import InvalidPlanError
 from general_manager.chat.planned.scheduler import (
     SchedulerCallbacks,
     iter_planned_read_events,
@@ -270,10 +276,11 @@ class EvalResult:
     fingerprint: str = ""
     trace: dict[str, Any] = field(default_factory=dict)
     usage: dict[str, int] = field(default_factory=dict)
+    failure_category: str | None = None
 
     @property
     def passed(self) -> bool:
-        if self.error or any(not turn.passed for turn in self.turn_results):
+        if self.error is not None or any(not turn.passed for turn in self.turn_results):
             return False
         if self.result_set_score is not None and not self.result_set_score.passed:
             return False
@@ -286,6 +293,17 @@ class EvalResult:
             return self.tool_score.passed
         return True
 
+    @property
+    def status(self) -> str:
+        """Separate ungradable execution from a completed quality failure."""
+        if (
+            self.error is not None
+            and self.error != "missing_turn_answer"
+            and self.failure_category != "model_task_failure"
+        ) or any(turn.status == "unscored" for turn in self.turn_results):
+            return "unscored"
+        return "pass" if self.passed else "fail"
+
 
 @dataclass
 class TurnRecord:
@@ -297,6 +315,7 @@ class TurnRecord:
     error: str | None = None
     requests: int = 0
     recovery_events: list[str] = field(default_factory=list)
+    failure_category: str | None = None
 
     @property
     def answer(self) -> str:
@@ -355,7 +374,7 @@ def filter_cases(
     return output
 
 
-def _legacy_dataset_names(dataset_names: list[str] | None) -> list[str]:
+def legacy_dataset_names(dataset_names: list[str] | None = None) -> list[str]:
     """Return datasets supported by the legacy evaluation suite."""
     if dataset_names is None:
         return [
@@ -368,6 +387,10 @@ def _legacy_dataset_names(dataset_names: list[str] | None) -> list[str]:
         msg = f"Dataset(s) not supported by the legacy eval suite: {names}."
         raise ValueError(msg)
     return dataset_names
+
+
+# Preserve the private import used by older integrations; one selector owns both.
+_legacy_dataset_names = legacy_dataset_names
 
 
 # ---------------------------------------------------------------------------
@@ -428,26 +451,29 @@ async def _run_turn(
         assistant_line_open = False
 
         record.requests += 1
-        async for event in provider.complete(list(messages), tools):
-            if isinstance(event, TextChunkEvent):
-                text_chunks.append(event.content)
-                if stream is not None:
-                    if not assistant_line_open:
-                        stream.write("assistant: ")
-                        assistant_line_open = True
-                    stream.write(event.content)
-                    stream.flush()
-            elif isinstance(event, ToolCallEvent):
-                if stream is not None and assistant_line_open:
-                    stream.write("\n")
-                    assistant_line_open = False
-                tool_calls_this_round.append(event)
-                _stream_line(
-                    stream,
-                    f"tool_call {event.name}: {_to_json(event.args)}",
-                )
-            elif isinstance(event, DoneEvent):
-                pass
+        async with closing_async_resource(
+            completed_events(provider.complete(list(messages), tools))
+        ) as events:
+            async for event in events:
+                if isinstance(event, TextChunkEvent):
+                    text_chunks.append(event.content)
+                    if stream is not None:
+                        if not assistant_line_open:
+                            stream.write("assistant: ")
+                            assistant_line_open = True
+                        stream.write(event.content)
+                        stream.flush()
+                elif isinstance(event, ToolCallEvent):
+                    if stream is not None and assistant_line_open:
+                        stream.write("\n")
+                        assistant_line_open = False
+                    tool_calls_this_round.append(event)
+                    _stream_line(
+                        stream,
+                        f"tool_call {event.name}: {_to_json(event.args)}",
+                    )
+                elif isinstance(event, DoneEvent):
+                    pass
 
         if stream is not None and assistant_line_open:
             stream.write("\n")
@@ -746,17 +772,20 @@ async def _collect_model_final_answer(
 ) -> str:
     text_chunks: list[str] = []
     assistant_line_open = False
-    async for event in provider.complete(messages, []):
-        if isinstance(event, TextChunkEvent):
-            text_chunks.append(event.content)
-            if stream is not None:
-                if not assistant_line_open:
-                    stream.write("assistant: ")
-                    assistant_line_open = True
-                stream.write(event.content)
-                stream.flush()
-        elif isinstance(event, DoneEvent):
-            pass
+    async with closing_async_resource(
+        completed_events(provider.complete(messages, []))
+    ) as events:
+        async for event in events:
+            if isinstance(event, TextChunkEvent):
+                text_chunks.append(event.content)
+                if stream is not None:
+                    if not assistant_line_open:
+                        stream.write("assistant: ")
+                        assistant_line_open = True
+                    stream.write(event.content)
+                    stream.flush()
+            elif isinstance(event, DoneEvent):
+                pass
     if stream is not None and assistant_line_open:
         stream.write("\n")
         stream.flush()
@@ -2845,7 +2874,19 @@ def _score_case(
     ]
 
     result.requests = sum(record.requests for record in records)
-    result.error = next((record.error for record in records if record.error), None)
+    failures = [record for record in records if record.error is not None]
+    if failures:
+        # A technical failure anywhere keeps a multi-turn run unscored.
+        failure = next(
+            (
+                record
+                for record in failures
+                if record.failure_category != "model_task_failure"
+            ),
+            failures[0],
+        )
+        result.error = failure.error
+        result.failure_category = failure.failure_category
     turn_expectations = expectations.get("turns")
     if turn_expectations is not None:
         user_turns = [turn for turn in case.conversation if turn.get("user")]
@@ -2961,6 +3002,9 @@ def _write_trace(
             "tool_results": all_tool_results,
             "answer": full_answer,
             "passed": result.passed,
+            "status": result.status,
+            "failure_category": result.failure_category,
+            "evaluation_contract": EVALUATION_CONTRACT,
             "requests": result.requests,
             "result_set": (
                 None
@@ -3157,6 +3201,7 @@ async def _run_planned_case(
                 return result
             record = TurnRecord()
             record_appended = False
+            terminals: list[dict[str, Any]] = []
             async for event in iter_planned_read_events(
                 prepared,
                 scope={},
@@ -3171,6 +3216,11 @@ async def _run_planned_case(
                     records.append(record)
                     record_appended = True
                 events.append(event)
+                if terminals:
+                    record.error = "planned_events_after_completion"
+                    record.failure_category = "harness_failure"
+                if event["type"] in {"error", "done"}:
+                    terminals.append(event)
                 if event["type"] == "tool_call":
                     record.tool_calls.append(
                         {"name": event["name"], "args": dict(event["args"])}
@@ -3179,6 +3229,48 @@ async def _run_planned_case(
                     record.tool_results.append(event["result"])
                 elif event["type"] == "text_chunk":
                     record.answer_chunks.append(str(event["content"]))
+                elif event["type"] == "error" and record.error is None:
+                    code = str(event.get("code", "planned_error"))
+                    record.error = code
+                    record.failure_category = terminal_failure_categories(event).get(
+                        code, "harness_failure"
+                    )
+            if not terminals:
+                record.error = "planned_stream_without_completion"
+                record.failure_category = "harness_failure"
+            elif len(terminals) == 1 and record.failure_category != "harness_failure":
+                terminal_event = terminals[0]
+                origins = (
+                    prepared.result.reason_origins
+                    if prepared.result is not None
+                    else {}
+                )
+                terminal_origin = None
+                if (
+                    prepared.result is not None
+                    and terminal_event.get("type") == "error"
+                ):
+                    first_task = next(iter(prepared.result.reasons), None)
+                    if first_task is not None and prepared.result.reasons[
+                        first_task
+                    ] == terminal_event.get("code"):
+                        terminal_origin = origins.get(first_task)
+                categories = terminal_failure_categories(
+                    terminal_event,
+                    terminal_origin=terminal_origin,
+                    reason_origins=origins,
+                )
+                if categories:
+                    reason, category = next(
+                        (
+                            (reason, category)
+                            for reason, category in categories.items()
+                            if category != "model_task_failure"
+                        ),
+                        next(iter(categories.items())),
+                    )
+                    record.error = reason
+                    record.failure_category = category
             if not record_appended:
                 records.append(record)
             if prepared.result is not None:
@@ -3193,7 +3285,11 @@ async def _run_planned_case(
         KeyError,
         OSError,
     ) as exc:
-        result = EvalResult(case=case, error=str(exc))
+        result = EvalResult(case=case, error=str(exc) or type(exc).__name__)
+        if isinstance(exc, InvalidPlanError):
+            result.failure_category = terminal_failure_categories(
+                {"type": "error", "code": exc.code}
+            ).get(exc.code)
         result.tool_calls, result.tool_results, result.answer = _aggregate_records(
             records
         )
@@ -3347,7 +3443,7 @@ async def _run_legacy_case(
             stream.write("\n")
             stream.flush()
     except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
-        result = EvalResult(case=case, error=str(exc))
+        result = EvalResult(case=case, error=str(exc) or type(exc).__name__)
         result.recovery_events = [
             event for record in records for event in record.recovery_events
         ]
@@ -3540,6 +3636,10 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
         )
     lines.append("-" * 42)
     lines.append(f"{'Overall':<20} {passed:>6} {total:>6} {_pct(passed, total):>8}")
+    lines.append(
+        f"Outcomes: {passed} PASS, {sum(r.status == 'fail' for r in results)} FAIL, "
+        f"{sum(r.status == 'unscored' for r in results)} UNSCORED ({EVALUATION_CONTRACT})"
+    )
 
     if verbose:
         failures = [r for r in results if not r.passed]

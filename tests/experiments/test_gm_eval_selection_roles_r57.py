@@ -30,7 +30,7 @@ def test_all_149_reference_112_contracts_and_shapes_remain_exact():
 
 
 def test_new_reference_inherits_all_112_facts_and_obligations():
-    assert catalog.REFERENCE_VERSION == "1.15"
+    assert catalog.REFERENCE_VERSION == "1.16"
     assert catalog.REFERENCE_VERSIONS == (
         "1.10",
         "1.11",
@@ -38,6 +38,7 @@ def test_new_reference_inherits_all_112_facts_and_obligations():
         "1.13",
         "1.14",
         "1.15",
+        "1.16",
     )
     for row in catalog.load_catalog():
         for index in range(len(row["turns"])):

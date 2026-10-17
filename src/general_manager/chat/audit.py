@@ -10,6 +10,9 @@ from typing import Any
 
 from django.utils.module_loading import import_string
 
+from general_manager.chat.audit_identity import (
+    planned_audit_lineage_id as planned_audit_lineage_id,
+)
 from general_manager.chat.settings import get_chat_settings
 
 
@@ -226,20 +229,6 @@ def _planned_nonnegative_int(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
     return value
-
-
-def _planned_identifier(value: object) -> str | None:
-    if not isinstance(value, str) or not value or len(value) > 128:
-        return None
-    return value
-
-
-def planned_audit_lineage_id(value: object) -> str | None:
-    """Return a deterministic opaque audit identifier for planner-controlled IDs."""
-    identifier = _planned_identifier(value)
-    if identifier is None:
-        return None
-    return hashlib.sha256(identifier.encode()).hexdigest()
 
 
 def _planned_count_mapping(value: object, allowed: set[str]) -> dict[str, int] | None:

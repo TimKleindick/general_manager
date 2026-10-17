@@ -57,7 +57,11 @@ startup default continues to follow Django `DEBUG`.
 
 ## Reference conventions
 
-The default evaluator reference is **1.15**. Its bounded
+The default evaluator reference is **1.16**; see the
+[evaluation contract migration](../../docs/chat/evaluation-contracts.md).
+E074 accepts unordered complete project membership, and logical constraint lists
+use exact set semantics. Explicit 1.10–1.15 contracts and historical reports stay
+unchanged. Reference 1.16 inherits the bounded
 [winner/comparison contract](../../docs/chat/winner-comparison-contract-r63.md)
 separates a clear selected winner from explanatory comparisons in E099. Every
 comparison and completeness claim remains subject to the required

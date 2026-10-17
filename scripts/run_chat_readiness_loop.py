@@ -29,7 +29,7 @@ from general_manager.chat.evals.readiness import (
     write_readiness_artifacts,
 )
 from general_manager.chat.evals.runner import (
-    list_datasets,
+    legacy_dataset_names,
     print_report,
     run_eval_suite_sync,
 )
@@ -192,7 +192,7 @@ def _patch_ollama_provider(
 
 def _datasets_for_gate(gate: str) -> list[str]:
     if gate == "tier0":
-        return list_datasets()
+        return legacy_dataset_names()
     if gate == "large":
         return ["large_schema"]
     return ["demo_readiness"]

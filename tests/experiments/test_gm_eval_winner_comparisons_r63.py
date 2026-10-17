@@ -46,7 +46,7 @@ def test_all_149_archived_contracts_and_blind_shapes_stay_exact(version):
 
 
 def test_reference_115_keeps_every_existing_numeric_and_selection_check():
-    assert catalog.REFERENCE_VERSION == "1.15"
+    assert catalog.REFERENCE_VERSION == "1.16"
     for c in catalog.load_catalog():
         for i in range(len(c["turns"])):
             old = expected_turn(c, i, reference_version="1.14")

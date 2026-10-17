@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from copy import deepcopy
 import json
@@ -38,6 +38,8 @@ from general_manager.chat.planned.selector_clarification import (
 )
 from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
+    ProviderStreamError,
+    ProviderRoundTimeoutError,
     ProviderRoundResult,
     complete_provider_round,
 )
@@ -67,6 +69,20 @@ class SynthesisFailedError(ValueError):
 
 class _InvalidSynthesisResponseError(ValueError):
     """Internal grounding failure; its detail is never part of an answer."""
+
+
+class _ProviderSynthesisError(SynthesisFailedError):
+    """Provider-only failures retain transport provenance and known usage."""
+
+    reason = "provider_failed"
+    code = "provider_failed"
+
+
+class _DeadlineSynthesisError(SynthesisFailedError):
+    """Both bounded attempts failed technically, including a proven timeout."""
+
+    reason = "deadline_exceeded"
+    code = "deadline_exceeded"
 
 
 @dataclass(frozen=True)
@@ -548,10 +564,19 @@ async def _attempt(
     settings: PlannedChatSettings,
     budget: RoundBudget,
     timeout_seconds: float,
+    *,
+    on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
 ) -> ProviderRoundResult:
     provider = build_profile_provider(profile_for_role(settings, role))
     budget.consume_global()
-    return await complete_provider_round(provider, messages, [], timeout_seconds)
+    return await complete_provider_round(
+        provider,
+        messages,
+        [],
+        timeout_seconds,
+        classify_provider_errors=True,
+        on_usage=on_usage,
+    )
 
 
 async def synthesize_answer(
@@ -598,16 +623,29 @@ async def synthesize_answer(
     )
     loop = asyncio.get_running_loop()
     deadline = loop.time() + settings.synthesis_timeout_seconds
+    provider_failures = 0
+    deadline_failures = 0
+    attempts_started = 0
+
+    async def record_usage(usage: TokenUsage) -> None:
+        nonlocal total_usage
+        total_usage = _add_usage(total_usage, usage)
+        attempt_usages.append(usage)
+
     for role in ("synthesizer", "fallback"):
         remaining = deadline - loop.time()
         if remaining <= 0:
-            break
+            raise _DeadlineSynthesisError(total_usage, tuple(attempt_usages))
+        before_usage = len(attempt_usages)
+        stage_timeout = asyncio.timeout(remaining)
+        attempts_started += 1
         try:
-            result = await asyncio.wait_for(
-                _attempt(role, messages, settings, budget, remaining), remaining
-            )
-            total_usage = _add_usage(total_usage, result.usage)
-            attempt_usages.append(result.usage)
+            async with stage_timeout:
+                result = await _attempt(
+                    role, messages, settings, budget, remaining, on_usage=record_usage
+                )
+            if len(attempt_usages) == before_usage:
+                await record_usage(result.usage)
             if result.tool_calls:
                 continue
             answer, evidence_ids = _parse_result(
@@ -637,9 +675,28 @@ async def synthesize_answer(
                     "repair": "Use only the requested open or conflicting choices; otherwise answer from eligible evidence.",
                 },
             )
-        except InvalidProviderRoundError as exc:
-            total_usage = _add_usage(total_usage, exc.usage)
-            attempt_usages.append(exc.usage)
+        except (
+            ProviderStreamError,
+            ProviderRoundTimeoutError,
+            InvalidProviderRoundError,
+        ) as exc:
+            if isinstance(exc, ProviderStreamError):
+                provider_failures += 1
+            elif isinstance(exc, ProviderRoundTimeoutError):
+                deadline_failures += 1
+            if (
+                isinstance(exc, (ProviderStreamError, ProviderRoundTimeoutError))
+                and not exc.usage_observed
+            ):
+                continue
+            if len(attempt_usages) == before_usage:
+                await record_usage(exc.usage)
+        except TimeoutError:
+            if stage_timeout.expired():
+                raise _DeadlineSynthesisError(
+                    total_usage, tuple(attempt_usages)
+                ) from None
+            provider_failures += 1
         except RoundBudgetExhausted as exc:
             # Preserve already reported attempts for the scheduler's token
             # accounting even though the next attempt could not be admitted.
@@ -651,6 +708,11 @@ async def synthesize_answer(
         except Exception:  # noqa: BLE001, S110
             # Provider and parse diagnostics are never exposed as grounding input.
             pass
+    if attempts_started and provider_failures + deadline_failures == attempts_started:
+        failure = (
+            _DeadlineSynthesisError if deadline_failures else _ProviderSynthesisError
+        )
+        raise failure(total_usage, tuple(attempt_usages))
     raise SynthesisFailedError(total_usage, tuple(attempt_usages))
 
 

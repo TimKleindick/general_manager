@@ -25,6 +25,7 @@ from .profiles import (
 )
 from .trace import TraceRecorder, fingerprint, sanitize, source_hashes
 from .scoring import FAILURE_HIERARCHY
+from .outcomes import terminal_failure_categories, runtime_failure_provenance
 from .history_parity import history_messages, provider_messages, schema_history_sources
 
 
@@ -251,6 +252,7 @@ def _failure_flags(
             "ReadTimeout",
             "ConnectTimeout",
             "OSError",
+            "ProviderCompletionError",
         }:
             flags.add("transport_failure")
         elif error_type and error_type not in {"CancelledError", "GeneratorExit"}:
@@ -263,17 +265,23 @@ def _failure_flags(
         if not turn["persistence_verified"]:
             flags.add("harness_failure")
         terminal = turn.get("terminal") or {}
-        reasons = {
-            item.get("reason")
-            for item in terminal.get("orchestration", {}).get("unresolved", [])
-        }
-        reasons.add(terminal.get("code"))
-        if "budget_exhausted" in reasons:
-            flags.add("budget_exhausted")
-        if "deadline_exceeded" in reasons:
-            # A production deadline spends the wall-clock budget. Keep its
-            # precise phase/code in the terminal event, not a new top-level class.
-            flags.add("budget_exhausted")
+        provenance = runtime_failure_provenance(
+            terminal, getattr(trace, "events", []), turn=turn.get("turn", 1)
+        )
+        terminal_flags = set(
+            terminal_failure_categories(
+                terminal,
+                terminal_origin=provenance["terminal_origin"],
+                reason_origins=provenance["reason_origins"],
+            ).values()
+        )
+        if not flags - {"interface_capability_gap"}:
+            flags.update(terminal_flags)
+        else:
+            # A generic public provider error must not overwrite a precise
+            # recorded cause such as request-budget exhaustion. A spent
+            # deadline remains a distinct budget observation.
+            flags.update(terminal_flags & {"budget_exhausted"})
         if terminal.get("type") == "error" and not flags:
             flags.add("model_task_failure")
     return [flag for flag in FAILURE_HIERARCHY if flag in flags]
@@ -719,7 +727,10 @@ async def run_case(
     failure_flags = _failure_flags(turns, trace, observed_gaps, tool_diagnostics)
     for turn in turns:
         local_trace = TraceRecorder(
-            calls=[call for call in trace.calls if call["turn"] == turn["turn"]]
+            calls=[call for call in trace.calls if call["turn"] == turn["turn"]],
+            events=[
+                event for event in trace.events if event.get("turn") == turn["turn"]
+            ],
         )
         local_gaps = [
             gap

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 import json
 import re
@@ -44,6 +44,7 @@ from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
     ProviderRoundResult,
     ProviderStreamError,
+    ProviderRoundTimeoutError,
     complete_provider_round,
 )
 from general_manager.chat.planned.validation import PlanValidationError, validate_plan
@@ -74,6 +75,14 @@ class _ProviderPlanningError(InvalidPlanError):
     reason = "provider_failed"
     code = "provider_failed"
     public_reason = "provider_failed"
+
+
+class _DeadlinePlanningError(InvalidPlanError):
+    """Keep a proven provider-stage timeout distinct from invalid model output."""
+
+    reason = "deadline_exceeded"
+    code = "deadline_exceeded"
+    public_reason = "deadline_exceeded"
 
 
 class _InvalidStructuredResponseError(PlanValidationError):
@@ -360,6 +369,7 @@ async def _attempt(
     correction: bool,
     rejection: dict[str, object] | None = None,
     configured_context: str = "",
+    on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
 ) -> ProviderRoundResult:
     provider = build_profile_provider(profile_for_role(settings, role))
     budget.consume_global()
@@ -376,6 +386,7 @@ async def _attempt(
         [],
         settings.evidence_timeout_seconds,
         classify_provider_errors=True,
+        on_usage=on_usage,
     )
 
 
@@ -387,6 +398,7 @@ async def plan_request(
     catalog_summary: object,
     *,
     configured_context: str | None = None,
+    on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
 ) -> PlanningResult:
     """Request, correct once, then fall back once to a validated plan."""
     if configured_context is None:
@@ -405,8 +417,26 @@ async def plan_request(
     total_usage = TokenUsage()
     attempt_usages: list[TokenUsage] = []
     provider_failures = 0
+    deadline_failures = 0
     rejection: dict[str, object] | None = None
     for role, correction in attempts:
+        before_usage = len(attempt_usages)
+
+        async def record_usage(usage: TokenUsage, observed_role: str = role) -> None:
+            nonlocal total_usage
+            total_usage = _add_usage(total_usage, usage)
+            attempt_usages.append(usage)
+            emit_planned_audit_event(
+                "usage",
+                {
+                    "role": observed_role,
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                },
+            )
+            if on_usage is not None:
+                await on_usage(usage)
+
         emit_planned_audit_event(
             "route",
             {
@@ -427,6 +457,7 @@ async def plan_request(
                 correction=correction,
                 rejection=rejection,
                 configured_context=configured_context,
+                on_usage=record_usage,
             )
             emit_planned_audit_event(
                 "budget",
@@ -437,34 +468,28 @@ async def plan_request(
             )
         except RoundBudgetExhausted:
             raise
-        except ProviderStreamError:
-            provider_failures += 1
-            continue
-        except InvalidProviderRoundError as exc:
-            total_usage = _add_usage(total_usage, exc.usage)
-            attempt_usages.append(exc.usage)
-            emit_planned_audit_event(
-                "usage",
-                {
-                    "role": role,
-                    "input_tokens": exc.usage.input_tokens,
-                    "output_tokens": exc.usage.output_tokens,
-                },
-            )
+        except (
+            ProviderStreamError,
+            ProviderRoundTimeoutError,
+            InvalidProviderRoundError,
+        ) as exc:
+            if isinstance(exc, ProviderStreamError):
+                provider_failures += 1
+            elif isinstance(exc, ProviderRoundTimeoutError):
+                deadline_failures += 1
+            if (
+                isinstance(exc, (ProviderStreamError, ProviderRoundTimeoutError))
+                and not exc.usage_observed
+            ):
+                continue
+            if len(attempt_usages) == before_usage:
+                await record_usage(exc.usage)
             continue
         except Exception:  # noqa: BLE001, S112
             # Planner/provider detail is intentionally not exposed as plan output.
             continue
-        total_usage = _add_usage(total_usage, result.usage)
-        attempt_usages.append(result.usage)
-        emit_planned_audit_event(
-            "usage",
-            {
-                "role": role,
-                "input_tokens": result.usage.input_tokens,
-                "output_tokens": result.usage.output_tokens,
-            },
-        )
+        if len(attempt_usages) == before_usage:
+            await record_usage(result.usage)
         try:
             plan, choices = _validate_response(
                 result, requested_write, choice_messages, user_text, configured_context
@@ -504,15 +529,18 @@ async def plan_request(
                 attempt_usages=tuple(attempt_usages),
                 choice_context=choices,
             )
-    if provider_failures == len(attempts):
+    if provider_failures + deadline_failures == len(attempts):
+        failure = (
+            _DeadlinePlanningError if deadline_failures else _ProviderPlanningError
+        )
         emit_planned_audit_event(
             "terminal",
             {
-                "terminal_reason": "provider_failed",
+                "terminal_reason": failure.code,
                 "reason_origin": "provider_exception",
             },
         )
-        raise _ProviderPlanningError(total_usage, tuple(attempt_usages))
+        raise failure(total_usage, tuple(attempt_usages))
     emit_planned_audit_event("terminal", {"terminal_reason": "invalid_plan"})
     raise InvalidPlanError(total_usage, tuple(attempt_usages))
 

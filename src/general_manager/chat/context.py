@@ -16,7 +16,13 @@ from general_manager.chat.models import (
     provider_messages_from_context,
     update_conversation_summary,
 )
-from general_manager.chat.providers.base import DoneEvent, Message, TextChunkEvent
+from general_manager.chat.providers.base import (
+    DoneEvent,
+    Message,
+    TextChunkEvent,
+    TokenUsage,
+)
+from general_manager.chat.providers._shared import completed_events
 from general_manager.chat.rate_limits import enforce_chat_rate_limit
 from general_manager.chat.settings import get_chat_settings
 from general_manager.chat.system_prompt import build_system_prompt
@@ -66,25 +72,30 @@ async def summarize_messages_with_provider(
             )
             if isinstance(rate_limited, dict):
                 raise ChatSummaryRateLimitExceeded(rate_limited["retry_after_seconds"])
-        events = provider.complete(prompt_messages, [])
+
+        async def account_usage(usage: TokenUsage) -> None:
+            if turn_state is not None:
+                turn_state.record_usage(usage)
+            if scope is not None:
+                rate_limited = await sync_to_async(enforce_chat_rate_limit)(
+                    scope,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    count_request=False,
+                )
+                if isinstance(rate_limited, dict):
+                    raise ChatSummaryRateLimitExceeded(
+                        rate_limited["retry_after_seconds"]
+                    )
+
+        events = completed_events(
+            provider.complete(prompt_messages, []), on_usage=account_usage
+        )
         try:
             async for event in events:
                 if isinstance(event, TextChunkEvent):
                     chunks.append(event.content)
                 elif isinstance(event, DoneEvent):
-                    if turn_state is not None:
-                        turn_state.record_usage(event.usage)
-                    if scope is not None:
-                        rate_limited = await sync_to_async(enforce_chat_rate_limit)(
-                            scope,
-                            input_tokens=event.usage.input_tokens,
-                            output_tokens=event.usage.output_tokens,
-                            count_request=False,
-                        )
-                        if isinstance(rate_limited, dict):
-                            raise ChatSummaryRateLimitExceeded(
-                                rate_limited["retry_after_seconds"]
-                            )
                     return
         finally:
             close = getattr(events, "aclose", None)

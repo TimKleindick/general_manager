@@ -907,7 +907,13 @@ class ScoringTests(SimpleTestCase):
 class RunnerHelperTests(SimpleTestCase):
     def test_collect_model_final_answer_streams_chunks(self) -> None:
         provider = _ScriptedProvider(
-            [[TextChunkEvent(content="Apollo"), TextChunkEvent(content=" uses Gear.")]]
+            [
+                [
+                    TextChunkEvent(content="Apollo"),
+                    TextChunkEvent(content=" uses Gear."),
+                    DoneEvent(TokenUsage()),
+                ]
+            ]
         )
         stream = io.StringIO()
 
@@ -968,8 +974,9 @@ class RunnerHelperTests(SimpleTestCase):
                         name="query",
                         args={"manager": "PartManager", "fields": ["name"]},
                     ),
+                    DoneEvent(TokenUsage()),
                 ],
-                [TextChunkEvent(content="Bolt is available.")],
+                [TextChunkEvent(content="Bolt is available."), DoneEvent(TokenUsage())],
             ]
         )
         stream = io.StringIO()
