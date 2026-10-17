@@ -30,8 +30,15 @@ def test_all_149_reference_112_contracts_and_shapes_remain_exact():
 
 
 def test_new_reference_inherits_all_112_facts_and_obligations():
-    assert catalog.REFERENCE_VERSION == "1.14"
-    assert catalog.REFERENCE_VERSIONS == ("1.10", "1.11", "1.12", "1.13", "1.14")
+    assert catalog.REFERENCE_VERSION == "1.15"
+    assert catalog.REFERENCE_VERSIONS == (
+        "1.10",
+        "1.11",
+        "1.12",
+        "1.13",
+        "1.14",
+        "1.15",
+    )
     for row in catalog.load_catalog():
         for index in range(len(row["turns"])):
             old = oracle.expected_turn(row, index, reference_version="1.12")

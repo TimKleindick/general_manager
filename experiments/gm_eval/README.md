@@ -57,6 +57,13 @@ startup default continues to follow Django `DEBUG`.
 
 ## Reference conventions
 
+The default evaluator reference is **1.15**. Its bounded
+[winner/comparison contract](../../docs/chat/winner-comparison-contract-r63.md)
+separates a clear selected winner from explanatory comparisons in E099. Every
+comparison and completeness claim remains subject to the required
+`answer_supported` check. Explicit 1.10–1.14 selectors and historical reports
+retain their original meaning; offline reassessments must be separate artifacts.
+
 The business clock is 2026-10-03 12:00 UTC. Last year means calendar 2025; last
 month means September 2026; next year means 2027. RANK and TREND are separate
 source snapshots, never inconsistent totals in one database. Monetary inputs

@@ -82,7 +82,7 @@ def test_versioned_topics_preserve_frozen_catalog_and_disclose_all_instances():
         catalog.catalog_sha256()
         == "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11"
     )
-    assert catalog.REFERENCE_VERSION == "1.14"
+    assert catalog.REFERENCE_VERSION == "1.15"
     corrections = [c for c in catalog.reference_corrections() if c["version"] == "1.9"]
     assert {c["case_id"] for c in corrections} == set(OUTLOOK_CASES)
     for correction in corrections:

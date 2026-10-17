@@ -689,7 +689,10 @@ def expected_turn(
             "period",
             {"start": f"{year}-01-01", "end_exclusive": f"{year + 1}-01-01"},
         )
-        if reference_version in {"1.12", "1.13", "1.14"} and case["id"] == "E116":
+        if (
+            reference_version in {"1.12", "1.13", "1.14", "1.15"}
+            and case["id"] == "E116"
+        ):
             # This question requests a summary, not the explicit WBS grouping
             # requested by E117/E118. Its total must not depend on WBS metadata.
             contract.fact(
@@ -844,8 +847,8 @@ def expected_turn(
         elif resolved == "supplier_path":
             # Reference 1.14 follows the actual question: supplier approval is
             # not an implied selection predicate. Prior references stay exact.
-            require_approved = reference_version != "1.14"
-            if reference_version == "1.14":
+            require_approved = reference_version not in {"1.14", "1.15"}
+            if reference_version in {"1.14", "1.15"}:
                 require_approved = case.get("supplier_approval_required", False)
                 if type(require_approved) is not bool:
                     message = "Supplier approval declaration must be a boolean"
@@ -894,7 +897,12 @@ def expected_turn(
             identifiers = _projects(
                 data, customer=selected_customer, materials=materials
             )
-            if resolved == "brass" and reference_version in {"1.12", "1.13", "1.14"}:
+            if resolved == "brass" and reference_version in {
+                "1.12",
+                "1.13",
+                "1.14",
+                "1.15",
+            }:
                 identifiers = [
                     code
                     for code in identifiers
@@ -923,7 +931,7 @@ def expected_turn(
             contract.fact(
                 "R", "material_ids", sorted(materials), "set", entity_manager="Material"
             )
-            if reference_version in {"1.13", "1.14"}:
+            if reference_version in {"1.13", "1.14", "1.15"}:
                 # Positive target identities are distinct from independently
                 # required exclusions of the same manager type.
                 contract.value["entity_identity_reference"]["fields"]["material_ids"][
@@ -976,6 +984,7 @@ def expected_turn(
             "1.12",
             "1.13",
             "1.14",
+            "1.15",
         }:
             contract.value["fact_components"] = {
                 "values": {
@@ -1096,6 +1105,23 @@ def expected_turn(
                     required_fields={"Project": ["fx_rate", "fx_as_of", "fx_source"]},
                 )
     elif resolved in {"top_material", "three_turn"}:
+        if resolved == "three_turn" and reference_version == "1.15":
+            contract.value["result_claim_scope"] = "single_winner_with_comparisons"
+            support = next(
+                check
+                for check in contract.value["semantic_checks"]
+                if check["id"] == "answer_supported"
+            )
+            support["instruction"] += (
+                " The question requests a single winner; correct explanatory "
+                "comparison projects are not additional selected winners. Verify "
+                "every comparison and table cell against eligible evidence, including "
+                "identity, amount, unit, period, material, status, gross/returns basis, "
+                "ordering and any complete-population or no-missing-values claim. "
+                "A wrong winner, wrong or unsupported comparison, contradictory "
+                "winner/table, or false completeness claim fails even if the "
+                "headline winner and its value are correct."
+            )
         eligible = (
             _projects(data, materials={copper})
             if resolved == "top_material" or turn_index == 2
