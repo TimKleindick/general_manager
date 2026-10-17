@@ -43,6 +43,7 @@ from general_manager.chat.planned.choice_context import (
 from general_manager.chat.planned.provider_calls import (
     InvalidProviderRoundError,
     ProviderRoundResult,
+    ProviderStreamError,
     complete_provider_round,
 )
 from general_manager.chat.planned.validation import PlanValidationError, validate_plan
@@ -65,6 +66,14 @@ class InvalidPlanError(ValueError):
         self.usage = usage if usage is not None else TokenUsage()
         self.attempt_usages = attempt_usages
         super().__init__(self.reason)
+
+
+class _ProviderPlanningError(InvalidPlanError):
+    """Keep provider-only failure separate while preserving planner accounting."""
+
+    reason = "provider_failed"
+    code = "provider_failed"
+    public_reason = "provider_failed"
 
 
 class _InvalidStructuredResponseError(PlanValidationError):
@@ -366,6 +375,7 @@ async def _attempt(
         ),
         [],
         settings.evidence_timeout_seconds,
+        classify_provider_errors=True,
     )
 
 
@@ -394,6 +404,7 @@ async def plan_request(
     attempts = (("planner", False), ("planner", True), ("fallback", False))
     total_usage = TokenUsage()
     attempt_usages: list[TokenUsage] = []
+    provider_failures = 0
     rejection: dict[str, object] | None = None
     for role, correction in attempts:
         emit_planned_audit_event(
@@ -426,6 +437,9 @@ async def plan_request(
             )
         except RoundBudgetExhausted:
             raise
+        except ProviderStreamError:
+            provider_failures += 1
+            continue
         except InvalidProviderRoundError as exc:
             total_usage = _add_usage(total_usage, exc.usage)
             attempt_usages.append(exc.usage)
@@ -490,6 +504,15 @@ async def plan_request(
                 attempt_usages=tuple(attempt_usages),
                 choice_context=choices,
             )
+    if provider_failures == len(attempts):
+        emit_planned_audit_event(
+            "terminal",
+            {
+                "terminal_reason": "provider_failed",
+                "reason_origin": "provider_exception",
+            },
+        )
+        raise _ProviderPlanningError(total_usage, tuple(attempt_usages))
     emit_planned_audit_event("terminal", {"terminal_reason": "invalid_plan"})
     raise InvalidPlanError(total_usage, tuple(attempt_usages))
 
