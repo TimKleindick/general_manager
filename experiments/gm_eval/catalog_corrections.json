@@ -1075,6 +1075,7 @@
       ],
       "field": "declared_equivalent_metric_sources",
       "authorization": "Tim 2026-10-18: a fully grounded equivalent source route must be accepted unless the user explicitly restricts sources.",
+      "compatible_forecast_representation": "At forecast.scenario year entries only, closed low/high objects and ordered two-value lists assert the same bounds. Preserve every value, year, unknown and contradiction; do not rewrite saved observations or historical scores.",
       "after": "Allow evaluator-declared same-metric input routes only with complete eligible query population, exact selected input values including unknowns, and independently reviewed answer usage. Explicit source/provenance restrictions and every metric/unit/population/semantic check remain required.",
       "unchanged": "All 149 expectations and blind shapes for explicit reference 1.10–1.16; catalog bytes, arithmetic Gold, historical raw answers, reports and scores. No live model result or retrospective pass is claimed."
     }
