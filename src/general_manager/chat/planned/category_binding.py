@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import json
 import math
 import re
@@ -45,6 +45,19 @@ INSTRUCTION = (
     "If the exposed vocabulary does not resolve the requested category, report the "
     "unresolved meaning rather than inventing a mapping. Exact user-supplied scalar "
     "identifiers may use ordinary literal filters. "
+    "category_lookups is operational feedback bound to actual query/schema evidence. "
+    "gather_complete_lookup means the existing population is partial; obtain all rows. "
+    "bind_business_query means that lookup is complete: select the relevant observed "
+    "category values from its query_evidence_id, inspect any missing output/filter "
+    "definitions at its snapshot, and issue the business query with category_bindings. "
+    "schema_evidence_ids lists current linked inspections of that same manager/snapshot; "
+    "choose one with the necessary observed definitions, or request compatible details. "
+    "Repeating the same complete lookup does not execute the requested category query. "
+    "After a verified bound query, business_query_evidence_ids points to its actual results. "
+    "gather_complete_business_query means those results still require missing rows/pages. "
+    "check_requirements_and_complete means inspect all remaining task requirements, "
+    "gather missing evidence or calculations, and complete only when all are supported. "
+    "This feedback grants no new evidence authority, category meaning or filter permission. "
     "Group independent overview/schema/path/query reads in one provider round after "
     "their exact observed names, snapshot and identity prerequisites are available; "
     "tool calls remain ordered and may not depend on results still missing from that round. "
@@ -112,6 +125,23 @@ def _source(
     if not store.is_linked(task_id, record.evidence_id):
         _reject("schema_evidence_not_linked" if kind == "schema" else None)
     return record
+
+
+def _complete_rows(payload: object) -> list[Any] | None:
+    """Use the same complete-population test for binding and operational feedback."""
+    if not isinstance(payload, Mapping):
+        return None
+    rows = payload.get("data")
+    if (
+        not isinstance(rows, list)
+        or payload.get("complete") is not True
+        or payload.get("has_more") is not False
+        or type(payload.get("total_count")) is not int
+        or payload["total_count"] != len(rows)
+        or any(not isinstance(row, Mapping) for row in rows)
+    ):
+        return None
+    return rows
 
 
 def _identity(record: EvidenceRecord, tool: str, manager: str) -> dict[str, Any]:
@@ -351,16 +381,8 @@ def validate_category_query(
         ):
             _reject()
         payload = source.payload()
-        rows = payload.get("data") if isinstance(payload, Mapping) else None
-        if (
-            not isinstance(rows, list)
-            or not rows
-            or payload.get("complete") is not True
-            or payload.get("has_more") is not False
-            or type(payload.get("total_count")) is not int
-            or payload["total_count"] != len(rows)
-            or any(not isinstance(row, Mapping) or field not in row for row in rows)
-        ):
+        rows = _complete_rows(payload)
+        if rows is None or not rows or any(field not in row for row in rows):
             _reject()
         actual = [
             (type(row[field]), row[field]) for row in rows if row[field] is not None
@@ -412,3 +434,104 @@ def validate_category_result(
             or witness.get("after", {}).get(manager) != digest
         ):
             _reject()
+
+
+def category_lookup_feedback(
+    args: Mapping[str, Any],
+    record: EvidenceRecord,
+    store: EvidenceStore,
+    task_id: str,
+    business_queries: Sequence[tuple[Mapping[str, Any], EvidenceRecord]] = (),
+) -> dict[str, object] | None:
+    """Point to the next category step without selecting a category or granting authority.
+
+    Only an exact successful history/result match reaches this helper. Reuse the
+    admission owner as well, so stale schema/exposure or foreign/unlinked query
+    data cannot be presented as a ready lookup.
+    """
+    if "category_lookup" not in args:
+        return None
+    try:
+        manager = args["manager"]
+        if not isinstance(manager, str):
+            return None
+        source = _source(store, task_id, record.evidence_id, "query")
+        backend = validate_category_query(args, store, task_id)
+        if _identity(source, "query", manager) != backend:
+            return None
+        validate_category_result(
+            args, store, task_id, source.provenance.get("query_schema_witness")
+        )
+        schema_id = args["category_lookup"]["schema_evidence_id"]
+        full, observed = _schema(store, task_id, schema_id, manager)
+        root = _unfiltered(backend, full)
+    except (KeyError, TypeError, ValueError):
+        return None
+    rows = _complete_rows(source.payload())
+    business_sources = []
+    for query_args, candidate in business_queries:
+        bindings = query_args.get("category_bindings")
+        if not isinstance(bindings, list) or not any(
+            isinstance(binding, Mapping)
+            and binding.get("query_evidence_id") == source.evidence_id
+            for binding in bindings
+        ):
+            continue
+        try:
+            business_source = _source(store, task_id, candidate.evidence_id, "query")
+            backend = validate_category_query(query_args, store, task_id)
+            if _identity(business_source, "query", manager) != backend:
+                continue
+            validate_category_result(
+                query_args,
+                store,
+                task_id,
+                business_source.provenance.get("query_schema_witness"),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        if business_source not in business_sources:
+            business_sources.append(business_source)
+    schema_ids = []
+    for candidate in store.for_task(task_id):
+        if candidate.kind != "schema":
+            continue
+        try:
+            _, payload = _schema(store, task_id, candidate.evidence_id, manager)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if payload["snapshot"] == observed["snapshot"]:
+            schema_ids.append(candidate.evidence_id)
+    if business_sources:
+        next_step = (
+            "check_requirements_and_complete"
+            if all(
+                _complete_rows(item.payload()) is not None for item in business_sources
+            )
+            else "gather_complete_business_query"
+        )
+    elif rows is None:
+        next_step = "gather_complete_lookup"
+    elif rows:
+        next_step = "bind_business_query"
+    else:
+        next_step = "resolve_unavailable_category_values"
+    return {
+        "query_evidence_id": source.evidence_id,
+        "schema_evidence_id": schema_id,
+        "manager": manager,
+        "root": root,
+        "snapshot": observed["snapshot"],
+        "complete": rows is not None,
+        "next_step": next_step,
+        "schema_evidence_ids": schema_ids,
+        **(
+            {
+                "business_query_evidence_ids": [
+                    item.evidence_id for item in business_sources
+                ]
+            }
+            if business_sources
+            else {}
+        ),
+    }

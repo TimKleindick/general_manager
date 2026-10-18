@@ -87,6 +87,7 @@ from general_manager.chat.planned.category_binding import (
     CategoryBindingError,
     INSTRUCTION as CATEGORY_BINDING_INSTRUCTION,
     QUERY_PROPERTIES as CATEGORY_QUERY_PROPERTIES,
+    category_lookup_feedback,
     validate_category_query,
     validate_category_result,
 )
@@ -254,6 +255,27 @@ class PlannedExecutionResult:
         return self.reasons.get(task_id)
 
 
+@dataclass(frozen=True)
+class PlannedCancellationObservation:
+    """Private local cancellation evidence, separate from remote request outcome.
+
+    A requested event identifies a cancel call made by this owner. An observed
+    event names only the receiving boundary; it does not infer who initiated an
+    external cancellation or whether the provider finished remotely.
+    """
+
+    event: Literal["requested", "observed"]
+    location: Literal[
+        "evidence_deadline",
+        "runner_cleanup",
+        "event_stream_cleanup",
+        "executor_provider_round",
+    ]
+    evidence_deadline: float
+    observed_at: float
+    task_id: str | None = None
+
+
 @dataclass
 class PreparedPlannedTurn:
     """Planner output plus accounting retained through Task 7 mutation fallback."""
@@ -270,6 +292,10 @@ class PreparedPlannedTurn:
     result: PlannedExecutionResult | None = None
     configured_context: str = ""
     choice_context: ChoiceContext | None = None
+    cancellation_observations: list[PlannedCancellationObservation] = field(
+        default_factory=list
+    )
+    interrupted_result: PlannedExecutionResult | None = None
 
     @classmethod
     def for_plan(
@@ -483,6 +509,7 @@ def _project_tool_history(
     history: Sequence[Message],
     *,
     schema_link_feedback: dict[str, dict[str, object]] | None = None,
+    category_lookups: dict[str, dict[str, object]] | None = None,
 ) -> list[Message]:
     """Reference exact linked evidence or a separately bound unlinked observation."""
     linked = {
@@ -502,6 +529,8 @@ def _project_tool_history(
     }
     projected = deepcopy(list(history))
     pending: dict[str, ToolCallEvent] = {}
+    lookup_sources: dict[str, tuple[Mapping[str, Any], EvidenceRecord]] = {}
+    business_sources: dict[str, tuple[Mapping[str, Any], EvidenceRecord]] = {}
     for index, message in enumerate(projected):
         if message.role == "assistant":
             ids = [call.id for call in message.tool_calls]
@@ -522,6 +551,7 @@ def _project_tool_history(
                     key: value
                     for key, value in call.args.items()
                     if key != "requirement_id"
+                    and (call.name != "query" or key not in CATEGORY_QUERY_PROPERTIES)
                 },
             )
             record = linked.get(identity) or operational.get(identity)
@@ -590,12 +620,25 @@ def _project_tool_history(
                 payload_json=record.payload_json,
             )
             continue
+        if call.name == "query" and "category_lookup" in call.args:
+            # Keep the latest declared schema for each exact lookup. Repeated
+            # cached calls reuse one feedback entry and never duplicate rows.
+            lookup_sources[record.evidence_id] = (call.args, record)
+        if call.name == "query" and "category_bindings" in call.args:
+            business_sources[record.evidence_id] = (call.args, record)
         reference = {"evidence_ref": record.evidence_id}
         projected[index] = replace(
             message,
             content=json.dumps(reference, separators=(",", ":")),
             tool_result=reference,
         )
+    if category_lookups is not None:
+        for evidence_id, (args, record) in lookup_sources.items():
+            feedback = category_lookup_feedback(
+                args, record, evidence, task.task_id, tuple(business_sources.values())
+            )
+            if feedback is not None:
+                category_lookups[evidence_id] = feedback
     return projected
 
 
@@ -800,11 +843,18 @@ def _executor_messages(
     if last_tool_round is not None:
         reference["last_tool_round"] = dict(last_tool_round)
     schema_link_feedback: dict[str, dict[str, object]] = {}
+    category_lookups: dict[str, dict[str, object]] = {}
     projected_history = _project_tool_history(
-        task, evidence, tool_history, schema_link_feedback=schema_link_feedback
+        task,
+        evidence,
+        tool_history,
+        schema_link_feedback=schema_link_feedback,
+        category_lookups=category_lookups,
     )
     if schema_link_feedback:
         reference["schema_link_feedback"] = list(schema_link_feedback.values())
+    if category_lookups:
+        reference["category_lookups"] = list(category_lookups.values())
     return [
         *(
             [Message(role="system", content=configured_context)]
@@ -1146,6 +1196,36 @@ class _Runner:
         for task in self.prepared.plan.tasks:
             self.runtimes[task.task_id] = _TaskRuntime(task, task.task_id)
 
+    def observe_cancellation(
+        self,
+        event: Literal["requested", "observed"],
+        location: Literal[
+            "evidence_deadline",
+            "runner_cleanup",
+            "event_stream_cleanup",
+            "executor_provider_round",
+        ],
+        task_id: str | None = None,
+    ) -> None:
+        self.prepared.cancellation_observations.append(
+            PlannedCancellationObservation(
+                event, location, self.deadline, self.clock(), task_id
+            )
+        )
+
+    def cancel_task(
+        self,
+        task: asyncio.Task[None],
+        location: Literal[
+            "evidence_deadline", "runner_cleanup", "event_stream_cleanup"
+        ],
+        task_id: str | None = None,
+    ) -> None:
+        # cancel() is synchronous: record this exact owner call before the
+        # target can resume and observe it. Completed tasks add no false event.
+        if task.cancel():
+            self.observe_cancellation("requested", location, task_id)
+
     async def emit(self, event: dict[str, Any]) -> None:
         await self.events.put(event)
 
@@ -1423,10 +1503,16 @@ class _Runner:
             return result, False
         # Snapshot arguments before callbacks can mutate their input objects.
         feedback_args = json.loads(identity)["args"]
-        if call.name == "get_manager_schema" and "requirement_id" in call.args:
+        if "requirement_id" in call.args:
             # Keep the scheduler's actual selection in feedback, never in backend
             # arguments or cache identity. No later manager heuristic can recover it.
             feedback_args["requirement_id"] = requirement_id
+        if call.name == "query":
+            # These declare the query's semantic role to the executor, while
+            # the backend/cache identity remains only the actual read.
+            for key in CATEGORY_QUERY_PROPERTIES:
+                if key in call.args:
+                    feedback_args[key] = deepcopy(call.args[key])
         feedback_call = ToolCallEvent(call.id, call.name, feedback_args)
         await self.emit(
             planned_tool_call_event(
@@ -1994,6 +2080,9 @@ class _Runner:
                 },
             )
         except asyncio.CancelledError:
+            self.observe_cancellation(
+                "observed", "executor_provider_round", runtime.task.task_id
+            )
             raise
         except ProviderStreamError as exc:
             if exc.usage_observed and not usage_observed:
@@ -2468,8 +2557,8 @@ class _Runner:
         try:
             while pending or active:
                 if _stage_remaining(self.deadline, self.clock) <= 0:
-                    for task in active:
-                        task.cancel()
+                    for task, task_id in active.items():
+                        self.cancel_task(task, "evidence_deadline", task_id)
                     await asyncio.gather(*active, return_exceptions=True)
                     for task_id in pending | set(active.values()):
                         await self.set_blocked(
@@ -2535,8 +2624,8 @@ class _Runner:
                     active.pop(task)
                     await task
         finally:
-            for task in active:
-                task.cancel()
+            for task, task_id in active.items():
+                self.cancel_task(task, "runner_cleanup", task_id)
             if active:
                 await asyncio.gather(*active, return_exceptions=True)
             if self._usage_accounts:
@@ -2631,6 +2720,7 @@ async def iter_planned_read_events(
         now,
     )
     execution = asyncio.create_task(runner.run())
+    interrupted = False
     try:
         while not execution.done() or not runner.events.empty():
             try:
@@ -2640,14 +2730,22 @@ async def iter_planned_read_events(
             yield event
         await execution
     except asyncio.CancelledError:
+        interrupted = True
         raise
     except Exception:  # noqa: BLE001, S110
         # The runner records stable task failures for the terminal event below.
         pass
+    except BaseException:
+        interrupted = True
+        raise
     finally:
         if not execution.done():
-            execution.cancel()
+            runner.cancel_task(execution, "event_stream_cleanup")
         await asyncio.gather(execution, return_exceptions=True)
+        if interrupted:
+            # Preserve only committed evidence/usage and last known task state.
+            # Keep result=None: interruption is never a completed turn or answer.
+            prepared.interrupted_result = runner.result()
     result = runner.result()
     prepared.result = result
     coverage = {
@@ -2804,6 +2902,7 @@ async def iter_planned_read_events(
 
 
 __all__ = [
+    "PlannedCancellationObservation",
     "PlannedCoverage",
     "PlannedExecutionResult",
     "PreparedPlannedTurn",

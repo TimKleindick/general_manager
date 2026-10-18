@@ -1180,8 +1180,39 @@ automatic fallback. These reasons are operational feedback, never query
 evidence or completion authority. Unknown, wrong-task and wrong-kind sources
 retain generic rejection. All permission, exposure, freshness, population and
 typed-value checks still apply.
+
+The next executor request retains `category_lookup`, `category_bindings`, and
+explicit `requirement_id` selections in its native tool history. These scheduler
+arguments never enter backend dispatch or the backend cache identity.
+`category_lookups` is private operational feedback referencing the exact linked
+query and its current manager/schema snapshot. It distinguishes a partial lookup
+(`gather_complete_lookup`) from a complete population (`bind_business_query`) and
+lists current linked schema inspections for that same snapshot. The executor must
+still select observed category values, inspect any missing output/input definitions,
+issue the bound business query, and satisfy all task requirements before completion.
+After a verified bound query, feedback references its actual business evidence.
+Partial business populations require `gather_complete_business_query`; complete
+results lead to `check_requirements_and_complete`, which still requires all missing
+evidence, calculations, and strict completion validation.
+Empty populations retain unresolved-category handling. Stale or hidden lookup
+sources receive no ready feedback. Cached reads and new requirement links remain
+valid; this feedback adds no round cap, automatic query, or completion authority.
+
 Measure complete discovery → details → query exchanges, including cumulative
 request characters, when comparing model input size.
+
+`PreparedPlannedTurn.cancellation_observations` retains private local cancellation
+events: `requested` identifies an actual scheduler cancel call at the evidence
+deadline, runner cleanup, or event-stream cleanup; `observed` identifies the executor
+provider-round boundary that received cancellation. Each event carries the evidence
+deadline and observation time on the scheduler's monotonic clock, plus its task ID
+when applicable. Cleanup observations do not identify an unknown outer caller or
+prove that a provider completed remotely. No cancellation text or provider payload is
+copied into these events, and they are not emitted as public chat events.
+If the event iterator is interrupted, `interrupted_result` retains committed evidence,
+usage, and last known task states after cleanup. A task can still have a last known
+`running` state in this diagnostic snapshot; it has no successful completion claim.
+The normal `result` remains `None` and cancellation still propagates without retry.
 
 The lossless reference codec also applies to synthesis. It selects only schema
 payloads from eligible resolved evidence and schema history with verified stored
