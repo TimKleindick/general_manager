@@ -124,6 +124,12 @@ entire relevant population. Bounded answers can use a partial page while stating
 that scope. Neither a schema snapshot nor `complete=true` proves a transactional
 business-data snapshot.
 
+Category filters require an advertised scalar `filter_contract` and actual
+values from a complete lookup. Collection relations do not prevent a manager's
+scalar predicates from publishing their contracts: generated `any`/`none` input
+codecs are validated together with the enclosing filter. Changed containers,
+defaults or fields withdraw those contracts rather than retaining stale authority.
+
 Selective discovery intentionally does not round-trip the full schema. Compare
 selected definitions exactly and measure whole discovery → details → query
 sequences. The separate [reference-data codec](chat_reference_data.md) is lossless
