@@ -442,27 +442,132 @@ async def _scheduler_turn(
         conversation, ExperimentProvider(), allow_summarization=False, scope=scope
     )
     callbacks = SchedulerCallbacks()
-    prepared = await prepare_planned_turn(
-        text,
-        messages,
-        planned_settings,
-        ChatConsumer._planned_catalog_summary(planned_settings),
-        callbacks=callbacks,
-        scope=scope,
-    )
-    if prepared.mutation_plan is not None:
-        # An evaluator must never invoke the consumer's legacy mutation fallback.
-        events.append({"type": "error", "code": "read_only_eval_mutation_plan"})
-        return events
-    async for event in iter_planned_read_events(
-        prepared,
-        scope=scope,
-        conversation=conversation,
-        messages=messages,
-        callbacks=callbacks,
-    ):
-        events.append(event)
+    prepared = None
+    try:
+        prepared = await prepare_planned_turn(
+            text,
+            messages,
+            planned_settings,
+            ChatConsumer._planned_catalog_summary(planned_settings),
+            callbacks=callbacks,
+            scope=scope,
+        )
+        if prepared.mutation_plan is not None:
+            # An evaluator must never invoke the consumer's legacy mutation fallback.
+            events.append({"type": "error", "code": "read_only_eval_mutation_plan"})
+            return events
+        async for event in iter_planned_read_events(
+            prepared,
+            scope=scope,
+            conversation=conversation,
+            messages=messages,
+            callbacks=callbacks,
+        ):
+            events.append(event)
+    except Exception:
+        raise
+    except BaseException as error:
+        _retain_scheduler_interruption(error, prepared)
+        raise
     return events
+
+
+def _retain_scheduler_interruption(error: BaseException, prepared: Any) -> None:
+    """Attach private diagnostics without replacing the original terminal error."""
+    try:
+        partial = prepared.interrupted_result if prepared is not None else None
+        scheduler = {
+            "phase": "planning" if prepared is None else "scheduler_turn",
+            "evidence_execution_complete": prepared is not None
+            and prepared.result is not None,
+            "cancellation_observations": [
+                asdict(item) for item in prepared.cancellation_observations
+            ]
+            if prepared is not None
+            else [],
+            "interrupted_result": {
+                "statuses": dict(partial.statuses),
+                "reasons": dict(partial.reasons),
+                "reason_origins": dict(partial.reason_origins),
+                "selected_evidence_ids": dict(partial.selected_evidence_ids),
+                "usage": asdict(partial.usage),
+                "evidence": [
+                    {
+                        "evidence_id": item.evidence_id,
+                        "task_id": item.task_id,
+                        "kind": item.kind,
+                        "call_identity": item.call_identity,
+                        "provenance": dict(item.provenance),
+                        "payload": item.payload(),
+                    }
+                    for item in partial.evidence.records
+                ],
+            }
+            if partial is not None
+            else None,
+        }
+        cast(Any, error).gm_eval_interruption = sanitize({"scheduler": scheduler})
+    except Exception:  # noqa: BLE001, S110 -- diagnostics never mask the original interruption
+        pass
+
+
+def _retain_case_interruption(
+    error: BaseException,
+    case: Mapping[str, Any],
+    *,
+    mode: str,
+    route: str,
+    trace: TraceRecorder,
+    completed_turns: list[dict[str, Any]],
+    active_turn: dict[str, Any] | None,
+) -> None:
+    """Expose a sanitized partial trace to the caller that owns STOP/persistence.
+
+    This is not a returned run, successful observation, regrade, or retry. Avoid
+    fresh database reads while unwinding cancellation; retain only observations
+    already present in memory and the scheduler's explicit partial snapshot.
+    """
+    try:
+        prior = getattr(error, "gm_eval_interruption", {})
+        events = active_turn["events"] if active_turn is not None else []
+        record = {
+            "version": 1,
+            "status": "interrupted",
+            "exception_type": type(error).__name__,
+            "case_id": case["id"],
+            "case_sha256": fingerprint(case),
+            "mode": mode,
+            "route": route,
+            "task_quality_status": "unscored",
+            "observation_complete": False,
+            "remote_outcome": "unknown",
+            "completed_turns": completed_turns,
+            "interrupted_turn": {
+                **active_turn,
+                "answer": "".join(
+                    str(item["content"])
+                    for item in events
+                    if item.get("type") == "text_chunk"
+                ),
+                "terminal": next(
+                    (
+                        item
+                        for item in reversed(events)
+                        if item.get("type") in {"done", "error"}
+                    ),
+                    None,
+                ),
+                "task_quality_status": "unscored",
+                "observation_complete": False,
+            }
+            if active_turn is not None
+            else None,
+            "trace": trace.as_dict(),
+            "scheduler": prior.get("scheduler") if isinstance(prior, Mapping) else None,
+        }
+        cast(Any, error).gm_eval_interruption = sanitize(record)
+    except Exception:  # noqa: BLE001, S110 -- diagnostics never mask the original interruption
+        pass
 
 
 async def run_case(
@@ -557,11 +662,13 @@ async def run_case(
                 _require_output_type(connected, "websocket.accept")
             except Exception as error:  # noqa: BLE001 -- include connection failure in report
                 connection_failure = _harness_error(error)
+        active_turn = None
         try:
             for index, text in enumerate(case["turns"], start=1):
                 trace.turn = index
                 started = monotonic()
                 events = []
+                active_turn = {"turn": index, "user": text, "events": events}
                 turn_failure = connection_failure
                 if connection_failure is not None:
                     events.append({"type": "error", "code": "harness_failure"})
@@ -613,6 +720,19 @@ async def run_case(
                     turns[-1]["harness_failure"] = turn_failure
                     trace.record("harness_failure", turn_failure)
                     break
+        except Exception:
+            raise
+        except BaseException as error:
+            _retain_case_interruption(
+                error,
+                case,
+                mode=mode,
+                route=route,
+                trace=trace,
+                completed_turns=turns,
+                active_turn=active_turn,
+            )
+            raise
         finally:
             if communicator is not None:
                 try:

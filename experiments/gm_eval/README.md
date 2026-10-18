@@ -122,6 +122,19 @@ durable `ChatConversation` records. Consumer parity uses the actual ASGI
 conversation history. A matching failure can prove parity while the case still
 has a capability gap. It is never a correct-answer result.
 
+When a `BaseException` interrupts an active case, `run_case` still propagates the
+original exception, including its type and cancellation behavior. The caller may
+persist its sanitized `gm_eval_interruption` attribute as a separate diagnostic
+artifact. It contains completed turns, the interrupted turn's observed events and
+actual terminal event (or `null`), the provider trace at the exception boundary,
+and available scheduler cancellation/partial-state observations. It is explicitly
+unscored with `observation_complete=false`; it never supplies a returned successful
+run or invents an answer, terminal event, remote completion, or cancelling caller.
+No fresh database read, request retrieval, or retry is performed while collecting
+this record. The normal STOP/persistence owner must save it explicitly; historical
+reports and control scripts do not change automatically. Trace capture precedes
+consumer cleanup, so it does not certify the consumer's later cleanup outcome.
+
 `profiles.siwc_factory(transport)` adapts an explicitly supplied existing SIWC
 transport. The bridge never reads personal credentials or performs login.
 Create one factory per evaluation run and reuse it across roles, turns and cases.
