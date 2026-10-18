@@ -100,7 +100,7 @@ def test_supplier_path_still_requires_exact_relations_and_evidence(damage):
 
 
 def test_new_reference_changes_only_authorized_supplier_semantics():
-    assert catalog.REFERENCE_VERSION == "1.16"
+    assert catalog.REFERENCE_VERSION == "1.17"
     assert catalog.REFERENCE_VERSIONS == (
         "1.10",
         "1.11",
@@ -109,6 +109,7 @@ def test_new_reference_changes_only_authorized_supplier_semantics():
         "1.14",
         "1.15",
         "1.16",
+        "1.17",
     )
     for row in catalog.load_catalog():
         if row["id"] == "E086":

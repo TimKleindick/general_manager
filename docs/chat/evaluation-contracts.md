@@ -115,10 +115,20 @@ The unknown-manager case permits truthful named denials while checking explicit
 false availability assertions. These bounded deterministic text checks remain
 separate from SIWC's primary semantic answer Judge.
 
+## GM reference 1.17
+
+Public catalog, oracle, CLI-report and harness/offline defaults now select
+`1.17`. The [equivalent metric source contract](equivalent-metric-source-contract-r70.md)
+accepts only evaluator-declared routes backed by complete eligible metric inputs
+and independently reviewed actual answer usage. Explicit source restrictions and
+physical provenance remain required. All 149 expectations and blind extraction
+shapes for explicit `1.10`–`1.16` selectors remain unchanged; separately labelled
+reassessment never replaces a historical raw score.
+
 ## GM reference 1.16
 
-Public catalog, oracle, CLI-report and harness/offline entry points now default
-to reference `1.16`. Explicit `1.10` through `1.15` selectors retain their exact
+Reference `1.16` introduced the following inherited behavior. Explicit `1.10`
+through `1.15` selectors retain their exact
 business contracts and blind extraction schemas. `fact_schemas()` still defaults
 to legacy extraction descriptions; the request builder inherits the independently
 bound `recommendation-claims/1` default for eligible recommendation contracts.

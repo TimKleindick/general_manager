@@ -675,8 +675,10 @@ def _sources_satisfied(
     requirement: Mapping[str, Any],
     managers: set[str],
     fields: Mapping[str, set[str]] | None = None,
+    *,
+    records: Sequence[Mapping[str, Any]] = (),
 ) -> bool:
-    return any(
+    canonical = any(
         set(alternative) <= managers
         and (
             fields is None
@@ -691,6 +693,67 @@ def _sources_satisfied(
         )
         for alternative in requirement["alternatives"]
     )
+    if canonical:
+        return True
+    return any(
+        route["manager"] in managers
+        and (fields is None or _equivalent_source_rows(route, records))
+        for route in requirement.get("equivalent_routes", [])
+    )
+
+
+def _equivalent_source_rows(
+    route: Mapping[str, Any], records: Sequence[Mapping[str, Any]]
+) -> bool:
+    """Match declared metric inputs, never infer equivalence from answer numbers.
+
+    The existing evidence owner supplies only selected typed rows from complete,
+    successful query windows. The source contract declares the full eligible
+    population including nulls; independent fact/semantic support still decides
+    whether this evidence was actually used correctly in the saved answer.
+    """
+    required = {_field_identity(field) for field in route["required_fields"]}
+    identity = _field_identity(route["identity_field"])
+    expected = route["rows"]
+    if not expected or identity not in required:
+        return False
+    observed: dict[str, dict[str, Any]] = {}
+    seen_queries: set[str] = set()
+    for record in records:
+        query = record.get("root_query")
+        if (
+            record["manager"] != route["manager"]
+            or not isinstance(query, Mapping)
+            or not record.get("identity_proofs")
+            or query["id"] in seen_queries
+        ):
+            continue
+        seen_queries.add(query["id"])
+        local_ids: set[str] = set()
+        for row in record["identity_rows"]:
+            selected: dict[str, Any] = {}
+            for field, value in row.items():
+                normalized = _field_identity(field)
+                if normalized in required:
+                    if normalized in selected:
+                        return False
+                    selected[normalized] = value
+            if set(selected) != required:
+                return False
+            key = selected[identity]
+            if not isinstance(key, str) or not key or key in local_ids:
+                return False
+            local_ids.add(key)
+            if key in observed and not _matches(observed[key], selected):
+                return False
+            observed[key] = selected
+    reference = {
+        row[route["identity_field"]]: {
+            _field_identity(field): value for field, value in row.items()
+        }
+        for row in expected
+    }
+    return len(reference) == len(expected) and _matches(reference, observed)
 
 
 def _evidence_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, set[str]]:
@@ -780,7 +843,10 @@ def _internal_grounding_check(
     records = [evidence[ref] for ref in sorted(bound)]
     covered = bool(bound) and all(
         _sources_satisfied(
-            requirement, {row["manager"] for row in records}, _evidence_fields(records)
+            requirement,
+            {row["manager"] for row in records},
+            _evidence_fields(records),
+            records=records,
         )
         for requirement in expectation["source_requirements"]
     )
@@ -1154,7 +1220,7 @@ def score_turn(
             extraction.get("reference_version") == expectation.get("schema_version")
             if "reference_version" in extraction
             else expectation.get("schema_version")
-            not in {"1.11", "1.12", "1.13", "1.14", "1.15", "1.16"}
+            not in {"1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17"}
         )
         and isinstance(extraction.get("validator"), str)
         and bool(extraction.get("validator"))
@@ -1507,7 +1573,10 @@ def score_turn(
         else:
             for requirement in requirements:
                 passed = _sources_satisfied(
-                    requirement, managers, _evidence_fields(list(evidence.values()))
+                    requirement,
+                    managers,
+                    _evidence_fields(list(evidence.values())),
+                    records=list(evidence.values()),
                 )
                 checks["I"].append(
                     _check(
@@ -1584,7 +1653,12 @@ def score_turn(
                 else {}
             )
             covered = cited_ok and all(
-                _sources_satisfied(requirement, cited_managers, cited_fields)
+                _sources_satisfied(
+                    requirement,
+                    cited_managers,
+                    cited_fields,
+                    records=[evidence[identifier] for identifier in citation_ids],
+                )
                 for requirement in requirements
             )
             checks["A"].append(
@@ -1720,10 +1794,12 @@ def score_turn(
         "unit_normalization": unit_audit,
         "designation_normalization": designation_audit,
         "selection_scope": scope_audit,
-        "evaluation_revision": "measurement-contracts-10"
-        if expectation.get("schema_version") == "1.16"
+        "evaluation_revision": "measurement-contracts-11"
+        if expectation.get("schema_version") == "1.17"
+        else "measurement-contracts-10"
+        if expectation.get("schema_version") in {"1.16", "1.17"}
         else "measurement-contracts-9"
-        if expectation.get("schema_version") in {"1.15", "1.16"}
+        if expectation.get("schema_version") in {"1.15", "1.16", "1.17"}
         else "measurement-contracts-8"
         if expectation.get("schema_version") == "1.14"
         else "measurement-contracts-7"
