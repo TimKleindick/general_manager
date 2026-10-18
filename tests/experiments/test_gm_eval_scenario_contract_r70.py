@@ -10,10 +10,7 @@ from tests.experiments.test_gm_eval_scoring import case, control, score
 
 
 def _contract(identifier="E093", turn=0, version="1.17"):
-    # The prospective scorer contract is isolated from catalog-version ownership.
-    contract = oracle.expected_turn(case(identifier), turn, reference_version="1.16")
-    contract["schema_version"] = version
-    return contract
+    return oracle.expected_turn(case(identifier), turn, reference_version=version)
 
 
 def _control(contract):
@@ -179,9 +176,10 @@ def test_general_comparator_retains_strict_dictionary_list_distinction():
     )
 
 
+@pytest.mark.parametrize("version", ["1.16", "1.17"])
 @pytest.mark.parametrize("damage", [None, "wrong", "reversed", "extra"])
-def test_blind_extraction_preserves_named_bounds_and_contradictions(damage):
-    contract = _contract(version="1.16")
+def test_blind_extraction_preserves_named_bounds_and_contradictions(version, damage):
+    contract = _contract(version=version)
     facts = deepcopy(contract["facts"])
     _named_bounds(facts["forecast"])
     bounds = next(iter(facts["forecast"]["scenario"].values()))
@@ -194,9 +192,10 @@ def test_blind_extraction_preserves_named_bounds_and_contradictions(damage):
     _, parsed = _roundtrip(contract, facts)
     assert parsed["status"] == "completed"
     assert parsed["observation"]["facts"]["forecast"] == facts["forecast"]
-    # A faithfully representable object retains the historical raw failure.
+    # Preserve historical comparison and test the real prospective request path.
     result = adjudication.score_adjudicated(
         contract, parsed, registry=contract["manager_interfaces"]
     )
-    assert result["dimensions"]["C"]["status"] == "fail"
+    expected = "pass" if version == "1.17" and damage is None else "fail"
+    assert result["dimensions"]["C"]["status"] == expected
     assert result["primary_failure"] != "judge_failure"
