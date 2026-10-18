@@ -155,6 +155,27 @@ def _check(field: str, status: str, reason: str, **details: Any) -> dict[str, An
     return {"field": field, "status": status, "reason": reason, **details}
 
 
+def _matches_forecast(expected: Any, actual: Any) -> bool:
+    """Compare named scenario bounds only at the forecast's per-year pair slot."""
+    if not isinstance(expected, dict) or not isinstance(actual, dict):
+        return _matches(expected, actual)
+    scenario = expected.get("scenario")
+    observed_scenario = actual.get("scenario")
+    if not isinstance(scenario, dict) or not isinstance(observed_scenario, dict):
+        return _matches(expected, actual)
+    normalized = dict(observed_scenario)
+    for year, bounds in observed_scenario.items():
+        expected_bounds = scenario.get(year)
+        if (
+            isinstance(expected_bounds, list)
+            and len(expected_bounds) == 2
+            and isinstance(bounds, dict)
+            and set(bounds) == {"low", "high"}
+        ):
+            normalized[year] = [bounds["low"], bounds["high"]]
+    return _matches(expected, {**actual, "scenario": normalized})
+
+
 def _field_identity(name: str) -> str:
     return name.replace("_", "").casefold()
 
@@ -1350,7 +1371,13 @@ def score_turn(
                 )
                 continue
             present = isinstance(facts, Mapping) and field in facts
-            passed = present and _matches(rule["expected"], actual, rule["comparison"])
+            passed = present and (
+                _matches_forecast(rule["expected"], actual)
+                if field == "forecast"
+                and rule["comparison"] == "exact"
+                and expectation.get("schema_version") == "1.17"
+                else _matches(rule["expected"], actual, rule["comparison"])
+            )
             checks[dimension].append(
                 _check(
                     field,
