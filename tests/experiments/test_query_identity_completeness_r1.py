@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from experiments.gm_eval.query_completeness import complete_identity_queries
+from experiments.gm_eval.assessment.query_completeness import complete_identity_queries
 from tests.experiments.test_gm_eval_evidence_normalization import relation_control
 from tests.experiments.test_gm_eval_scoring import bind_control_trace, score
 

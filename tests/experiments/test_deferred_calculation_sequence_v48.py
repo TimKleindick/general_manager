@@ -42,7 +42,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=MANAGER_COUNT)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import contextual_probe_plan
+from experiments.gm_eval.execution.scripted import contextual_probe_plan
 from experiments.siwc_eval.provider import payload
 from general_manager.chat.providers.base import DoneEvent,TextChunkEvent,TokenUsage,ToolCallEvent
 from general_manager.chat.planned.schema_projection import logical_messages

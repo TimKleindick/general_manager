@@ -435,7 +435,7 @@ def test_designation_rule_is_not_specific_to_material_or_copper():
 
 
 def test_deeper_relations_retain_each_typed_hop_and_its_schema_binding():
-    from experiments.gm_eval.evidence_rows import query_identity_rows
+    from experiments.gm_eval.assessment.evidence_rows import query_identity_rows
 
     _, observation, _ = relation_control()
     calls = observation["trace"]["tool_calls"]

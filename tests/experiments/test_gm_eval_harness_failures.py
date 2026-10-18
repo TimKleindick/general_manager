@@ -113,7 +113,7 @@ from experiments.gm_eval.runtime import bootstrap
 from experiments.gm_eval.catalog import load_catalog
 from experiments.gm_eval import harness
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import ScriptedFactory
+from experiments.gm_eval.execution.scripted import ScriptedFactory
 runtime = bootstrap(manager_count=5)
 from general_manager.chat.consumer import ChatConsumer
 case = next(item for item in load_catalog() if item["id"] == "E001")
@@ -209,7 +209,7 @@ from experiments.gm_eval.runtime import bootstrap
 from experiments.gm_eval.catalog import load_catalog
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import ScriptedFactory
+from experiments.gm_eval.execution.scripted import ScriptedFactory
 runtime = bootstrap(manager_count=5)
 from general_manager.chat.planned.planner import InvalidPlanError
 errors = {"RuntimeError": RuntimeError("private detail"), "InvalidPlanError": InvalidPlanError(), "TimeoutError": TimeoutError()}

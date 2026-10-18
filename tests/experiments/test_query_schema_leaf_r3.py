@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from experiments.gm_eval.evidence_rows import query_identity_rows
+from experiments.gm_eval.assessment.evidence_rows import query_identity_rows
 from tests.experiments.test_gm_eval_scoring import (
     bind_control_trace,
     expected,

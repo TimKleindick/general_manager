@@ -14,7 +14,7 @@ import pytest
 
 def test_profiles_resolve_through_production_configuration(settings):
     from experiments.gm_eval.profiles import bind_provider_factory, make_profile
-    from experiments.gm_eval.scripted import ScriptedFactory
+    from experiments.gm_eval.execution.scripted import ScriptedFactory
     from experiments.gm_eval.trace import TraceRecorder
     from general_manager.chat.planned.config import (
         build_profile_provider,
@@ -335,7 +335,7 @@ def test_child_timeout_reports_only_phase_markers_and_preserves_guard(
 
 
 def test_script_reads_current_reference_before_native_tool_history():
-    from experiments.gm_eval.scripted import make_script
+    from experiments.gm_eval.execution.scripted import make_script
     from general_manager.chat.providers.base import (
         Message,
         TextChunkEvent,
@@ -382,7 +382,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=5)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import make_script,contextual_probe_plan
+from experiments.gm_eval.execution.scripted import make_script,contextual_probe_plan
 from general_manager.chat.providers.base import DoneEvent,TextChunkEvent,TokenUsage,ToolCallEvent
 case={"id":"feedback","turns":["Find active customers","Which active customers?"]}
 def factory_for_case():
@@ -462,7 +462,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=5)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import make_script,contextual_probe_plan
+from experiments.gm_eval.execution.scripted import make_script,contextual_probe_plan
 from general_manager.chat.providers.base import DoneEvent,TextChunkEvent,TokenUsage,ToolCallEvent
 case={"id":"invalid-block-repair","turns":["List active customers","List them again"]}
 description="Read code, name and active; use an exposed filter or retain matching rows after reading; cover all pages."
@@ -551,7 +551,7 @@ import asyncio, json
 from experiments.gm_eval.runtime import bootstrap
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import make_script,contextual_probe_plan
+from experiments.gm_eval.execution.scripted import make_script,contextual_probe_plan
 runtime=bootstrap(manager_count=5)
 case={"id":"probe", "turns":["Find XYZ", "Which of those?"]}
 try:
@@ -594,7 +594,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=5)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile,siwc_factory
-from experiments.gm_eval.scripted import contextual_probe_plan
+from experiments.gm_eval.execution.scripted import contextual_probe_plan
 case={"id":"siwc-child-repair","turns":["List active customers","List them again"]}
 requirement={"requirement_id":"rows","kind":"query","description":"Read all active Customer rows with code, name and active.","operation":None}
 def task(task_id,depends_on):
@@ -608,7 +608,7 @@ class Replay:
   reference=json.loads(next(item["content"] for item in reversed(body["input"]) if item.get("role")=="user" and isinstance(item.get("content"),str) and item["content"].startswith(("REFERENCE_DATA=","RESOLVED_REFERENCE_DATA="))).split("=",1)[1])
   if "catalog_and_schema_summary" in reference:
    reply={"intent":"read","tasks":[task("root",[])]}
-   from experiments.gm_eval.scripted import contextual_probe_plan
+   from experiments.gm_eval.execution.scripted import contextual_probe_plan
    reply=contextual_probe_plan(reply,reference)
   elif "resolved_evidence" in reference:
    assert reference["resolved_evidence"]
@@ -698,7 +698,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=5)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile,siwc_factory
-from experiments.gm_eval.scripted import contextual_probe_plan
+from experiments.gm_eval.execution.scripted import contextual_probe_plan
 case={"id":"siwc-tool-batch","turns":["List active and inactive customers","List both groups again"]}
 class Replay:
  def __init__(self):
@@ -712,7 +712,7 @@ class Replay:
   reference=self.reference
   if "catalog_and_schema_summary" in reference:
    reply={"intent":"read","tasks":[{"task_id":"root","objective":"Read active and inactive Customer rows","depends_on":[],"requirements":[{"requirement_id":group,"kind":"query","description":"Read Customer code, name and active for "+group,"operation":None} for group in ("active_rows","inactive_rows")],"completion_criteria":["active_rows","inactive_rows"],"routing_features":["multiple_queries"]}]}
-   from experiments.gm_eval.scripted import contextual_probe_plan
+   from experiments.gm_eval.execution.scripted import contextual_probe_plan
    reply=contextual_probe_plan(reply,reference)
   elif "resolved_evidence" in reference:
    assert len(reference["resolved_evidence"])==2,reference
@@ -918,7 +918,7 @@ import asyncio,json
 from experiments.gm_eval.runtime import bootstrap
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import ScriptedFactory
+from experiments.gm_eval.execution.scripted import ScriptedFactory
 runtime=bootstrap(manager_count=5)
 plan=json.dumps({"intent":"read","tasks":[{"task_id":"clarify","objective":"Ask for a metric","depends_on":[],"requirements":[],"completion_criteria":[],"routing_features":[]}]})
 plan=json.dumps({"plan":json.loads(plan),"choices":[],"definition_bindings":[],"clarification_requests":[]})
@@ -1040,7 +1040,7 @@ import asyncio,json
 from experiments.gm_eval.runtime import bootstrap
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import ScriptedFactory
+from experiments.gm_eval.execution.scripted import ScriptedFactory
 from experiments.siwc_eval.errors import EvalError
 runtime=bootstrap(manager_count=5)
 response={{"transport":EvalError("transport_error"),"budget":EvalError("request_budget_exhausted"),"invalid":"not a plan","script":None}}[{failure!r}]
@@ -1059,7 +1059,7 @@ import asyncio,json
 from experiments.gm_eval.runtime import bootstrap
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import make_script,ScriptedFactory
+from experiments.gm_eval.execution.scripted import make_script,ScriptedFactory
 runtime=bootstrap(manager_count=5)
 case={"id":"fallback","turns":["Read Customer"]}
 valid=make_script(case,runtime)
@@ -1099,7 +1099,7 @@ def factory(config):
    reference=json.loads(next(message.content for message in reversed(logical_messages(messages)) if message.role=="user" and message.content.startswith(("REFERENCE_DATA=","RESOLVED_REFERENCE_DATA="))).split("=",1)[1])
    if "catalog_and_schema_summary" in reference:
     reply={"intent":"read","tasks":[task("root",1,[])]}
-    from experiments.gm_eval.scripted import contextual_probe_plan
+    from experiments.gm_eval.execution.scripted import contextual_probe_plan
     reply=contextual_probe_plan(reply,reference)
    elif "resolved_evidence" in reference:
     reply={"answer":"Customer rows read.","evidence_ids":[e["evidence_id"] for e in reference["resolved_evidence"]]}
@@ -1138,7 +1138,7 @@ from experiments.gm_eval.runtime import bootstrap
 from experiments.gm_eval.catalog import load_catalog
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import make_script,contextual_probe_plan
+from experiments.gm_eval.execution.scripted import make_script,contextual_probe_plan
 runtime=bootstrap(manager_count={manager_count})
 cases=[case for case in load_catalog() if case["managers"]=={manager_count} and case["contract"] in {{"steel_inventory_scope","active_customers","ongoing_projects"}}]
 async def run():
@@ -1199,7 +1199,7 @@ import asyncio,json
 from experiments.gm_eval.runtime import bootstrap
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import make_script,contextual_probe_plan
+from experiments.gm_eval.execution.scripted import make_script,contextual_probe_plan
 runtime=bootstrap(manager_count=5)
 from general_manager.chat.providers.base import ToolCallEvent
 queries=[

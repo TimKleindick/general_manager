@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from graphql import build_schema
 
-from experiments.gm_eval.evidence_rows import query_identity_rows
+from experiments.gm_eval.assessment.evidence_rows import query_identity_rows
 from experiments.gm_eval.scoring import _returned_identities
 from general_manager.api.graphql import GraphQL
 from general_manager.chat import graphql_contract

@@ -5,7 +5,10 @@ import json
 
 import pytest
 
-from experiments.gm_eval.history_parity import history_messages, provider_messages
+from experiments.gm_eval.execution.history_parity import (
+    history_messages,
+    provider_messages,
+)
 from general_manager.chat.planned.planner_context import project_planner_history
 from general_manager.chat.planned.schema_projection import with_historical_schema
 from general_manager.chat.providers.base import Message

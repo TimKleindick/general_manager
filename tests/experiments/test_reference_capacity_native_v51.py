@@ -59,7 +59,7 @@ def program(manager_count, parity):
     if parity:
         old = "report=await run_case(runtime,{'id':'native-unit-conversion','turns':['Welche Gesamtmenge wurde für das Projekt P01 im Jahr 2025 geliefert?','Bitte in Kilogramm.']},make_profile('weak-only',weak_model='gpt-6.1-sol'),factory)"
         new = """global turn,stage,seen,final_calc
- from experiments.gm_eval.history_parity import provider_messages
+ from experiments.gm_eval.execution.history_parity import provider_messages
  case={'id':'native-unit-conversion','turns':['Welche Gesamtmenge wurde für das Projekt P01 im Jahr 2025 geliefert?','Bitte in Kilogramm.']}
  profile=make_profile('weak-only',weak_model='gpt-6.1-sol')
  report=await run_case(runtime,case,profile,factory)
