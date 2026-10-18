@@ -751,7 +751,7 @@ def get_relation_filter_option(
             f"RelationFilterTypeDepth{remaining_depth - 1}"
         )
         if relation_type_name not in graphql_filter_type_registry:
-            graphql_filter_type_registry[relation_type_name] = type(
+            relation_filter = type(
                 relation_type_name,
                 (graphene.InputObjectType,),
                 {
@@ -760,6 +760,16 @@ def get_relation_filter_option(
                     "_general_manager_filter_owner": manager_type,
                 },
             )
+            from general_manager.api.graphql_filter_contract import (
+                register_filter_input,
+            )
+
+            # Collections declare no direct predicate, but their generated codec
+            # must be pinned for the enclosing filter to remain attestable.
+            register_filter_input(
+                relation_filter, manager_type, {}, filter_source_signature(manager_type)
+            )
+            graphql_filter_type_registry[relation_type_name] = relation_filter
         return (
             attribute_name,
             graphene.InputField(graphql_filter_type_registry[relation_type_name]),
