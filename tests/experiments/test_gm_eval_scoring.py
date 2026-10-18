@@ -942,7 +942,7 @@ def test_k13_missing_followup_is_not_a_completed_case() -> None:
 
 
 def test_k13_script_queries_current_steel_without_business_active_filter() -> None:
-    scripted = api("scripted")
+    scripted = api("execution.scripted")
     import asyncio
     from general_manager.chat.providers.base import Message, ToolCallEvent
 
