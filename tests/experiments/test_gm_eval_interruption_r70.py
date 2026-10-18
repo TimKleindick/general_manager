@@ -8,11 +8,20 @@ from importlib import import_module
 import json
 from types import SimpleNamespace
 
+import graphene
 import pytest
+
+from general_manager.api.graphql import GraphQL
+
+
+@pytest.fixture
+def no_graphql_schema(monkeypatch):
+    monkeypatch.setattr(GraphQL, "_schema", None)
+    assert GraphQL.get_schema() is None
 
 
 def test_cancelled_case_retains_native_provider_and_partial_scheduler_trace(
-    monkeypatch,
+    monkeypatch, no_graphql_schema
 ):
     from experiments.gm_eval import harness
     from experiments.gm_eval.profiles import make_profile
@@ -20,6 +29,12 @@ def test_cancelled_case_retains_native_provider_and_partial_scheduler_trace(
     from general_manager.chat.planned import scheduler
     from general_manager.chat.providers.base import DoneEvent, TokenUsage, ToolCallEvent
     from tests.unit.test_chat_planned_action_feedback import _runner
+
+    class Query(graphene.ObjectType):
+        ping = graphene.String()
+
+    # Startup validation needs a real schema, independent of prior test state.
+    monkeypatch.setattr(GraphQL, "_schema", graphene.Schema(query=Query))
 
     context = import_module("general_manager.chat.context")
     models = import_module("general_manager.chat.models")
