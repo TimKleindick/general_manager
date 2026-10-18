@@ -436,6 +436,44 @@ def validate_category_result(
             _reject()
 
 
+def _business_population_identity(
+    backend: Mapping[str, Any], full: Mapping[str, Any], source: EvidenceRecord
+) -> str:
+    """Identify one observed population/projection, excluding only its window."""
+    root = _root(backend, full)
+    query_type = runtime_schema().query_type
+    if query_type is None:
+        _reject()
+    field = query_type.fields[root]
+    window_arguments = {
+        argument_name(field, "page"),
+        argument_name(field, "page_size"),
+    }
+    population = {
+        key: value
+        for key, value in backend.items()
+        if key not in {"limit", "offset", "arguments"}
+    }
+    population["root"] = root
+    arguments = backend.get("arguments", {})
+    if not isinstance(arguments, Mapping):
+        _reject()
+    arguments = {
+        key: value for key, value in arguments.items() if key not in window_arguments
+    }
+    if arguments:
+        population["arguments"] = arguments
+    witness = json.loads(source.provenance["query_schema_witness"])
+    return canonical_call_identity(
+        "query",
+        {
+            "population": population,
+            "schema_before": witness["before"],
+            "schema_after": witness["after"],
+        },
+    )
+
+
 def category_lookup_feedback(
     args: Mapping[str, Any],
     record: EvidenceRecord,
@@ -468,7 +506,7 @@ def category_lookup_feedback(
     except (KeyError, TypeError, ValueError):
         return None
     rows = _complete_rows(source.payload())
-    business_sources = []
+    business_populations: dict[str, list[EvidenceRecord]] = {}
     for query_args, candidate in business_queries:
         bindings = query_args.get("category_bindings")
         if not isinstance(bindings, list) or not any(
@@ -488,10 +526,23 @@ def category_lookup_feedback(
                 task_id,
                 business_source.provenance.get("query_schema_witness"),
             )
+            population = _business_population_identity(backend, full, business_source)
         except (KeyError, TypeError, ValueError):
             continue
-        if business_source not in business_sources:
-            business_sources.append(business_source)
+        previous = business_populations.setdefault(population, [])
+        if business_source in previous:
+            continue
+        # A later complete observation supersedes earlier windows of this exact
+        # population only. A newly observed partial result still needs gathering.
+        if _complete_rows(business_source.payload()) is not None:
+            previous[:] = [business_source]
+        else:
+            previous.append(business_source)
+    business_sources = [
+        item
+        for population_sources in business_populations.values()
+        for item in population_sources
+    ]
     schema_ids = []
     for candidate in store.for_task(task_id):
         if candidate.kind != "schema":

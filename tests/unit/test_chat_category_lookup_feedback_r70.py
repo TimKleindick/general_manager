@@ -248,8 +248,16 @@ def test_empty_lookup_does_not_advertise_an_observed_category_binding(category_s
     assert "business_query_evidence_ids" not in feedback
 
 
-def test_partial_bound_business_query_still_requires_missing_population(
-    category_schema,
+@pytest.mark.parametrize(
+    "window",
+    [
+        {"limit": 1},
+        {"limit": 1, "offset": 1},
+        {"arguments": {"page": 1, "pageSize": 1}},
+    ],
+)
+def test_later_complete_business_query_replaces_matching_partial_population(
+    category_schema, window
 ):
     schema = category_schema
     runner = _public_runner(schema.manager)
@@ -261,12 +269,109 @@ def test_partial_bound_business_query_still_requires_missing_population(
         fields=["id", "family"],
         filters={"family_Exact": schema.actual},
         category_bindings=[_binding()],
-        limit=1,
+        **window,
     )
     assert result["complete"] is False
     feedback = _reference(_messages(runner))["category_lookups"][0]
     assert feedback["next_step"] == "gather_complete_business_query"
     assert feedback["business_query_evidence_ids"] == ["task_1:query:3"]
+    result, _ = _call(
+        runner,
+        "query",
+        manager=schema.manager,
+        fields=["id", "family"],
+        filters={"family_Exact": schema.actual},
+        category_bindings=[_binding()],
+    )
+    assert result["complete"] is True
+    feedback = _reference(_messages(runner))["category_lookups"][0]
+    assert feedback["next_step"] == "check_requirements_and_complete"
+    assert feedback["business_query_evidence_ids"] == ["task_1:query:4"]
+    # Replacement affects operational feedback only, never immutable history.
+    assert runner.evidence.get("task_1:query:3").payload()["complete"] is False
+
+
+@pytest.mark.parametrize("change", ["filter", "projection", "manager"])
+def test_complete_different_business_scope_cannot_cover_old_partial(
+    category_schema, change
+):
+    schema = category_schema
+    runner = _public_runner(schema.manager)
+    _lookup(runner, schema)
+    business = {
+        "manager": schema.manager,
+        "fields": ["id", "family"],
+        "filters": {"family_Exact": schema.actual},
+        "category_bindings": [_binding()],
+    }
+    _call(runner, "query", **business, limit=1)
+    changed = {
+        "filter": {"filters": {"family_Exact": "other"}},
+        "projection": {"fields": ["id", "name", "family"]},
+        "manager": {"manager": "HiddenCategory"},
+    }[change]
+    result, _ = _call(runner, "query", **{**business, **changed})
+    if change == "manager":
+        assert result["code"] == "invalid_category_binding"
+    else:
+        assert result["complete"] is True
+    feedback = _reference(_messages(runner))["category_lookups"][0]
+    assert feedback["next_step"] == "gather_complete_business_query"
+    assert "task_1:query:3" in feedback["business_query_evidence_ids"]
+
+
+def test_each_distinct_partial_business_population_needs_its_own_complete_successor(
+    category_schema,
+):
+    schema = category_schema
+    runner = _public_runner(schema.manager)
+    _lookup(runner, schema)
+
+    def read(values, **window):
+        return _call(
+            runner,
+            "query",
+            manager=schema.manager,
+            fields=["id", "family", "rank"],
+            filters={"family_In": values},
+            category_bindings=[_binding(path=["filters", "family_In"])],
+            **window,
+        )
+
+    assert read([schema.actual], limit=1)[0]["complete"] is False
+    assert read([schema.actual, "other"], limit=1)[0]["complete"] is False
+    assert read([schema.actual])[0]["complete"] is True
+    feedback = _reference(_messages(runner))["category_lookups"][0]
+    assert feedback["next_step"] == "gather_complete_business_query"
+    assert set(feedback["business_query_evidence_ids"]) == {
+        "task_1:query:4",
+        "task_1:query:5",
+    }
+    assert read([schema.actual, "other"])[0]["complete"] is True
+    feedback = _reference(_messages(runner))["category_lookups"][0]
+    assert feedback["next_step"] == "check_requirements_and_complete"
+    assert set(feedback["business_query_evidence_ids"]) == {
+        "task_1:query:5",
+        "task_1:query:6",
+    }
+
+
+def test_earlier_complete_query_does_not_hide_a_new_partial_observation(
+    category_schema,
+):
+    schema = category_schema
+    runner = _public_runner(schema.manager)
+    _lookup(runner, schema)
+    business = {
+        "manager": schema.manager,
+        "fields": ["id", "family"],
+        "filters": {"family_Exact": schema.actual},
+        "category_bindings": [_binding()],
+    }
+    assert _call(runner, "query", **business)[0]["complete"] is True
+    assert _call(runner, "query", **business, limit=1)[0]["complete"] is False
+    feedback = _reference(_messages(runner))["category_lookups"][0]
+    assert feedback["next_step"] == "gather_complete_business_query"
 
 
 def test_overview_lookup_reuses_selected_details_at_same_snapshot(category_schema):
