@@ -8,7 +8,9 @@ from tests.experiments.test_gm_eval_harness import _child
 
 
 def test_pending_details_reach_verified_cross_query_and_synthesis_at_250_managers():
-    result = _child(PROGRAM)
+    # Allow modest CI startup/coverage variation without changing the stage
+    # budgets, which are asserted separately below.
+    result = _child(PROGRAM, timeout=100)
     if destination := os.environ.get("GM_SCHEMA_EVIDENCE_DIR"):
         path = Path(destination)
         path.mkdir(parents=True, exist_ok=True)
@@ -22,6 +24,10 @@ def test_pending_details_reach_verified_cross_query_and_synthesis_at_250_manager
     assert result["enum_names"]
     assert result["full_schema_calls"] == 0
     assert result["model_performance_measured"] is False
+    assert result["stage_budgets"] == {
+        "evidence_timeout_seconds": 90.0,
+        "synthesis_timeout_seconds": 30.0,
+    }
     assert result["calculation"]["value"] == 110
     scope = result["calculation"]["scope"]
     assert scope["cross_query"]["entity"]["manager"] == "Project"
@@ -52,6 +58,7 @@ from experiments.siwc_eval.provider import payload
 from general_manager.chat.providers.base import DoneEvent,TextChunkEvent,TokenUsage,ToolCallEvent
 from general_manager.chat.planned.schema_projection import logical_messages
 from general_manager.chat.graphql_contract import manager_schema
+from general_manager.chat.planned.config import get_planned_chat_settings
 managers=["Project","Customer","Shipment","ShipmentReturn"]
 schema_ids={m:"schema_"+m.lower() for m in managers}
 requirements=[{"requirement_id":schema_ids[m],"kind":"schema","description":"Observe required native input/output definitions for "+m,"operation":None,"schema":{"manager":m,"view":"detail","types":[],"snapshot":"current"}} for m in managers]
@@ -60,7 +67,7 @@ for id,kind,op in [("projects","query",None),("customers","query",None),("paths"
  if kind=="calculation":r["binding"]=None
  requirements.append(r)
 plan={"intent":"read","tasks":[{"task_id":"net","objective":"Net shipped quantity after returns for the requested entity and period","depends_on":[],"requirements":requirements,"completion_criteria":[r["requirement_id"] for r in requirements],"routing_features":["requires_calculation","multiple_queries"]}]}
-stage=0;overviews={};base_views={};selected={};exchanges=[];discovery_unlinked=False;enum_names=[]
+stage=0;overviews={};base_views={};selected={};exchanges=[];discovery_unlinked=False;enum_names=[];stage_budgets=None
 named=lambda t:re.sub(r"[\[\]!]","",t)
 def text(x): return TextChunkEvent(json.dumps(x))
 def found(ref,req):
@@ -72,13 +79,15 @@ def by_call(ref,call):
 def factory(config):
  class Provider:
   async def complete(self,messages,tools):
-   global stage,discovery_unlinked,enum_names
+   global stage,discovery_unlinked,enum_names,stage_budgets
    body={**payload(config["model"],messages,tools),"reasoning":{"effort":config["reasoning"]}}
    exchanges.append({"role":config["role"],"characters":len(json.dumps(body))})
    assert exchanges[-1]["characters"]<=300000
    logical=logical_messages(messages)
    ref=json.loads(next(m.content for m in reversed(logical) if m.role=="user" and m.content.startswith(("REFERENCE_DATA=","RESOLVED_REFERENCE_DATA="))).split("=",1)[1])
    if config["role"]=="planner":
+    planned=get_planned_chat_settings()
+    stage_budgets={"evidence_timeout_seconds":planned.evidence_timeout_seconds,"synthesis_timeout_seconds":planned.synthesis_timeout_seconds}
     response=contextual_probe_plan(plan,ref)
     definition=ref["application_definition_source"]["text"]
     quote="Shipment quantities are gross integer pieces; returns and kg are separate."
@@ -156,6 +165,6 @@ def factory(config):
 try:
  run=asyncio.run(run_case(runtime,{"id":"selective-cross-query","turns":["What was Aurora's net shipped quantity in 2025 after returns?"]},make_profile("weak-only",weak_model="gpt-6.1-sol",strong_model="gpt-6.1-sol"),factory))
  calculations=[x["calculation"] for x in exchanges if "calculation" in x]
- print(json.dumps({"status":run["status"],"failure_flags":run["failure_flags"],"turn_terminal":run["turns"][0]["terminal"],"persistence_verified":run["turns"][0]["persistence_verified"],"exchanges":exchanges,"discovery_unlinked":discovery_unlinked,"enum_names":enum_names,"full_schema_calls":sum(x["args"].get("view")=="full" for x in run["turns"][0]["tool_calls"] if x["name"]=="get_manager_schema"),"model_performance_measured":run["model_performance_measured"],"calculation":calculations[-1] if calculations else None}))
+ print(json.dumps({"status":run["status"],"failure_flags":run["failure_flags"],"turn_terminal":run["turns"][0]["terminal"],"persistence_verified":run["turns"][0]["persistence_verified"],"exchanges":exchanges,"discovery_unlinked":discovery_unlinked,"enum_names":enum_names,"full_schema_calls":sum(x["args"].get("view")=="full" for x in run["turns"][0]["tool_calls"] if x["name"]=="get_manager_schema"),"model_performance_measured":run["model_performance_measured"],"stage_budgets":stage_budgets,"calculation":calculations[-1] if calculations else None}))
 finally:runtime.close()
 """
