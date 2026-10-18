@@ -4,6 +4,10 @@ from general_manager.chat.evals.baseline import (
     ReadinessSummary,
     compare_to_baseline,
 )
+from general_manager.chat.evals.fingerprints import (
+    SELECTION_MANIFEST_VERSION,
+    stable_hash,
+)
 
 
 def _summary(
@@ -12,7 +16,21 @@ def _summary(
     total: int,
     diagnostics: dict[str, dict[str, int]],
 ) -> ReadinessSummary:
+    cases = [
+        {
+            "dataset": "demo_readiness",
+            "name": f"case-{index}",
+            "case_hash": stable_hash({"case": index}, length=64),
+        }
+        for index in range(total)
+    ]
     return ReadinessSummary(
+        evaluation_contract="chat-evaluation/3",
+        selection_manifest={
+            "version": SELECTION_MANIFEST_VERSION,
+            "cases": cases,
+            "hash": stable_hash(cases, length=64),
+        },
         run_hash="abc123",
         gate="demo",
         provider="OllamaProvider",

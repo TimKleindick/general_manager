@@ -122,6 +122,13 @@ has a capability gap. It is never a correct-answer result.
 
 `profiles.siwc_factory(transport)` adapts an explicitly supplied existing SIWC
 transport. The bridge never reads personal credentials or performs login.
+Create one factory per evaluation run and reuse it across roles, turns and cases.
+It retains the first terminal provider error or cancellation and rejects further
+starts, including providers created before that failure. Fresh role providers
+still retain separate Responses histories. Input-size rejection stops the run
+before transport dispatch; successful calls and repairable model plans do not
+stop it. Never recreate the factory as automatic error recovery: a new factory
+defines a new run, not permission to retry after an auth/quota/transport failure.
 Live evaluation requires explicit authorization and a completed offline gate.
 The user authorized an initial bounded comparison of `gpt-6-astra` at medium,
 `gpt-6.1-sol` at high, and `gpt-6-luna` at high reasoning, subject to exact
@@ -801,3 +808,13 @@ the required answer. Offline protocol controls do not demonstrate future live
 judge accuracy. Any review of a saved answer must retain the original request,
 response and raw score, and identify a separate offline annotation or reassessment
 as such; it is not another live result or a replacement for the original score.
+
+## Offline CI parity deadline
+
+The E100 250-manager scheduler/consumer parity subprocess has an explicitly
+authorized 100-second complete-process deadline. Other offline child processes
+retain their 90-second default. Functional parity assertions, history/persistence
+checks and marker-only timeout diagnostics remain active. This adds variance
+allowance for that CI process; it does not prove a cause or fix for the earlier
+90-second timeout. Production evidence, provider and live-evaluation deadlines
+are unchanged, and the original failed attempt remains historical evidence.

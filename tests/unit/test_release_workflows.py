@@ -402,16 +402,9 @@ def test_quality_required_python_312_leg_validates_built_artifacts() -> None:
         f'{venv_python} "$GITHUB_WORKSPACE/tests/packaging/'
         'smoke_readme_onboarding.py" "$GITHUB_WORKSPACE"'
     )
-    settings_smoke = (
-        "env -u DJANGO_SETTINGS_MODULE "
-        'PYTHONPATH="$GITHUB_WORKSPACE/tests/packaging" '
-        f"{venv_python} -m general_manager.chat.evals "
-        "--settings chat_eval_smoke_settings --provider builtins.object "
-        "--fixture toy --dataset basic_queries --tier 999"
-    )
     assert dynamic_smoke in commands
     assert onboarding_smoke in commands
-    assert settings_smoke in commands
+    assert "-m general_manager.chat.evals" not in commands
     assert commands.index("python -m build") < commands.index("twine check dist/*")
     assert commands.index("twine check dist/*") < commands.index(
         "scripts/validate_distribution.py archives"
@@ -424,9 +417,6 @@ def test_quality_required_python_312_leg_validates_built_artifacts() -> None:
     ) < commands.index("smoke_readme_onboarding.py")
     assert commands.index("smoke_readme_onboarding.py") < commands.index(
         "smoke_chat_eval_distribution.py"
-    )
-    assert commands.index("smoke_chat_eval_distribution.py") < commands.index(
-        "--settings chat_eval_smoke_settings"
     )
 
 
@@ -567,18 +557,9 @@ def test_publish_artifact_job_validates_before_uploading_sha_keyed_files() -> No
         'smoke_chat_eval_distribution.py" '
         '"$GITHUB_WORKSPACE/$WHEEL" "$GITHUB_WORKSPACE/$SDIST"'
     ) in commands[3]
-    assert (
-        "env -u DJANGO_SETTINGS_MODULE "
-        'PYTHONPATH="$GITHUB_WORKSPACE/tests/packaging" '
-        f"{venv_python} -m general_manager.chat.evals "
-        "--settings chat_eval_smoke_settings --provider builtins.object "
-        "--fixture toy --dataset basic_queries --tier 999"
-    ) in commands[3]
+    assert "-m general_manager.chat.evals" not in commands[3]
     assert commands[3].index('validate_distribution.py" installed') < commands[3].index(
         "smoke_chat_eval_distribution.py"
-    )
-    assert commands[3].index("smoke_chat_eval_distribution.py") < commands[3].index(
-        "--settings chat_eval_smoke_settings"
     )
 
     pypi_preflight = conditional_steps[4]

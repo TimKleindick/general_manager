@@ -9,7 +9,11 @@ import pytest
 
 from general_manager.chat.evals import runner
 from general_manager.chat.evals.baseline import compare_to_baseline
-from dataclasses import replace
+from dataclasses import asdict, replace
+from general_manager.chat.evals.fingerprints import (
+    SELECTION_MANIFEST_VERSION,
+    stable_hash,
+)
 from general_manager.chat.evals.readiness import build_summary, readiness_exit_code
 from general_manager.chat.providers import (
     AnthropicProvider,
@@ -280,6 +284,13 @@ def _strategy_result(reversed_order):
 
 
 def _summary(result):
+    cases = [
+        {
+            "dataset": "basic_queries",
+            "name": result.case.name,
+            "case_hash": stable_hash(asdict(result.case), length=64),
+        }
+    ]
     return build_summary(
         gate="demo",
         run_metadata={
@@ -288,6 +299,11 @@ def _summary(result):
             "model": "none",
             "fixture": "toy",
             "datasets": ["basic_queries"],
+            "selection_manifest": {
+                "version": SELECTION_MANIFEST_VERSION,
+                "cases": cases,
+                "hash": stable_hash(cases, length=64),
+            },
         },
         results=[result],
     )

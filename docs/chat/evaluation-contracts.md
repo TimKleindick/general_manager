@@ -163,3 +163,41 @@ construction and replay validation still need no Django or provider setup.
 
 This change makes no new claim about live answer accuracy or production
 performance. Technical timeouts still require their own transport evidence.
+
+## Actual case selection and comparable readiness
+
+`runner.select_eval_cases(dataset_names=None, *, tier=None, tags=None)` freezes
+the actual ordered case inputs once. It excludes the deterministic-only dataset
+from provider-backed defaults and removes datasets with no matching cases from
+the executed dataset list. Its `EvalSelection` stores immutable serialized inputs;
+`iter_cases()` returns fresh cases for each candidate. Its detached `manifest()`
+contains qualified dataset/case identities and SHA-256 hashes of complete case
+definitions, including conversations and expectations.
+
+`run_eval_suite` and `run_eval_suite_sync` retain dataset/filter arguments, or
+accept a keyword-only `selection=...`. Do not combine the two forms. An explicit
+selection is reused by the installed CLI's model/provider comparison, source
+helper, fingerprint and readiness execution. Metadata claiming a different
+selection is rejected before provider calls. `build_run_fingerprint` accepts
+`selection_manifest=selection.manifest()` and verifies its actual dataset list.
+
+An empty direct suite raises `ValueError`; installed/source CLIs reject it before
+provider construction. Readiness writes `run_status=empty`, zero cases and a
+nonzero exit without running tests or constructing a provider. Empty reports say
+that no evaluation took place; they are not 100-percent passes. Unscored cases
+remain in the complete selected denominator.
+
+Readiness summaries carry the selection manifest. Comparison requires the same
+actual ordered cases/definitions, fixture identifier, gate and evaluation/scoring
+contract. Provider, model, prompt/tool fingerprints and the model-dependent
+`run_hash` are allowed to differ. Filter expressions describe selection provenance;
+the actual selected cohort determines cohort identity. Fixture identifiers must
+refer to the intended same data fixture; this manifest does not snapshot an
+arbitrary live project database. Historical JSON still loads without adding
+invented cohort proof. Reports without a valid selection manifest are readable
+but cannot establish a comparable new baseline; historical files are not changed.
+
+The shared installed-distribution smoke verifies CLI bootstrap with an empty
+selection as a negative control: it requires exit 2 and the specific empty-case
+error. Both quality and release workflows use that same smoke owner. Its success
+proves the expected rejection, not a passing evaluation or a provider call.

@@ -7,6 +7,9 @@ from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
+from typing import Any
+
+from general_manager.chat.evals.fingerprints import selection_manifest_is_valid
 
 
 @dataclass(frozen=True)
@@ -38,11 +41,13 @@ class ReadinessSummary:
     evaluation_contract: str = "chat-evaluation/1"
     failed: int = 0
     unscored: int = 0
+    selection_manifest: dict[str, Any] | None = None
+    run_status: str = "completed"
 
     @property
     def pass_rate(self) -> float:
-        """Return the overall pass rate, treating empty runs as fully passing."""
-        return 1.0 if self.total == 0 else self.passed / self.total
+        """Return the fixed-denominator pass rate; an empty run is not a pass."""
+        return 0.0 if self.total == 0 else self.passed / self.total
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,36 @@ def compare_to_baseline(
             pass_rate_delta=round(delta, 6),
             messages=[
                 "Evaluation contracts differ; establish a new baseline without rewriting the historical report."
+            ],
+            comparable=False,
+        )
+    for summary in (current, baseline):
+        manifest = summary.selection_manifest
+        if (
+            summary.total <= 0
+            or not selection_manifest_is_valid(manifest)
+            or len(manifest["cases"]) != summary.total
+            or sorted({case["dataset"] for case in manifest["cases"]})
+            != sorted(summary.datasets)
+        ):
+            return BaselineComparison(
+                regressed=False,
+                pass_rate_delta=round(delta, 6),
+                messages=[
+                    "Evaluation selection is empty or lacks verified cohort metadata; establish a bound baseline without rewriting history."
+                ],
+                comparable=False,
+            )
+    if (
+        current.selection_manifest != baseline.selection_manifest
+        or current.fixture != baseline.fixture
+        or current.gate != baseline.gate
+    ):
+        return BaselineComparison(
+            regressed=False,
+            pass_rate_delta=round(delta, 6),
+            messages=[
+                "Evaluation cohorts, fixtures or gates differ; these runs are not comparable."
             ],
             comparable=False,
         )

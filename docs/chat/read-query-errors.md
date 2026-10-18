@@ -48,3 +48,13 @@ hook does not access the database. This preserves queries implemented by
 calculation, read-only, and other non-SQL Interfaces when the application's
 default database is PostgreSQL. Statement timeout behavior on other database
 backends is unchanged.
+
+The configured `CHAT.query_timeout_seconds` defaults to `None`; it is not an
+extra fixed five-second timeout. Planned reads pass the remaining evidence-stage
+budget (the stage defaults to 90 seconds). The PostgreSQL guard uses that value
+or the smaller configured timeout as a per-statement timeout on the default
+connection. This is not a universal SQL-count limit or a timeout on every database
+alias, and SQLite/MariaDB do not acquire PostgreSQL statement-timeout semantics.
+The separate `CHAT.max_results` default is 200 results per bounded chat query
+page; it does not bound all database work. Both protections surround the native
+GraphQL read path, whose resolvers still enforce the real request/user permissions.

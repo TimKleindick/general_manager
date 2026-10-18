@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import asdict, dataclass
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,11 @@ from general_manager.chat.evals.diagnostics import summarize_failure_class_cases
 from general_manager.chat.evals.diagnostics import summarize_failure_classes
 from general_manager.chat.evals.diagnostics import summarize_diagnostics
 from general_manager.chat.evals.runner import EvalResult, is_forbidden_recovery_event
-from general_manager.chat.evals.fingerprints import EVALUATION_CONTRACT
+from general_manager.chat.evals.fingerprints import (
+    EVALUATION_CONTRACT,
+    selection_manifest_is_valid,
+    stable_hash,
+)
 
 _ANSWER_PROMPT_RECOVERY_EVENTS = frozenset(
     {
@@ -61,6 +66,16 @@ def build_summary(
     results: list[EvalResult],
 ) -> ReadinessSummary:
     """Build a machine-readable readiness summary from eval results."""
+    manifest = run_metadata.get("selection_manifest")
+    if manifest is not None and (
+        not selection_manifest_is_valid(manifest)
+        or [case["name"] for case in manifest["cases"]]
+        != [result.case.name for result in results]
+        or [case["case_hash"] for case in manifest["cases"]]
+        != [stable_hash(asdict(result.case), length=64) for result in results]
+    ):
+        message = "Readiness results do not match the actual eval selection."
+        raise ValueError(message)
     diagnostics = _classify_results(results, include_passing=True)
     failure_diagnostics = _classify_results(results, include_passing=False)
     contract_total = sum(1 for result in results if result.contract_score is not None)
@@ -85,6 +100,8 @@ def build_summary(
         event for events in forbidden_recovery_by_case.values() for event in events
     ]
     return ReadinessSummary(
+        selection_manifest=deepcopy(manifest),
+        run_status="completed" if results else "empty",
         evaluation_contract=EVALUATION_CONTRACT,
         failed=sum(result.status == "fail" for result in results),
         unscored=sum(result.status == "unscored" for result in results),
@@ -236,7 +253,11 @@ def readiness_exit_code(
     fail_on_regression: bool,
 ) -> int:
     """Return the readiness process exit code for a completed run."""
-    if summary.passed != summary.total:
+    if (
+        summary.total <= 0
+        or summary.run_status != "completed"
+        or summary.passed != summary.total
+    ):
         return 1
     if summary.forbidden_recovery_total:
         return 1
