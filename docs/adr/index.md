@@ -11,3 +11,5 @@ This directory collects the Architecture Decision Records (ADRs) that document k
 - [ADR 0007: GraphQL capability exposure for frontend authorization](0007-graphql-capability-exposure.md)
 - [ADR 0008: Automatic LLM chat endpoint with pluggable providers](0008-llm-chat-endpoint.md)
 - [ADR 0009: Filter calculation inputs before row authorization](0009-calculation-filter-authorization.md)
+- [ADR 0010: Planned chat reads with validated evidence](0010-planned-chat-evidence.md)
+- [ADR 0011: Snapshot-bound selective schema discovery](0011-chat-schema-contracts.md)

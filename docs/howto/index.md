@@ -29,3 +29,9 @@ These tutorials walk you through common development tasks when working with Gene
 24. [Read and write Excel workbooks](excel_interface.md)
 
 Follow them in order when you start a new project, or jump to the topic relevant to your current task.
+
+## Chat integration
+
+Follow [installation](install_llm_chat.md), [provider/role configuration](configure_chat.md),
+[client integration](integrate_chat.md), [operations](operate_chat.md) and
+[evaluation](run_chat_evals.md) for a complete deployment path.

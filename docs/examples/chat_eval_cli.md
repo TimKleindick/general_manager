@@ -20,7 +20,7 @@ python -m general_manager.chat.evals \
 This is the smallest directly usable installed-package check: it configures
 Django, registers the toy managers expected by `basic_queries`, loads the YAML
 dataset from package data, constructs the provider, and returns status 1 if any
-case fails.
+case fails or is unscored.
 
 ## Use project data and the configured provider
 

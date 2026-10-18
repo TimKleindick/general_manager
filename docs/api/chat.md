@@ -1,5 +1,12 @@
 # Chat API
 
+For the request lifecycle read [Chat architecture](../concepts/chat.md). Start
+with [installation](../howto/install_llm_chat.md), then use
+[configuration](../howto/configure_chat.md),
+[client integration](../howto/integrate_chat.md) and the
+[cookbook](../examples/planned_chat_orchestration.md). This page contains exact
+settings, events and Python contracts.
+
 GeneralManager chat exposes selected managers to a tool-capable LLM through
 HTTP, server-sent events (SSE), or WebSocket. Enable it through
 `GENERAL_MANAGER["CHAT"]`; GeneralManager installs the routes during Django
@@ -952,7 +959,8 @@ result caps also clamp supported nested pages.
 page wrappers. It does not invent reverse edges. Inspect another manager when a
 schema detail marks its output as a `reference`. Discovery and both transports'
 planner payloads remain compact; expanded schema types are loaded on demand.
-The existing 200,000-character provider guard remains unchanged.
+Provider-body admission guards are independently configured by the provider or
+experiment and are not a production chat setting.
 
 Version 2 currently supports exposed manager roots returning generated pages,
 object/leaf selections and typed arguments. Unions, interfaces, fragments,
@@ -967,7 +975,8 @@ there is no silent legacy conversion.
 Structured clarification responses contain only `clarification.language` (`de`,
 `en`, `fr`) and a nonempty unique `clarification.requirements` list drawn from
 `criterion`, `metric`, `horizon`, `population`, `customer_identity`,
-`record_selector`, and `unit`. The runtime renders fixed questions; this branch
+`record_selector`, `unit`, `forecast_method`, `future_pricing`, and
+`reporting_currency`. The runtime renders fixed questions; this branch
 accepts no free answer text, result claims, entity names, numbers, or evidence IDs.
 The existing read plan must still resolve schema/identity evidence. Data answers
 continue to require nonempty unique eligible `evidence_ids`; mixed answers and
@@ -1036,42 +1045,16 @@ Transport exceptions retain their separate origin and are not validation cycles.
 
 ### Schema transport projection
 
-Planned requests can encode repeated schema definitions through the versioned
-`gm.schema-data/1` format. This changes only the provider transport view. The
-planner and executor select eligible schema positions from runtime evidence and
-persisted schema-tool origins before serialization. Ordinary user text, query
-rows, errors, native tool exchanges and application instructions are not searched
-for JSON or schema-shaped values.
+Explicitly bound schema values use `gm.schema-data/3`; bound executor/judge whole
+references use `gm.reference-data/2`, and synthesis uses its own ownership-bound
+`gm.reference-data/3`. Earlier decoders retain their versioned instructions.
+Selection compares the whole escaped message and keeps the original when the
+encoding would grow it. Complete reconstruction and source bindings are checked
+before dispatch; projection changes no exposure, evidence link or permission.
 
-The `REFERENCE_DATA` user block retains its usual top-level fields and adds
-`schema_transport`, containing the format explanation, a request-local object
-table and an occurrence map. References are interpreted only at those declared
-schema positions. They point backward within the table. Literal marker-shaped
-objects are escaped. Every occurrence keeps its task, evidence or historical
-origin binding even when several occurrences share an identical value. There is
-no shared cache across requests or users. Equality of a value does not create an
-evidence link or permission.
-
-Historical schema text is eligible only when conversion of a persisted
-`get_manager_schema` row supplies its structured result and origin. Its rendered
-text must match that result exactly. Other historical text remains unchanged.
-Original roles, indices, JSON formatting and text remain available to replay and
-adjudication. The evaluator records original logical messages separately from
-transport hashes and occurrence bindings, and profiles identify the transport
-contract version.
-
-Before dispatch, expansion is checked against the original reference and the
-independent occurrence bindings. Invalid references, foreign bindings, unused
-objects, expansion beyond bounded depth, work or size, and mismatched hashes are
-rejected. Small requests retain their original encoding when projection would
-not reduce the serialized size. The existing 200,000-character Responses request
-guard still measures the final body, including protocol text, table and escaping.
-It does not truncate data or retry an oversized request.
-
-Lossless offline replay and smaller payloads do not establish model comprehension
-or improved answers. A new live evaluation needs separately reviewed controls
-bound to this source revision and transport version; previous controls and
-historical scores are not relabeled.
+See [reference-data transport](../concepts/chat_reference_data.md) for formats,
+Python defaults, historical origin proof, failure semantics and measurement
+boundaries. This codec is separate from selective schema inspection.
 
 ### Completed task context for synthesis
 
@@ -1143,8 +1126,9 @@ fields. Unions/interfaces/fragments remain unsupported. Full inspection is
 available only by explicit `view="full"`; invalid or stale selectors return an
 atomic error without partial definitions or automatic full fallback. Hidden
 managers return no schema. Default, enum and exposure changes invalidate detail
-tokens. Schema inspection is fresh on every tool call and never served from the
-turn cache.
+tokens. Every inspection captures the current compiled schema contract and records its
+observation; it is never served from the turn cache. Compiled definitions remain
+immutable until an explicit schema rebuild.
 
 Planned schema requirements may declare `schema={"manager": "Part", "view":
 "detail", "types": ["observedType"], "snapshot": "current"}`. `current` binds to
