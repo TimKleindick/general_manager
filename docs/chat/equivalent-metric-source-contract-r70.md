@@ -24,8 +24,12 @@ existing source and internal-grounding owners verify successful, selected,
 complete root query windows and exact population/input values. Pagination uses
 the existing completeness verifier. Undeclared routes, missing/extra rows,
 unselected fields, changed input metrics/currency/year and invented values
-cannot qualify. Expected input rows stay evaluator-only and are absent from the
-blind judgment packet.
+cannot qualify. Separate identity/schema or other-metric queries whose root
+projection does not select the declared metric inputs do not become route
+sources. A structurally eligible projection with missing or false returned
+inputs still fails; unused correct evidence cannot replace wrong actually used
+evidence. Expected input rows stay evaluator-only and are absent from the blind
+judgment packet.
 
 Eligible input data alone does not establish correct use. Answer-quote fact
 support and independent `answer_supported` evidence must bind the actually used

@@ -738,6 +738,22 @@ def _equivalent_source_rows(
             or query["id"] in seen_queries
         ):
             continue
+        # A separate identity/other-metric query is not an input source for this
+        # route. Classify only its declared root projection, never its values:
+        # an eligible projection with missing or false returned inputs must fail.
+        projected: set[str] = set()
+        for field in query["arguments"]["fields"]:
+            if isinstance(field, str):
+                names = [field]
+            elif isinstance(field, Mapping):
+                names = [field["field"]] if "field" in field else list(field)
+            else:
+                continue
+            projected.update(
+                _field_identity(name) for name in names if isinstance(name, str)
+            )
+        if not required <= projected:
+            continue
         seen_queries.add(query["id"])
         local_ids: set[str] = set()
         for row in record["identity_rows"]:
