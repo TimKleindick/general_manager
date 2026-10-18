@@ -296,9 +296,15 @@ class _ObservedTransport:
 
 
 def siwc_factory(transport: Any) -> ProviderFactory:
-    """Adapt an explicitly supplied SIWC transport; never discover credentials."""
+    """Bind terminal failure to this run while keeping each role's history private."""
     from experiments.siwc_eval.provider import Provider
     from experiments.siwc_eval.suite import MediumTransport
+
+    terminal_error: BaseException | None = None
+
+    def require_active_run() -> None:
+        if terminal_error is not None:
+            raise terminal_error
 
     class ObservedProvider:
         def __init__(
@@ -326,15 +332,24 @@ def siwc_factory(transport: Any) -> ProviderFactory:
         async def complete(
             self, messages: list[Message], tools: list[ToolDefinition]
         ) -> AsyncIterator[ChatEvent]:
+            nonlocal terminal_error
             from general_manager.chat.providers._shared import closing_async_resource
 
-            async with closing_async_resource(
-                self.provider.complete(messages, tools)
-            ) as events:
-                async for event in events:
-                    yield event
+            # A role may have been constructed before another role stopped.
+            require_active_run()
+            try:
+                async with closing_async_resource(
+                    self.provider.complete(messages, tools)
+                ) as events:
+                    async for event in events:
+                        yield event
+            except BaseException as error:
+                if self.provider.stopped and terminal_error is None:
+                    terminal_error = error
+                raise
 
     def construct(config: Mapping[str, Any]) -> BaseLLMProvider:
+        require_active_run()
         reasoning = str(config.get("reasoning", "medium"))
         if isinstance(transport, MediumTransport) and reasoning != "medium":
             raise ProviderBindingError("pinned_transport_reasoning_mismatch")

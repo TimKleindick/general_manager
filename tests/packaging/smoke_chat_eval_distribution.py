@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -10,6 +12,39 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_DATASETS = ROOT / "src/general_manager/chat/evals/datasets"
 ARCHIVE_MARKER = "general_manager/chat/evals/datasets/"
+
+
+def _check_cli_bootstrap() -> None:
+    """Prove installed CLI bootstrap reaches the intentional empty-cohort error."""
+    environment = dict(os.environ)
+    environment.pop("DJANGO_SETTINGS_MODULE", None)
+    environment["PYTHONPATH"] = str(ROOT / "tests/packaging")
+    completed = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "-m",
+            "general_manager.chat.evals",
+            "--settings",
+            "chat_eval_smoke_settings",
+            "--provider",
+            "builtins.object",
+            "--fixture",
+            "toy",
+            "--dataset",
+            "basic_queries",
+            "--tier",
+            "999",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 2, completed.stderr
+    assert (
+        "__main__.py: error: No eval cases selected; the run was not evaluated."
+        in completed.stderr.splitlines()
+    ), completed.stderr
 
 
 def _archive_dataset_names(artifact: Path) -> set[str]:
@@ -62,6 +97,7 @@ def main(arguments: list[str]) -> None:
     assert not installed_package.is_relative_to(ROOT / "src")
     assert set(list_datasets()) == {Path(name).stem for name in source_names}
     assert load_dataset("basic_queries")
+    _check_cli_bootstrap()
 
 
 if __name__ == "__main__":

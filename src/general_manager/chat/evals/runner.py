@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable, Iterator
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import IO
 from typing import Any
@@ -20,7 +20,11 @@ from general_manager.chat.evals.diagnostics import (
     sanitize_planned_trace,
     summarize_diagnostics,
 )
-from general_manager.chat.evals.fingerprints import EVALUATION_CONTRACT, stable_hash
+from general_manager.chat.evals.fingerprints import (
+    EVALUATION_CONTRACT,
+    SELECTION_MANIFEST_VERSION,
+    stable_hash,
+)
 from general_manager.chat.evals.outcomes import terminal_failure_categories
 from general_manager.chat.evals.execution import EvalExecution, bind_execution
 from general_manager.chat.schema_index import planner_catalog_summary
@@ -300,6 +304,52 @@ def execution_dataset_names(dataset_names: list[str] | None = None) -> list[str]
         msg = f"Dataset(s) require explicit deterministic role overrides: {names}."
         raise ValueError(msg)
     return dataset_names
+
+
+@dataclass(frozen=True)
+class EvalSelection:
+    """Immutable case inputs reused by execution, model comparison and reporting."""
+
+    _entries: tuple[tuple[str, str], ...]
+
+    @property
+    def datasets(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(dataset for dataset, _payload in self._entries))
+
+    def iter_cases(self) -> Iterator[tuple[str, EvalCase]]:
+        for dataset, payload in self._entries:
+            yield dataset, EvalCase(**json.loads(payload))
+
+    def manifest(self) -> dict[str, Any]:
+        cases = [
+            {
+                "dataset": dataset,
+                "name": case.name,
+                "case_hash": stable_hash(asdict(case), length=64),
+            }
+            for dataset, case in self.iter_cases()
+        ]
+        return {
+            "version": SELECTION_MANIFEST_VERSION,
+            "cases": cases,
+            "hash": stable_hash(cases, length=64),
+        }
+
+
+def select_eval_cases(
+    dataset_names: list[str] | None = None,
+    *,
+    tier: int | None = None,
+    tags: list[str] | None = None,
+) -> EvalSelection:
+    """Load and freeze the actual ordered cohort once, before provider execution."""
+    return EvalSelection(
+        tuple(
+            (dataset, json.dumps(asdict(case), sort_keys=True, separators=(",", ":")))
+            for dataset in execution_dataset_names(dataset_names)
+            for case in filter_cases(load_dataset(dataset), tier=tier, tags=tags)
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -992,27 +1042,54 @@ async def run_eval_suite(
     tags: list[str] | None = None,
     run_metadata: dict[str, Any] | None = None,
     recover_missing_tools: bool = False,
+    *,
+    selection: EvalSelection | None = None,
 ) -> list[EvalResult]:
     """Run all (or selected) eval datasets and return results."""
     _validate_execution_mode("planned", recover_missing_tools)
-    dataset_names = execution_dataset_names(dataset_names)
+    if selection is not None and any(
+        value is not None for value in (dataset_names, tier, tags)
+    ):
+        message = "An explicit eval selection cannot be combined with dataset/filter overrides."
+        raise ValueError(message)
+    selected = (
+        selection
+        if selection is not None
+        else select_eval_cases(dataset_names, tier=tier, tags=tags)
+    )
+    manifest = selected.manifest()
+    if not manifest["cases"]:
+        message = "No eval cases selected; the run was not evaluated."
+        raise ValueError(message)
+    metadata = dict(run_metadata or {})
+    if "selection_manifest" in metadata and metadata["selection_manifest"] != manifest:
+        message = "Run metadata does not match the actual eval selection."
+        raise ValueError(message)
+    if "datasets" in metadata:
+        names = metadata["datasets"]
+        if (
+            not isinstance(names, list)
+            or not all(isinstance(name, str) for name in names)
+            or sorted(names) != sorted(selected.datasets)
+        ):
+            message = "Run datasets do not match the actual eval selection."
+            raise ValueError(message)
+    metadata.update(selection_manifest=manifest, datasets=sorted(selected.datasets))
 
     tool_defs = get_tool_definitions()
     results: list[EvalResult] = []
 
-    for ds_name in dataset_names:
-        cases = filter_cases(load_dataset(ds_name), tier=tier, tags=tags)
-        for case in cases:
-            result = await run_case(
-                provider,
-                case,
-                tool_defs,
-                stream=stream,
-                trace_writer=trace_writer,
-                run_metadata=run_metadata,
-                recover_missing_tools=recover_missing_tools,
-            )
-            results.append(result)
+    for _dataset, case in selected.iter_cases():
+        result = await run_case(
+            provider,
+            case,
+            tool_defs,
+            stream=stream,
+            trace_writer=trace_writer,
+            run_metadata=metadata,
+            recover_missing_tools=recover_missing_tools,
+        )
+        results.append(result)
 
     return results
 
@@ -1026,6 +1103,8 @@ def run_eval_suite_sync(
     tags: list[str] | None = None,
     run_metadata: dict[str, Any] | None = None,
     recover_missing_tools: bool = False,
+    *,
+    selection: EvalSelection | None = None,
 ) -> list[EvalResult]:
     """Synchronous wrapper for ``run_eval_suite``."""
     return asyncio.run(
@@ -1038,6 +1117,7 @@ def run_eval_suite_sync(
             tags=tags,
             run_metadata=run_metadata,
             recover_missing_tools=recover_missing_tools,
+            selection=selection,
         )
     )
 
@@ -1049,6 +1129,8 @@ def run_eval_suite_sync(
 
 def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
     """Format a summary report and return it as a string."""
+    if not results:
+        return "No eval cases selected; run not evaluated (N/A)."
     lines: list[str] = []
     total = len(results)
     passed = sum(1 for r in results if r.passed)

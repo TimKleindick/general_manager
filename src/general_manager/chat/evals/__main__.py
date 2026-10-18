@@ -85,6 +85,7 @@ def main(argv: list[str] | None = None) -> None:
         print_compare_report,
         print_report,
         run_eval_suite_sync,
+        select_eval_cases,
     )
     from general_manager.chat.evals.fixtures import setup_large_schema, setup_toy_schema
     from general_manager.chat.evals.traces import EvalTraceWriter
@@ -96,6 +97,9 @@ def main(argv: list[str] | None = None) -> None:
         setup_toy_schema()
 
     dataset_names = [args.dataset] if args.dataset else None
+    selection = select_eval_cases(dataset_names, tier=args.tier, tags=args.tag)
+    if not selection.manifest()["cases"]:
+        parser.error("No eval cases selected; the run was not evaluated.")
     trace_writer = EvalTraceWriter(args.trace_jsonl) if args.trace_jsonl else None
 
     if args.compare:
@@ -108,18 +112,15 @@ def main(argv: list[str] | None = None) -> None:
             provider = _instantiate_provider(provider_cls, args.model)
             results = run_eval_suite_sync(
                 provider,
-                dataset_names,
                 trace_writer=trace_writer,
-                tier=args.tier,
-                tags=args.tag,
+                selection=selection,
             )
             results_by_provider[path] = results
         report = print_compare_report(results_by_provider)
         print(report)
-        if not all(
-            result.passed
+        if not results_by_provider or not all(
+            results and all(result.passed for result in results)
             for results in results_by_provider.values()
-            for result in results
         ):
             sys.exit(1)
         return
@@ -134,15 +135,13 @@ def main(argv: list[str] | None = None) -> None:
     provider = _instantiate_provider(provider_cls, args.model)
     results = run_eval_suite_sync(
         provider,
-        dataset_names,
         trace_writer=trace_writer,
-        tier=args.tier,
-        tags=args.tag,
+        selection=selection,
     )
     report = print_report(results, verbose=args.verbose)
     print(report)
 
-    all_passed = all(r.passed for r in results)
+    all_passed = bool(results) and all(r.passed for r in results)
     if not all_passed:
         sys.exit(1)
 

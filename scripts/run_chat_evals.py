@@ -16,7 +16,9 @@ import argparse
 import os
 import socket
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 # Ensure the project root is on sys.path so test settings are importable.
@@ -35,6 +37,7 @@ from general_manager.chat.evals.runner import (
     list_datasets,
     print_report,
     run_eval_suite_sync,
+    select_eval_cases,
 )
 from general_manager.chat.evals.fingerprints import build_run_fingerprint
 from general_manager.chat.evals.fixtures import setup_large_schema, setup_toy_schema
@@ -52,6 +55,26 @@ from general_manager.chat.tools import get_tool_definitions
 def setup_test_schema() -> None:
     """Register the canonical packaged toy fixture for source-checkout recipes."""
     setup_toy_schema()
+
+
+def _patch_ollama_provider(
+    *, model: str | None = None, base_url: str | None = None
+) -> None:
+    """Bind each override to the configuration callable it actually wraps."""
+    if model is None and base_url is None:
+        return
+    original = OllamaProvider._provider_config
+
+    @staticmethod  # type: ignore[misc]
+    def _patched_config(configured: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        cfg = original(configured)
+        if model is not None:
+            cfg["model"] = model
+        if base_url is not None:
+            cfg["base_url"] = base_url
+        return cfg
+
+    OllamaProvider._provider_config = _patched_config  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -116,46 +139,23 @@ def main() -> None:
         help="Write per-case eval traces to the given JSONL file.",
     )
     args = parser.parse_args()
+    dataset_names = [args.dataset] if args.dataset else None
+    selection = select_eval_cases(dataset_names, tier=args.tier, tags=args.tag)
+    if not selection.manifest()["cases"]:
+        parser.error("No eval cases selected; the run was not evaluated.")
 
     if args.fixture == "large":
         setup_large_schema()
     else:
         setup_test_schema()
 
-    overrides: dict[str, str] = {}
-    if args.model:
-        overrides["model"] = args.model
-    if args.base_url:
-        overrides["base_url"] = args.base_url
-
-    if overrides:
-        # Monkey-patch provider config for this run.
-        original = OllamaProvider._provider_config
-
-        @staticmethod  # type: ignore[misc]
-        def _patched_config() -> dict:
-            cfg = original()
-            cfg.update(overrides)
-            return cfg
-
-        OllamaProvider._provider_config = _patched_config  # type: ignore[assignment]
-
+    _patch_ollama_provider(model=args.model, base_url=args.base_url)
     config = OllamaProvider._provider_config()
     resolved_base_url, remapped = _resolve_ollama_base_url(str(config["base_url"]))
     if resolved_base_url != config["base_url"]:
-        # Apply the resolved base URL after any CLI overrides are in place.
-        original = OllamaProvider._provider_config
-
-        @staticmethod  # type: ignore[misc]
-        def _patched_config() -> dict:
-            cfg = original()
-            cfg["base_url"] = resolved_base_url
-            return cfg
-
-        OllamaProvider._provider_config = _patched_config  # type: ignore[assignment]
+        _patch_ollama_provider(base_url=resolved_base_url)
         config = OllamaProvider._provider_config()
-    dataset_names = [args.dataset] if args.dataset else None
-    selected_datasets = dataset_names or list_datasets()
+    selected_datasets = list(selection.datasets)
     run_metadata = build_run_fingerprint(
         provider="OllamaProvider",
         model=str(config["model"]),
@@ -165,6 +165,7 @@ def main() -> None:
         tags=args.tag,
         prompt=build_system_prompt(),
         tool_definitions=get_tool_definitions(),
+        selection_manifest=selection.manifest(),
     )
 
     print(f"Provider: OllamaProvider ({config['model']})")
@@ -178,17 +179,15 @@ def main() -> None:
     trace_writer = EvalTraceWriter(args.trace_jsonl) if args.trace_jsonl else None
     results = run_eval_suite_sync(
         provider,
-        dataset_names,
         stream=sys.stdout if args.show_chat else None,
         trace_writer=trace_writer,
-        tier=args.tier,
-        tags=args.tag,
+        selection=selection,
         run_metadata=run_metadata,
     )
     report = print_report(results, verbose=args.verbose)
     print(report)
 
-    if not all(r.passed for r in results):
+    if not results or not all(r.passed for r in results):
         sys.exit(1)
 
 

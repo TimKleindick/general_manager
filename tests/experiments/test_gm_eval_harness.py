@@ -284,7 +284,7 @@ def test_generic_provider_usage_is_reported_without_inventing_reasoning(settings
     }
 
 
-def _child(program):
+def _child(program, *, timeout=90):
     env = os.environ.copy()
     env.pop("DJANGO_SETTINGS_MODULE", None)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -294,7 +294,7 @@ def _child(program):
             env=env,
             capture_output=True,
             text=True,
-            timeout=90,
+            timeout=timeout,
             check=False,
         )
     except subprocess.TimeoutExpired as error:
@@ -309,21 +309,27 @@ def _child(program):
     return json.loads(completed.stdout.strip().splitlines()[-1])
 
 
+@pytest.mark.parametrize("guard_seconds", [90, 100])
 def test_child_timeout_reports_only_phase_markers_and_preserves_guard(
-    monkeypatch, capsys
+    monkeypatch, capsys, guard_seconds
 ):
     phase = 'GM_E100_PHASE {"phase":"bootstrap_begin","elapsed_seconds":0.1}'
     failure = subprocess.TimeoutExpired(
-        "offline-program", 90, stderr=("unrelated stderr\n" + phase + "\n").encode()
+        "offline-program",
+        guard_seconds,
+        stderr=("unrelated stderr\n" + phase + "\n").encode(),
     )
 
     def expired(*args, **kwargs):
-        assert kwargs["timeout"] == 90
+        assert kwargs["timeout"] == guard_seconds
         raise failure
 
     monkeypatch.setattr(subprocess, "run", expired)
     with pytest.raises(subprocess.TimeoutExpired) as caught:
-        _child("offline-program")
+        _child(
+            "offline-program",
+            **({"timeout": guard_seconds} if guard_seconds != 90 else {}),
+        )
     assert caught.value is failure
     assert capsys.readouterr().err == phase + "\n"
 
@@ -883,7 +889,9 @@ finally:
  phase("runtime_close_begin")
  runtime.close()
  phase("runtime_close_end")
-"""
+""",
+        # This CI-only allowance is not a fix for the earlier timing variation.
+        timeout=100 if case_id == "E100" else 90,
     )
     assert result == {"case_id": case_id, "parity_assertions_passed": True}
 
