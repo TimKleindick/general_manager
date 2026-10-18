@@ -1194,6 +1194,12 @@ After a verified bound query, feedback references its actual business evidence.
 Partial business populations require `gather_complete_business_query`; complete
 results lead to `check_requirements_and_complete`, which still requires all missing
 evidence, calculations, and strict completion validation.
+A later complete business observation replaces earlier partial windows in this
+feedback only when its manager, exposed root, filters, non-pagination arguments,
+exact field projection, and before/after schema witnesses match. Native pagination
+arguments are identified by their exposed resolver roles. Different populations
+retain their own missing-row work; a later partial observation requires gathering
+again. Field-list order is compared exactly. Stored evidence remains unchanged.
 Empty populations retain unresolved-category handling. Stale or hidden lookup
 sources receive no ready feedback. Cached reads and new requirement links remain
 valid; this feedback adds no round cap, automatic query, or completion authority.
