@@ -120,19 +120,28 @@ structured data. The built-in adapters translate that history to each SDK's
 native tool-call and tool-result format; custom providers receive it through
 the `Message` tool fields.
 
-Two timeout keys apply to every adapter at the GeneralManager provider loop:
+Timeout enforcement depends on the execution path:
 
-- `timeout_seconds` defaults to `60` and limits the wait for the first provider
-  event. Ollama, OpenAI, and Anthropic also pass it to their SDK client.
-- `stream_timeout_seconds` defaults to `30` and limits the wait between later
-  streamed events.
+- The retained mutation/provider loop reads the top-level chat `provider_config`.
+  There, `timeout_seconds` (default `60`) limits the first provider event, and
+  `stream_timeout_seconds` (default `30`) limits gaps between later events.
+- Planned reads call `complete_provider_round()` directly. Its timeout covers
+  the whole provider round, including stream consumption and cleanup, within
+  the calling stage's budget. The default shared planning/evidence deadline is
+  `90` seconds; synthesis has a separate `30` seconds. This path does not read
+  `stream_timeout_seconds` or apply the mutation loop's first-event/stall timers.
+- Separately, Ollama, OpenAI, and Anthropic pass their adapter configuration's
+  `timeout_seconds` (default `60`) to the SDK client. That SDK timeout remains
+  distinct from the planned stage/round deadline. The Gemini adapter does not
+  implement or forward either timeout key internally; its planned reads have
+  the same stage/round boundary, without a general 30-second stream-stall timer.
 
 | Provider path | Extra | Provider configuration |
 | --- | --- | --- |
 | `general_manager.chat.providers.OllamaProvider` | `chat-ollama` | `model` (default `gemma4:e4b`), `base_url` (default `http://127.0.0.1:11434`), `timeout_seconds` (default `60`) |
 | `general_manager.chat.providers.OpenAIProvider` | `chat-openai` | `model` (default `gpt-4.1-mini`), `api_key`, `base_url`, `timeout_seconds` (default `60`) |
 | `general_manager.chat.providers.AnthropicProvider` | `chat-anthropic` | `model` (default `claude-3-5-haiku-latest`), `api_key`, `max_tokens` (default `1024`), `timeout_seconds` (default `60`) |
-| `general_manager.chat.providers.GeminiProvider` | `chat-google` | `model` (default `gemini-2.5-flash`), `api_key`, `timeout_seconds` (first event), `stream_timeout_seconds` (between events) |
+| `general_manager.chat.providers.GeminiProvider` | `chat-google` | `model` (default `gemini-2.5-flash`), `api_key`; timeout behavior follows the execution-path distinctions above |
 
 `GoogleProvider` is an alias of `GeminiProvider`. The OpenAI provider accepts a
 `base_url` for OpenAI-compatible services.
