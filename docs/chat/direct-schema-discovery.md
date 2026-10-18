@@ -95,6 +95,28 @@ set and snapshot bindings. Unspecified legacy requirements still require full
 inspection. A detail manifest advertises loadability; it does not mean an
 unselected type was returned or that a requirement is complete.
 
+New planned selective work may explicitly declare `view=detail`, `types=[]`,
+`snapshot=current` for a named manager. This is pending work, not an empty
+selection that any overview or full observation can satisfy. The executor first
+discovers the required output, filter and next-hop enum/input type names through
+that manager's current overview and targeted detail observations. Discovery may
+remain unlinked and grants no completion or calculation authority. Once the
+needed type set is known, `bind_schema` assigns its exact observed names and
+concrete snapshot once. The executor then reads or repeats the selected details
+with the matching `requirement_id`; every bound type must actually be covered.
+The binding action performs no tool call and supplies no evidence itself.
+
+Only current observations owned by the same task and manager authorize this
+binding. A relation's manager reference does not authorize the target manager's
+details. Hidden or unknown names, stale snapshots, changes to an assigned scope,
+and rebinding legacy full or fixed requirements are rejected. Subsequent schema
+changes still invalidate evidence; binding never bypasses freshness. The public
+inspection tool continues to reject empty detail selectors. This pending form
+belongs only to the planned requirement lifecycle, shared by Python, HTTP and
+WebSocket execution. Once required query and calculation witnesses are complete,
+perform the declared calculations and complete instead of loading a full schema
+because a selective response has `schema_complete=false`.
+
 This is a selective projection, not a full-schema roundtrip. Validation compares
 selected definitions exactly and measures complete discovery → details → actual
 query sequences, including all serialized request sizes. Lossless transport

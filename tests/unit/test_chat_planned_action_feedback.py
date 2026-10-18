@@ -154,8 +154,15 @@ def test_executor_publishes_full_dynamic_child_contract_without_root_only_rules(
         "calculate_batch",
         "calculate_groups",
         "bind_calculation",
+        "bind_schema",
         "clarify_selector",
     }
+    binding = actions["bind_schema"]
+    assert binding["required"] == ["action", "requirement_id", "types", "snapshot"]
+    assert binding["additionalProperties"] is False
+    assert binding["properties"]["types"]["minItems"] == 1
+    assert binding["properties"]["types"]["uniqueItems"] is True
+    assert binding["properties"]["snapshot"]["pattern"] == "^[0-9a-f]{64}$"
     selector = actions["clarify_selector"]
     assert selector["required"] == [
         "action",

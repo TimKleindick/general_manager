@@ -7,7 +7,10 @@ from dataclasses import replace
 from collections.abc import Collection, Mapping
 import json
 from math import isfinite
-from typing import NoReturn, cast
+from typing import TYPE_CHECKING, NoReturn, cast
+
+if TYPE_CHECKING:
+    from general_manager.chat.planned.evidence import EvidenceStore
 
 from general_manager.chat.planned.contract import (
     CALCULATION_OPERATIONS,
@@ -663,3 +666,65 @@ def bind_calculation_requirement(
         ),
     )
     return _validate_task_record(updated)
+
+
+def bind_schema_requirement(
+    task: PlannedTask,
+    requirement_id: str,
+    types: tuple[str, ...],
+    snapshot: str,
+    evidence: EvidenceStore,
+) -> PlannedTask:
+    """Bind explicit pending detail work once to current observed own-manager names."""
+    target = next(
+        (req for req in task.requirements if req.requirement_id == requirement_id), None
+    )
+    if (
+        target is None
+        or target.kind != "schema"
+        or target.schema is None
+        or target.schema.view != "detail"
+        or target.schema.types
+        or target.schema.snapshot != "current"
+    ):
+        _invalid(
+            "Schema binding is not deferred.",
+            path="$.requirement_id",
+            expected="an explicit pending detail requirement in this task",
+        )
+    assert target is not None and target.schema is not None
+    if not types or snapshot == "current":
+        _invalid(
+            "Schema selectors are still pending.",
+            path="$.types",
+            expected="observed names and a concrete snapshot",
+        )
+    try:
+        binding = SchemaBinding(target.schema.manager, "detail", types, snapshot)
+    except ValueError:
+        _invalid(
+            "Invalid schema binding.",
+            path="$.types",
+            expected="unique observed type names and their exact snapshot",
+        )
+    names: set[str] = set()
+    for record in evidence.schema_observations(task.task_id, target.schema.manager):
+        payload = record.payload()
+        if payload["snapshot"] == snapshot:
+            names.update(payload.get("type_manifest", {}))
+            names.update(payload.get("types", {}))
+    if not set(types) <= names:
+        _invalid(
+            "Schema names or snapshot were not observed.",
+            path="$.types",
+            expected="current same-task own-manager discovery at this snapshot",
+        )
+    return _validate_task_record(
+        replace(
+            task,
+            requirements=tuple(
+                replace(req, schema=binding) if req is target else req
+                for req in task.requirements
+            ),
+        )
+    )

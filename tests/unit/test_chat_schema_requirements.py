@@ -141,7 +141,7 @@ def test_manager_view_and_literal_snapshot_are_binding_constraints():
 @pytest.mark.parametrize(
     "patch",
     [
-        {"types": []},
+        {"types": [], "snapshot": A},
         {"types": ["State", "State"]},
         {"types": [True]},
         {"types": "State"},

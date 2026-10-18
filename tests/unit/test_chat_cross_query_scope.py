@@ -91,6 +91,41 @@ def test_fixed_quantity_has_validated_executable_term_without_row_unit():
         FieldUnitContract.from_mapping(damaged)
 
 
+def test_unlinked_discovery_cannot_authorize_cross_query_pending_schema(
+    public_population,
+):
+    runner, runtime, binding = _setup(public_population)
+    original = runner.evidence
+    requirements = tuple(
+        replace(
+            req,
+            schema=SchemaBinding(
+                original.for_requirement(runtime.task.task_id, req)[0].payload()[
+                    "manager"
+                ],
+                "detail",
+                (),
+                "current",
+            ),
+        )
+        if req.kind == "schema"
+        else req
+        for req in runtime.task.requirements
+    )
+    pending = replace(runtime.task, requirements=requirements)
+    store = EvidenceStore()
+    for record in original.records:
+        if record.kind == "schema":
+            store.observe_schema(record.task_id, record.payload())
+        store.add(record)
+        if record.kind != "schema":
+            for req in runtime.task.requirements:
+                if record in original.for_requirement(runtime.task.task_id, req):
+                    store.link(runtime.task.task_id, req, record.evidence_id)
+    with pytest.raises(CalculationError, match="schema"):
+        validate_calculation_binding_evidence(pending, "net", binding, store)
+
+
 def test_cross_query_binding_is_opt_in_ordered_and_legacy_mapping_unchanged():
     mapping = _cross_mapping()
     binding = CalculationBinding.from_mapping(mapping)

@@ -1049,7 +1049,7 @@ def make_judge_packet(
     only residual judgment; numeric/ID truth stays with the deterministic oracle.
     """
     trace = observation.get("trace") or {}
-    return {
+    packet = {
         "schema_version": "1.1",
         "case_id": expectation["case_id"],
         "turn_index": expectation["turn_index"],
@@ -1061,6 +1061,21 @@ def make_judge_packet(
         "history_evidence": trace.get("history_evidence", []),
         "citations": observation.get("citations", []),
     }
+    if expectation.get("answer_kind") == "clarification":
+        for rule in expectation.get("dimensions", {}).get("Q", {}).get("checks", []):
+            if rule.get("field") != "clarification_topics":
+                continue
+            groups = rule.get("expected", [])
+            if rule.get("comparison") == "required_topics":
+                groups = [[topic] for topic in groups]
+            elif rule.get("comparison") != "required_topic_groups":
+                continue
+            if groups:
+                packet["clarification_contract"] = {
+                    "version": "bound-open-choices/1",
+                    "required_topic_groups": deepcopy(groups),
+                }
+    return packet
 
 
 def score_turn(

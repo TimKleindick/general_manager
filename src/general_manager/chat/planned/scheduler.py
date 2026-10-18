@@ -108,6 +108,7 @@ from general_manager.chat.planned.validation import (
     PlanValidationError,
     validate_dynamic_children,
     bind_calculation_requirement,
+    bind_schema_requirement,
 )
 from general_manager.chat.graphql_contract import ChatReadContractError
 from general_manager.api.graphql_resolvers import (
@@ -619,6 +620,12 @@ def _executor_messages(
     )
 
     deferred = deferred_calculation_context(task, evidence)
+    from general_manager.chat.planned.deferred_schema import (
+        INSTRUCTION as SCHEMA_BINDING_INSTRUCTION,
+        pending_schema_context,
+    )
+
+    pending_schemas = pending_schema_context(task, evidence)
     records = evidence.for_task(task.task_id)
     visible_history = [
         message
@@ -781,6 +788,9 @@ def _executor_messages(
         instruction += DEFERRED_INSTRUCTION
         reference["deferred_calculation_context_version"] = DEFERRED_VERSION
         reference["deferred_calculations"] = deferred
+    if pending_schemas:
+        instruction += SCHEMA_BINDING_INSTRUCTION
+        reference["pending_schema_bindings"] = pending_schemas
     if dependency_evidence:
         reference["dependency_evidence"] = list(dependency_evidence)
     if choice_context is not None:
@@ -901,6 +911,29 @@ def _parse_action_with_feedback(
                 "invalid_selector_action",
                 "$.selector",
                 "one query evidence ID and observed identity field",
+            )
+    if action == "bind_schema":
+        from general_manager.chat.planned.models import SchemaBinding
+
+        invalid = (
+            not isinstance(parsed["requirement_id"], str)
+            or not parsed["requirement_id"].strip()
+            or not isinstance(parsed["types"], list)
+            or not parsed["types"]
+            or parsed["snapshot"] == "current"
+        )
+        if not invalid:
+            try:
+                SchemaBinding(
+                    "selector", "detail", tuple(parsed["types"]), parsed["snapshot"]
+                )
+            except (TypeError, ValueError):
+                invalid = True
+        if invalid:
+            return None, action_validation_feedback(
+                "invalid_schema_binding",
+                "$.types",
+                "a requirement ID, unique observed type names and a concrete snapshot",
             )
     if action == "bind_calculation":
         if (
@@ -2187,6 +2220,24 @@ class _Runner:
                 _reason(action.get("reason"), "manager_unresolved"),
                 origin="model_declared_block",
             )
+            return None
+        if kind == "bind_schema":
+            try:
+                runtime.task = bind_schema_requirement(
+                    runtime.task,
+                    cast(str, action["requirement_id"]),
+                    tuple(cast(list[str], action["types"])),
+                    cast(str, action["snapshot"]),
+                    self.evidence,
+                )
+            except (PlanValidationError, ValueError) as exc:
+                runtime.action_validation_error = action_validation_feedback(
+                    "invalid_schema_binding",
+                    "$.types",
+                    "pending same-task detail work with current own-manager observed selectors",
+                    detail=str(exc),
+                )
+                return "provider_failed"
             return None
         if kind == "bind_calculation":
             from general_manager.chat.planned.calculation_scope import (
