@@ -395,7 +395,8 @@ class SchemaBinding:
                 for name in self.types
             )
             or len(set(self.types)) != len(self.types)
-            or bool(self.types) != (self.view == "detail")
+            or (self.view != "detail" and bool(self.types))
+            or (self.view == "detail" and not self.types and self.snapshot != "current")
             or not isinstance(self.snapshot, str)
             or (
                 self.snapshot != "current"

@@ -50,3 +50,19 @@ Publication remains confined to PR #517. Normal regression/static checks and
 independent review are required. No merge or new live Eval is part of this
 change. The Cloud-Linux A/B route remains technically blocked before execution;
 do not use a local or unbound replacement run as evidence for that diagnostic.
+# Bound open clarification choices
+
+New Judge packets for an explicitly required clarification carry
+`clarification_contract.version=bound-open-choices/1`. Its topic groups express
+the already bound unresolved decision, not extracted candidate claims or numeric
+Gold. A group permits one of its topics. A manager describing one available
+forecast does not by itself select that analysis for an open user request.
+Additional questions must still be relevant and unresolved; user choices and
+applicable definitions remain binding. Missing topics stay missing, and false
+semantic judgments remain false. No check is automatically passed or rescored.
+
+The policy and groups are bound by the new request digest. Archived requests
+without this field retain their original Judge instruction branch. Catalog,
+reference expectations and historical raw requests, answers and scores remain
+unchanged. This is a prospective Judge policy change, not evidence that a new
+live answer has passed.

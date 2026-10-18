@@ -1852,6 +1852,22 @@ def judge_messages(request: Mapping[str, Any]) -> list[Message]:
         + _SINGLE_WINNER_COMPARISONS_DESCRIPTION
     ):
         instruction += "\n" + _SINGLE_WINNER_COMPARISONS_DESCRIPTION.strip() + "\n"
+    if request["packet"].get("clarification_contract") is not None:
+        instruction += (
+            "\nBOUND_OPEN_CHOICE_CONTRACT: clarification_contract lists this turn's "
+            "explicitly unresolved decision groups, not claims made by the answer. "
+            "A group permits any one of its topics. Judge the suitability of asking "
+            "about those open decisions consistently with that contract. An available "
+            "field or a manager defining one possible analysis does not by itself "
+            "select that analysis for an open user request. Do not reject a required "
+            "basis question merely because a particular forecast manager is available, "
+            "or treat that question as an unsupported factual assertion. Additional "
+            "questions must still concern relevant unresolved choices; reject repeated "
+            "questions already resolved by the user or an actually applicable definition. "
+            "Extract only topics and results actually present in the answer, with "
+            "unchanged answer-quote support. Never fill missing topics from this contract, "
+            "supply results, waive evidence checks or default a judgment to pass.\n"
+        )
     return compact_messages([Message(role="system", content=instruction), message])
 
 
@@ -2036,6 +2052,27 @@ def _validate_request(request: Mapping[str, Any]) -> None:
             for name, meaning in _RECOMMENDATION_DESCRIPTIONS.items()
         ):
             _invalid("inconsistent_extraction_policy")
+    if "clarification_contract" in packet:
+        contract = packet["clarification_contract"]
+        allowed_topics = {"criterion", "metric", "horizon", "customer_identity", "unit"}
+        if (
+            not isinstance(contract, Mapping)
+            or set(contract) != {"version", "required_topic_groups"}
+            or contract["version"] != "bound-open-choices/1"
+            or not isinstance(contract["required_topic_groups"], list)
+            or not contract["required_topic_groups"]
+            or any(
+                not isinstance(group, list)
+                or not group
+                or any(
+                    not isinstance(topic, str) or topic not in allowed_topics
+                    for topic in group
+                )
+                or len(group) != len(set(group))
+                for group in contract["required_topic_groups"]
+            )
+        ):
+            _invalid("invalid_clarification_contract")
     trace = observation.get("trace", {})
     if request.get("schema_version") in {"1.3", "1.4", "1.5"}:
         context = {

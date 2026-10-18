@@ -208,11 +208,14 @@ SCHEMA_BINDING_SCHEMA = {
     "allOf": [
         {
             "if": {"properties": {"view": {"const": "detail"}}},
-            "then": {"properties": {"types": {"minItems": 1}}},
+            "then": {
+                "if": {"properties": {"types": {"maxItems": 0}}},
+                "then": {"properties": {"snapshot": {"const": "current"}}},
+            },
             "else": {"properties": {"types": {"maxItems": 0}}},
         }
     ],
-    "description": "Machine-checkable manager/view/types/snapshot scope. current means the latest successful inspection across all tasks in the current turn for that manager. Detail requires exact observed names; unspecified legacy schema requirements require full inspection.",
+    "description": "Machine-checkable manager/view/types/snapshot scope. current means the latest successful inspection across all tasks in the current turn for that manager. Explicit detail with types=[] and snapshot=current is pending selective work: bind_schema must assign observed names and a concrete snapshot once before any evidence can satisfy it. Nonempty detail requires exact observed names; unspecified legacy schema requirements still require full inspection.",
 }
 PLAN_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -429,6 +432,13 @@ PLAN_COMPACTNESS_RULE = (
 PLAN_READ_EFFICIENCY_RULE = (
     "For newly planned work, keep discovery scoped to an explicit overview and load only "
     "the observed input/output types required for the requested query and calculation. "
+    "When calculation witnesses need details whose exact type names are not yet observed, "
+    "declare same-task schema requirements with manager, view=detail, types=[] and "
+    "snapshot=current before the dependent calculation. The executor discovers and "
+    "binds those exact selectors with bind_schema, then reads the needed definitions. "
+    "Do not substitute overview requirements for needed detail witnesses or request "
+    "full schemas as a rescue. Once current required witnesses are complete, perform "
+    "the declared calculations and complete; selective views need not be schema_complete. "
     "Independent manager discovery, paths and queries can share a provider round after "
     "their own schema and identity prerequisites are satisfied; tool execution stays ordered. "
     "Use applicable declared calculation-manager results as eligible query evidence instead "

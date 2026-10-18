@@ -366,6 +366,23 @@ class EvidenceStore:
             and self._schema_snapshots.get(payload["manager"]) == payload["snapshot"]
         )
 
+    def schema_observations(
+        self, task_id: str, manager: str
+    ) -> tuple[EvidenceRecord, ...]:
+        """Current own-task discovery, including observations not yet requirement-linked."""
+        records = []
+        for record in self.for_task(task_id):
+            if record.kind != "schema":
+                continue
+            payload = record.payload()
+            if (
+                _schema_metadata(payload)
+                and payload["manager"] == manager
+                and self.schema_current(record)
+            ):
+                records.append(record)
+        return tuple(records)
+
     def can_link(
         self, requirement: EvidenceRequirement, record: EvidenceRecord
     ) -> bool:
@@ -409,6 +426,8 @@ def _schema_compatible(
     binding = requirement.schema
     if binding is None:
         return bool(payload["schema_view"] == "full")
+    if binding.view == "detail" and not binding.types:
+        return False  # Explicit pending work is not satisfied by any observation.
     if payload["manager"] != binding.manager or (
         binding.snapshot != "current" and payload["snapshot"] != binding.snapshot
     ):

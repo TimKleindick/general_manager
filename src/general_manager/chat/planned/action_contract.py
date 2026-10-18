@@ -22,6 +22,7 @@ EXECUTOR_ACTION_FIELDS = {
     "calculate_batch": ("action", "calculations"),
     "calculate_groups": ("action", "requests"),
     "bind_calculation": ("action", "requirement_id", "binding"),
+    "bind_schema": ("action", "requirement_id", "types", "snapshot"),
     "clarify_selector": ("action", "requirement_id", "language", "selector"),
 }
 CALCULATION_EVIDENCE_RULE = (
@@ -114,6 +115,16 @@ def executor_action_schema() -> dict[str, Any]:
         "properties"
     ]
     properties: dict[str, dict[str, Any]] = {
+        "bind_schema": {
+            "requirement_id": {"type": "string", "minLength": 1},
+            "types": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "items": {"type": "string", "pattern": "^[_A-Za-z][_0-9A-Za-z]*$"},
+            },
+            "snapshot": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        },
         "clarify_selector": {
             "requirement_id": {"type": "string", "minLength": 1},
             "language": deepcopy(selector["language"]),
