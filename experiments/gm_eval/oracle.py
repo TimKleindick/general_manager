@@ -246,6 +246,33 @@ def _citation_policy(case: Mapping[str, Any], turn: int) -> str:
     return "visible_required" if explicit else "internal_grounding"
 
 
+def _planned_revenue_inputs(
+    data: Seed, projects: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """Declare reviewed input equivalence, independently of GM calculations.
+
+    EUR plans need no conversion. A mixed-currency route is not interchangeable
+    without its separately declared exchange-rate provenance, so it stays on the
+    existing source contract until that complete route is explicitly specified.
+    """
+    population = [
+        row for row in data["project"] if projects is None or row["code"] in projects
+    ]
+    if any(row["currency"] != "EUR" for row in population):
+        return []
+    fields = ["code", "plan_year", "plan_units", "net_price", "currency"]
+    return [
+        {
+            "manager": "Project",
+            "metric": "planned_net_revenue",
+            "unit": "EUR",
+            "identity_field": "code",
+            "required_fields": fields,
+            "rows": [{field: row[field] for field in fields} for row in population],
+        }
+    ]
+
+
 class _Contract:
     def __init__(
         self,
@@ -254,6 +281,18 @@ class _Contract:
         data: Seed,
         reference_version: str = REFERENCE_VERSION,
     ) -> None:
+        self.source_restrictions = case.get("source_restrictions", {})
+        if not isinstance(self.source_restrictions, dict) or any(
+            not isinstance(role, str)
+            or not isinstance(managers, list)
+            or not managers
+            or any(not isinstance(manager, str) or not manager for manager in managers)
+            or len(managers) != len(set(managers))
+            for role, managers in self.source_restrictions.items()
+        ):
+            message = "Source restrictions need declared roles and unique manager names"
+            raise ValueError(message)
+        self.physical_provenance_required = case["contract"] == "provenance"
         self.value: dict[str, Any] = {
             "schema_version": reference_version,
             "adjudication_schema_version": ADJUDICATION_SCHEMA_VERSION,
@@ -341,14 +380,35 @@ class _Contract:
         role: str,
         *alternatives: list[str],
         required_fields: dict[str, list[str]] | None = None,
+        equivalent_routes: list[dict[str, Any]] | None = None,
     ) -> None:
-        self.value["source_requirements"].append(
-            {
-                "role": role,
-                "alternatives": list(alternatives),
-                "required_fields": required_fields or {},
-            }
-        )
+        requirement: dict[str, Any] = {
+            "role": role,
+            "alternatives": list(alternatives),
+            "required_fields": required_fields or {},
+        }
+        # Restrictions are trusted reference metadata, not inferred from answer
+        # prose or keyword matching. Generic visible citations remain required
+        # without falsely naming an interface the answer did not use.
+        allowed = self.source_restrictions.get(role)
+        if (
+            self.value["schema_version"] == "1.17"
+            and equivalent_routes
+            and not self.physical_provenance_required
+        ):
+            requirement["equivalent_routes"] = equivalent_routes
+        if self.value["schema_version"] == "1.17" and allowed is not None:
+            requirement["alternatives"] = [
+                alternative
+                for alternative in alternatives
+                if set(alternative) <= set(allowed)
+            ]
+            requirement["equivalent_routes"] = [
+                route
+                for route in requirement.get("equivalent_routes", [])
+                if route["manager"] in allowed
+            ]
+        self.value["source_requirements"].append(requirement)
         self.value["dimensions"]["D"]["applicable"] = True
         self.value["dimensions"]["I"]["applicable"] = True
 
@@ -361,7 +421,9 @@ class _Contract:
                 "R",
                 "constraints",
                 constraints,
-                "constraints" if self.value["schema_version"] == "1.16" else "exact",
+                "constraints"
+                if self.value["schema_version"] in {"1.16", "1.17"}
+                else "exact",
             )
             # Paths describe identity semantics, never the expected identity value.
             for name, entity in {
@@ -695,7 +757,7 @@ def expected_turn(
             {"start": f"{year}-01-01", "end_exclusive": f"{year + 1}-01-01"},
         )
         if (
-            reference_version in {"1.12", "1.13", "1.14", "1.15", "1.16"}
+            reference_version in {"1.12", "1.13", "1.14", "1.15", "1.16", "1.17"}
             and case["id"] == "E116"
         ):
             # This question requests a summary, not the explicit WBS grouping
@@ -852,8 +914,8 @@ def expected_turn(
         elif resolved == "supplier_path":
             # Reference 1.14 follows the actual question: supplier approval is
             # not an implied selection predicate. Prior references stay exact.
-            require_approved = reference_version not in {"1.14", "1.15", "1.16"}
-            if reference_version in {"1.14", "1.15", "1.16"}:
+            require_approved = reference_version not in {"1.14", "1.15", "1.16", "1.17"}
+            if reference_version in {"1.14", "1.15", "1.16", "1.17"}:
                 require_approved = case.get("supplier_approval_required", False)
                 if type(require_approved) is not bool:
                     message = "Supplier approval declaration must be a boolean"
@@ -908,6 +970,7 @@ def expected_turn(
                 "1.14",
                 "1.15",
                 "1.16",
+                "1.17",
             }:
                 identifiers = [
                     code
@@ -937,7 +1000,7 @@ def expected_turn(
             contract.fact(
                 "R", "material_ids", sorted(materials), "set", entity_manager="Material"
             )
-            if reference_version in {"1.13", "1.14", "1.15", "1.16"}:
+            if reference_version in {"1.13", "1.14", "1.15", "1.16", "1.17"}:
                 # Positive target identities are distinct from independently
                 # required exclusions of the same manager type.
                 contract.value["entity_identity_reference"]["fields"]["material_ids"][
@@ -945,7 +1008,7 @@ def expected_turn(
                 ] = [["constraints", "all_materials"]]
         contract.selection(identifiers, manager="Project", **constraints)
         if resolved == "copper_projects" and not (
-            reference_version == "1.16" and case["id"] == "E074"
+            reference_version in {"1.16", "1.17"} and case["id"] == "E074"
         ):
             contract.fact(
                 "C",
@@ -1000,6 +1063,7 @@ def expected_turn(
             "1.14",
             "1.15",
             "1.16",
+            "1.17",
         }:
             contract.value["fact_components"] = {
                 "values": {
@@ -1023,7 +1087,11 @@ def expected_turn(
             )
         if resolved == "provenance":
             revenues, _ = _revenues(data)
-            contract.source("planned_net_revenue", ["ProjectCommercial"])
+            contract.source(
+                "planned_net_revenue",
+                ["ProjectCommercial"],
+                equivalent_routes=_planned_revenue_inputs(data, {aurora}),
+            )
             # This request includes plan revenue as well as actual shipments.
             contract.fact("I", "source_kinds", ["actual", "existing_plan"], "set")
             contract.fact(
@@ -1067,7 +1135,13 @@ def expected_turn(
             key=lambda code: (-_decimal(revenues[code]), code),
         )
         missing = sorted(code for code, value in revenues.items() if value is None)
-        contract.source("planned_net_revenue", ["ProjectCommercial"])
+        contract.source(
+            "planned_net_revenue",
+            ["ProjectCommercial"],
+            equivalent_routes=_planned_revenue_inputs(
+                data, {aurora} if resolved == "revenue" else None
+            ),
+        )
         contract.measure("planned_net_revenue", "EUR", [2027], ["existing_plan"])
         if resolved == "zero_missing":
             zeros = sorted(
@@ -1120,7 +1194,7 @@ def expected_turn(
                     required_fields={"Project": ["fx_rate", "fx_as_of", "fx_source"]},
                 )
     elif resolved in {"top_material", "three_turn"}:
-        if resolved == "three_turn" and reference_version in {"1.15", "1.16"}:
+        if resolved == "three_turn" and reference_version in {"1.15", "1.16", "1.17"}:
             contract.value["result_claim_scope"] = "single_winner_with_comparisons"
             support = next(
                 check

@@ -266,7 +266,7 @@ def _extraction_policy(expectation: Mapping[str, Any], requested: str | None) ->
     """Select prospective extraction semantics independently of business Gold."""
     fields = expectation.get("entity_identity_reference", {}).get("fields", {})
     eligible = (
-        expectation.get("schema_version") in {"1.15", "1.16"}
+        expectation.get("schema_version") in {"1.15", "1.16", "1.17"}
         and all(name in expectation["facts"] for name in _RECOMMENDATION_DESCRIPTIONS)
         and all(
             fields.get(name) == {"manager": "Customer", "shape": "mapping_keys"}
@@ -392,6 +392,7 @@ def fact_schemas(
         "1.14",
         "1.15",
         "1.16",
+        "1.17",
     }
     if revised:
         for field, components in expectation.get("fact_components", {}).items():
@@ -533,7 +534,8 @@ def fact_schemas(
             if path["manager"] == manager and path["path"][0] == "constraints"
         ]
         explicit_targets = (
-            expectation.get("schema_version") in {"1.13", "1.14", "1.15", "1.16"}
+            expectation.get("schema_version")
+            in {"1.13", "1.14", "1.15", "1.16", "1.17"}
             and "selection_target_paths" in descriptor
         )
         if explicit_targets:
@@ -599,7 +601,7 @@ def fact_schemas(
             "Preserve the asserted order, missing/extra identities and unresolved names. "
             "Never fill a missing list or replace its order from tools or a reference."
         )
-        if expectation.get("schema_version") in {"1.14", "1.15", "1.16"}:
+        if expectation.get("schema_version") in {"1.14", "1.15", "1.16", "1.17"}:
             shapes["ranked_ids"]["description"] = _PROSE_RANKED_IDS_DESCRIPTION
     if "ranking_coverage" in shapes:
         shapes["ranking_coverage"] = {
@@ -618,7 +620,7 @@ def fact_schemas(
                 shapes[name].get("description", "") + _RESULT_MEMBERSHIP_DESCRIPTION
             )
             if (
-                expectation.get("schema_version") in {"1.15", "1.16"}
+                expectation.get("schema_version") in {"1.15", "1.16", "1.17"}
                 and expectation.get("result_claim_scope")
                 == "single_winner_with_comparisons"
             ):
@@ -1440,11 +1442,11 @@ def _candidate_failures(
     if "terminal" in turn and turn["terminal"] != terminal:
         _invalid("invalid_saved_trace_terminal")
     if not flags and isinstance(terminal, Mapping):
-        if reference_version == "1.16" and provenance is None:
+        if reference_version in {"1.16", "1.17"} and provenance is None:
             provenance = _candidate_failure_provenance(run, turn)
         categories = terminal_failure_categories(
             terminal,
-            legacy_deadline_transport=reference_version != "1.16",
+            legacy_deadline_transport=reference_version not in {"1.16", "1.17"},
             terminal_origin=(provenance or {}).get("terminal_origin"),
             reason_origins=(provenance or {}).get("reason_origins"),
         )
@@ -1466,7 +1468,7 @@ def _request_digest(request: Mapping[str, Any]) -> str:
     for name in ("schema_transport_sources", "reference_version"):
         if name in request:
             keys.append(name)
-    if request.get("reference_version") == "1.16":
+    if request.get("reference_version") in {"1.16", "1.17"}:
         keys.extend(("case_id", "turn_index"))
         if "candidate_failure_provenance" in request:
             keys.append("candidate_failure_provenance")
@@ -1830,7 +1832,7 @@ def judge_messages(request: Mapping[str, Any]) -> list[Message]:
     # The exact description is already request-hash bound. Archived 1.14
     # requests retain their original system text rather than being reinterpreted.
     if (
-        request.get("reference_version") in {"1.14", "1.15", "1.16"}
+        request.get("reference_version") in {"1.14", "1.15", "1.16", "1.17"}
         and isinstance(ranking, Mapping)
         and ranking.get("description")
         in {
@@ -1844,7 +1846,7 @@ def judge_messages(request: Mapping[str, Any]) -> list[Message]:
             _LEGACY_RANKED_IDS_INSTRUCTION, _PROSE_RANKED_IDS_INSTRUCTION, 1
         )
     if (
-        request.get("reference_version") in {"1.15", "1.16"}
+        request.get("reference_version") in {"1.15", "1.16", "1.17"}
         and isinstance(ranking, Mapping)
         and ranking.get("description")
         == _PROSE_RANKED_IDS_DESCRIPTION
@@ -1954,7 +1956,7 @@ def build_adjudication_request(
     )
     provenance = (
         _candidate_failure_provenance(run, turn)
-        if expectation.get("schema_version") == "1.16"
+        if expectation.get("schema_version") in {"1.16", "1.17"}
         else None
     )
     failure_flags, candidate_status = _candidate_failures(
@@ -1980,6 +1982,7 @@ def build_adjudication_request(
         "1.14",
         "1.15",
         "1.16",
+        "1.17",
     }:
         request["reference_version"] = expectation["schema_version"]
     if schema_sources:
@@ -2025,7 +2028,7 @@ def _validate_request(request: Mapping[str, Any]) -> None:
     if "candidate_failure_provenance" in request:
         proof = request["candidate_failure_provenance"]
         if (
-            request.get("reference_version") != "1.16"
+            request.get("reference_version") not in {"1.16", "1.17"}
             or not isinstance(proof, Mapping)
             or set(proof)
             != {"turn", "terminal", "terminal_origin", "reason_origins", "audit_events"}
@@ -2047,7 +2050,7 @@ def _validate_request(request: Mapping[str, Any]) -> None:
     if "extraction_policy" in packet:
         if packet["extraction_policy"] != _RECOMMENDATION_POLICY:
             _invalid("unknown_extraction_policy")
-        if request.get("reference_version") not in {"1.15", "1.16"} or any(
+        if request.get("reference_version") not in {"1.15", "1.16", "1.17"} or any(
             packet.get("fact_fields", {}).get(name, {}).get("description") != meaning
             for name, meaning in _RECOMMENDATION_DESCRIPTIONS.items()
         ):

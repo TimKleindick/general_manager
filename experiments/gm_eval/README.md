@@ -57,7 +57,9 @@ startup default continues to follow Django `DEBUG`.
 
 ## Reference conventions
 
-The default evaluator reference is **1.16**; see the
+The default evaluator reference is **1.17**; see the
+[equivalent metric source contract](../../docs/chat/equivalent-metric-source-contract-r70.md)
+and the
 [evaluation contract migration](../../docs/chat/evaluation-contracts.md).
 E074 accepts unordered complete project membership, and logical constraint lists
 use exact set semantics. Explicit 1.10–1.15 contracts and historical reports stay

@@ -26,7 +26,7 @@ from tests.experiments.test_gm_eval_scoring import REGISTRY, case, control, scor
 
 
 def test_default_reference_versions_the_authorized_audit_changes():
-    assert catalog.REFERENCE_VERSION == "1.16"
+    assert catalog.REFERENCE_VERSION == "1.17"
     assert set(catalog.REFERENCE_VERSIONS) == {
         "1.10",
         "1.11",
@@ -35,6 +35,7 @@ def test_default_reference_versions_the_authorized_audit_changes():
         "1.14",
         "1.15",
         "1.16",
+        "1.17",
     }
 
 
