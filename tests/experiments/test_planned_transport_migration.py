@@ -30,7 +30,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=5)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile,bind_provider_factory
-from experiments.gm_eval.scripted import make_script
+from experiments.gm_eval.execution.scripted import make_script
 from experiments.gm_eval.trace import TraceRecorder
 from general_manager.chat.providers.base import ToolCallEvent
 from general_manager.chat import views

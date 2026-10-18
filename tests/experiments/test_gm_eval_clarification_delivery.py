@@ -19,7 +19,7 @@ from experiments.gm_eval.runtime import bootstrap
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.catalog import load_catalog
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import ScriptedFactory
+from experiments.gm_eval.execution.scripted import ScriptedFactory
 runtime=bootstrap(manager_count=5)
 from general_manager.chat.providers.base import ToolCallEvent
 case=dict(next(c for c in load_catalog() if c["id"]=="E001"))

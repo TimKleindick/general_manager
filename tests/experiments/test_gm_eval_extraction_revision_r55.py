@@ -290,7 +290,7 @@ from experiments.gm_eval.runtime import bootstrap
 from experiments.gm_eval.catalog import load_catalog
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import make_script
+from experiments.gm_eval.execution.scripted import make_script
 runtime = bootstrap(manager_count=5)
 case = next(c for c in load_catalog(reference_version=reference_version) if c['id']=='E004')
 try:

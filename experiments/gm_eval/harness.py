@@ -26,7 +26,11 @@ from .profiles import (
 from .trace import TraceRecorder, fingerprint, sanitize, source_hashes
 from .scoring import FAILURE_HIERARCHY
 from .outcomes import terminal_failure_categories, runtime_failure_provenance
-from .history_parity import history_messages, provider_messages, schema_history_sources
+from .execution.history_parity import (
+    history_messages,
+    provider_messages,
+    schema_history_sources,
+)
 
 
 FIXED_CLOCK = "2026-10-03T12:00:00Z"
@@ -795,9 +799,9 @@ async def run_case(
         "general_manager.chat.planned.action_contract",
         "general_manager.chat.mutation_inputs",
         "experiments.gm_eval.harness",
-        "experiments.gm_eval.history_parity",
+        "experiments.gm_eval.execution.history_parity",
         "experiments.gm_eval.profiles",
-        "experiments.gm_eval.scripted",
+        "experiments.gm_eval.execution.scripted",
         "experiments.gm_eval.trace",
         "experiments.gm_eval.runtime",
         "experiments.gm_eval.fixtures",
@@ -917,7 +921,7 @@ async def compare_consumer_parity(
     reference_version: str = REFERENCE_VERSION,
 ) -> dict[str, Any]:
     """Compare real ASGI consumer and direct scheduler with identical model scripts."""
-    from .scripted import make_script
+    from .execution.scripted import make_script
 
     scheduler = await run_case(
         runtime,
@@ -1013,7 +1017,7 @@ def offline_check(
     """Synchronous CLI entry; all candidate replies are offline test scripts."""
     from .catalog import load_catalog
     from .profiles import make_profile
-    from .scripted import make_script
+    from .execution.scripted import make_script
 
     case = next(
         item

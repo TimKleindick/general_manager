@@ -5,7 +5,7 @@ from copy import deepcopy
 from graphql import build_schema, graphql_sync
 import pytest
 
-from experiments.gm_eval.query_completeness import complete_identity_queries
+from experiments.gm_eval.assessment.query_completeness import complete_identity_queries
 from tests.experiments.test_gm_eval_scoring import bind_control_trace, score
 from tests.experiments.test_query_identity_completeness_r1 import (
     complete_root_with_collection,

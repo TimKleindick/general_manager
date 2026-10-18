@@ -17,9 +17,9 @@ import re
 from typing import Any
 
 from .catalog import DIMENSIONS
-from .evidence_rows import query_identity_rows
-from .presentation_normalization import normalize_presentations
-from .query_completeness import complete_identity_queries
+from .assessment.evidence_rows import query_identity_rows
+from .assessment.presentation_normalization import normalize_presentations
+from .assessment.query_completeness import complete_identity_queries
 from .semantic_contracts import valid_repetition_judgment
 
 CLARIFICATION_TOPICS = frozenset(

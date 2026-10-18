@@ -35,7 +35,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=MANAGER_COUNT,snapshot='RANK',variant='duplicate_customer',seed=17)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import contextual_probe_plan
+from experiments.gm_eval.execution.scripted import contextual_probe_plan
 from experiments.siwc_eval.provider import payload
 from general_manager.chat.providers.base import DoneEvent,TextChunkEvent,TokenUsage,ToolCallEvent
 from general_manager.chat.planned.schema_projection import logical_messages
@@ -132,7 +132,7 @@ def test_native_selector_question_and_followup_match_consumer_and_scheduler(
     program = PROGRAM.replace("MANAGER_COUNT", str(manager_count))
     original = "report=await run_case(runtime,{'id':'grounded-selector-flow','turns':['Welche Projekte laufen für Atlas?','Ich meine C04.']},make_profile('weak-only',weak_model='gpt-6.1-sol'),factory)"
     replacement = """global turn,stage,seen,reverified
- from experiments.gm_eval.history_parity import provider_messages
+ from experiments.gm_eval.execution.history_parity import provider_messages
  case={'id':'grounded-selector-flow','turns':['Welche Projekte laufen für Atlas?','Ich meine C04.']}
  profile=make_profile('weak-only',weak_model='gpt-6.1-sol')
  report=await run_case(runtime,case,profile,factory)

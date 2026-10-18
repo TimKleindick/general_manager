@@ -3,7 +3,7 @@
 import asyncio
 import json
 
-from experiments.gm_eval.scripted import make_script
+from experiments.gm_eval.execution.scripted import make_script
 from general_manager.chat.planned.schema_projection import (
     REFERENCE_VERSION,
     compact_messages,

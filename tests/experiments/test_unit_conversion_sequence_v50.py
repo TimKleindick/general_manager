@@ -43,7 +43,7 @@ from experiments.gm_eval.runtime import bootstrap
 runtime=bootstrap(manager_count=MANAGER_COUNT,snapshot='RANK',variant='weight',seed=17)
 from experiments.gm_eval.harness import run_case
 from experiments.gm_eval.profiles import make_profile
-from experiments.gm_eval.scripted import contextual_probe_plan
+from experiments.gm_eval.execution.scripted import contextual_probe_plan
 from experiments.siwc_eval.provider import payload
 from general_manager.chat.providers.base import DoneEvent,TextChunkEvent,TokenUsage,ToolCallEvent
 from general_manager.chat.planned.schema_projection import logical_messages
@@ -124,7 +124,7 @@ def program(manager_count, parity):
         return value
     original = "report=await run_case(runtime,{'id':'native-unit-conversion','turns':['Welche Gesamtmenge wurde für das Projekt P01 im Jahr 2025 geliefert?','Bitte in Kilogramm.']},make_profile('weak-only',weak_model='gpt-6.1-sol'),factory)"
     replacement = """global turn,stage,seen,final_calc
- from experiments.gm_eval.history_parity import provider_messages
+ from experiments.gm_eval.execution.history_parity import provider_messages
  case={'id':'native-unit-conversion','turns':['Welche Gesamtmenge wurde für das Projekt P01 im Jahr 2025 geliefert?','Bitte in Kilogramm.']}
  profile=make_profile('weak-only',weak_model='gpt-6.1-sol')
  report=await run_case(runtime,case,profile,factory)
