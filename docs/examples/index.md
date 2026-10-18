@@ -13,6 +13,7 @@ The cookbook collects self-contained snippets that demonstrate how to solve doma
 - [Safe GraphQL mutation errors](graphql_error_handling.md)
 - [Upload a file through GraphQL](graphql_file_upload.md)
 - [Validate a manager with field and non-field rule errors](rule_validation.md)
+- [Chat schema discovery, queries and client recipes](planned_chat_orchestration.md)
 - [Installed chat eval commands](chat_eval_cli.md)
 - [Lazy DevSearch hydration](dev_search_lifecycle.md)
 - [Permission patterns](permission_patterns.md)

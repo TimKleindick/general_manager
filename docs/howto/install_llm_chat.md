@@ -55,7 +55,9 @@ Install exactly one provider extra to start:
     python -m pip install "GeneralManager[chat-google]"
     ```
 
-The selected model must support tool or function calling. A model that only
+Provider model names below are configuration examples; select a model you have
+validated and can access in your environment. The selected model must support tool
+or function calling. A model that only
 generates text cannot reliably discover managers or query project data.
 
 ## 2. Prepare Django and GraphQL
@@ -316,147 +318,21 @@ The exact tool arguments and results depend on the project schema. Render
 assistant text from `text_chunk` events and treat `done` as the end of the
 turn.
 
-## 8. Stream over SSE
 
-The SSE endpoint accepts the same JSON body and emits one JSON event per SSE
-frame. Because the request is POST, consume it with streaming `fetch` instead
-of the browser's GET-only `EventSource` API:
+## Continue the integration
 
-```javascript
-const response = await fetch("/chat/stream/", {
-  method: "POST",
-  credentials: "same-origin",
-  headers: {
-    "Accept": "text/event-stream",
-    "Content-Type": "application/json",
-    "X-CSRFToken": csrfToken,
-  },
-  body: JSON.stringify({text: "List all materials"}),
-});
+Configure [role profiles, domain metadata and limits](configure_chat.md), then
+implement [SSE/WebSocket streaming and confirmation UI](integrate_chat.md).
+Keep writes disabled until the application explicitly needs them; exact allow-list
+and confirmation configuration is covered in the API reference.
 
-const reader = response.body.getReader();
-const decoder = new TextDecoder();
-let buffer = "";
+Before production, test the actual permission policy, exposed managers, provider
+configuration, multi-turn choices and complete query populations. Schedule
+`python manage.py chat_cleanup`, use a shared cache for multi-process rate limits,
+and monitor terminal coverage/usage. Follow [operations](operate_chat.md) and
+[provider evaluation](run_chat_evals.md) for the deployment checks.
 
-while (true) {
-  const {value, done} = await reader.read();
-  if (done) break;
-  buffer += decoder.decode(value, {stream: true});
-  const frames = buffer.split("\n\n");
-  buffer = frames.pop();
-  for (const frame of frames) {
-    if (!frame.startsWith("data: ")) continue;
-    const event = JSON.parse(frame.slice(6));
-    if (event.type === "text_chunk") renderAssistantText(event.content);
-  }
-}
-```
-
-## 9. Stream over WebSocket
-
-Use WebSocket when the UI should receive tokens and tool activity as they
-happen, or when confirmed mutations are enabled:
-
-```javascript
-const scheme = location.protocol === "https:" ? "wss" : "ws";
-const socket = new WebSocket(`${scheme}://${location.host}/chat/`);
-
-socket.addEventListener("open", () => {
-  socket.send(JSON.stringify({
-    type: "message",
-    text: "List the available part managers",
-  }));
-});
-
-socket.addEventListener("message", ({data}) => {
-  const event = JSON.parse(data);
-  if (event.type === "text_chunk") {
-    renderAssistantText(event.content);
-  } else if (event.type === "confirm_mutation") {
-    const confirmed = window.confirm(
-      `Allow ${event.mutation} with input ${JSON.stringify(event.input)}?`,
-    );
-    socket.send(JSON.stringify({
-      type: "confirm",
-      confirmation_id: event.id,
-      confirmed,
-    }));
-  } else if (event.type === "error") {
-    renderChatError(event.message);
-  }
-});
-```
-
-Sessions and Django authentication identify the conversation. Authenticated
-users reuse their latest conversation; anonymous users require a valid Django
-session key.
-
-## 10. Add writes only when required
-
-Read-only chat is the safe default: `allowed_mutations` and
-`confirm_mutations` are empty. To permit a generated GraphQL mutation, add its
-exact schema name to the allow-list:
-
-```python
-GENERAL_MANAGER["CHAT"].update(
-    {
-        "allowed_mutations": ["createPart"],
-        "confirm_mutations": ["createPart"],
-        "confirm_timeout_seconds": 30,
-    }
-)
-```
-
-Every confirmed mutation must also be allowed. Mutations require an
-authenticated user. When the model requests `createPart`, WebSocket or SSE
-emits a `confirm_mutation` event instead of executing it. The WebSocket handler
-above shows the requested mutation and input, then returns the event's `id` as
-the `confirmation_id` together with the user's decision.
-
-For SSE, post the decision when the stream emits `confirm_mutation`:
-
-    const chatBaseUrl = new URL("../", response.url);
-
-    async function confirmSseMutation(confirmationId, confirmed) {
-      return fetch(new URL("confirm/", chatBaseUrl), {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": csrfToken,
-        },
-        body: JSON.stringify({confirmation_id: confirmationId, confirmed}),
-      });
-    }
-
-    // Inside the SSE event handler:
-    if (event.type === "confirm_mutation") {
-      const confirmed = window.confirm("Allow this mutation?");
-      await confirmSseMutation(event.id, confirmed);
-    }
-
-Using `credentials: "same-origin"` sends the same Django session cookie used by
-the `/chat/stream/` request, so the confirmation resolves the same conversation.
-Deriving `chatBaseUrl` from that request also preserves a customized `CHAT["url"]`
-base path.
-
-The plain HTTP endpoint cannot pause for confirmation. Use WebSocket or SSE for
-workflows that include `confirm_mutations`.
-
-## 11. Prepare for production
-
-Before serving real users:
-
-- expose the minimum set of managers
-- require a permission callable and test it for every user role
-- keep mutations disabled or explicitly allow and confirm each mutation
-- set `allowed_origins` for WebSockets and preserve Django CSRF protection
-- use a shared Django cache so rate limits work across processes
-- set request and token budgets appropriate for the provider account
-- configure `max_results` and `query_timeout_seconds`
-- decide whether chat audit logging is appropriate for the data involved
-- schedule `python manage.py chat_cleanup` using the configured `ttl_hours`
-- run the [installed chat eval suite](run_chat_evals.md) against the chosen model
-
-For the runtime mental model, continue with [How LLM chat works](../concepts/chat.md).
-For every setting, endpoint, and event shape, see the [Chat API reference](../api/chat.md).
+The [architecture](../concepts/chat.md) explains responsibilities and defaults.
+The [cookbook](../examples/planned_chat_orchestration.md) provides native Python
+schema/query examples; the [API reference](../api/chat.md) specifies every setting,
+route and event shape.

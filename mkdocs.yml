@@ -4,6 +4,11 @@ site_url: https://timkleindick.github.io/general_manager/
 repo_name: TimKleindick/general_manager
 repo_url: https://github.com/TimKleindick/general_manager
 
+# Historical source authority referenced by the experimental lifecycle validator.
+# Keep the exact repository bytes; omit this implementation-era report from the site.
+exclude_docs: |
+  /chat/eval-stream-metadata-r58.md
+
 theme:
   name: material
   logo: images/logo.svg
@@ -82,11 +87,16 @@ nav:
           - concepts/caching.md
           - concepts/historical_context.md
           - concepts/search.md
-          - concepts/chat.md
-          - concepts/chat_prompting.md
           - concepts/rules_validation.md
           - concepts/workflow.md
           - concepts/utils.md
+      - Chat:
+          - Architecture and lifecycle: concepts/chat.md
+          - Schema and exposure: concepts/chat_schema.md
+          - Evidence and calculations: concepts/chat_evidence.md
+          - Definitions and choices: concepts/chat_prompting.md
+          - Reference-data transport: concepts/chat_reference_data.md
+          - Evaluation and comparisons: concepts/chat_evaluation.md
       - Measurement & Currency:
           - concepts/measurement/index.md
           - concepts/measurement/units_currency.md
@@ -139,8 +149,12 @@ nav:
       - howto/bulk_data_change_notifications.md
       - howto/create_many.md
       - howto/benchmark_bulk_imports.md
-      - howto/install_llm_chat.md
-      - howto/run_chat_evals.md
+      - Chat:
+          - Install: howto/install_llm_chat.md
+          - Configure providers and roles: howto/configure_chat.md
+          - Integrate clients: howto/integrate_chat.md
+          - Operate and troubleshoot: howto/operate_chat.md
+          - Evaluate providers: howto/run_chat_evals.md
       - howto/orm_atomic_writes.md
       - howto/write_validation_rules.md
       - howto/excel_interface.md
@@ -176,7 +190,7 @@ nav:
       - examples/graphql_file_upload.md
       - examples/rule_validation.md
       - examples/chat_eval_cli.md
-      - examples/planned_chat_orchestration.md
+      - Chat discovery and queries: examples/planned_chat_orchestration.md
       - examples/dev_search_lifecycle.md
       - examples/permission_patterns.md
       - examples/permission_cookbook.md
@@ -215,3 +229,6 @@ nav:
       - adr/0005-search-backend.md
       - adr/0006-workflow-engine-architecture.md
       - adr/0007-graphql-capability-exposure.md
+      - adr/0008-llm-chat-endpoint.md
+      - adr/0010-planned-chat-evidence.md
+      - adr/0011-chat-schema-contracts.md

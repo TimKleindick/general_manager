@@ -1,210 +1,126 @@
-# How LLM chat works
+# Chat architecture and request lifecycle
 
-GeneralManager chat is a grounded tool loop over the project's generated
-GraphQL schema. The LLM does not receive unrestricted database access and does
-not construct arbitrary GraphQL documents. It receives a small, stable tool
-set that can discover explicitly exposed managers, inspect their schema, find
-relations, run bounded reads, and optionally invoke allow-listed mutations.
+Chat provides a natural-language interface to the GeneralManager GraphQL API.
+The application chooses the managers, model providers and access policy. The
+server validates plans, executes tools in the requesting user's context and
+checks evidence before producing an answer. GeneralManager supplies no browser
+chat widget.
 
-## Responsibilities
+Start with [installation](../howto/install_llm_chat.md), then follow
+[configuration](../howto/configure_chat.md) and
+[client integration](../howto/integrate_chat.md). The
+[Chat API reference](../api/chat.md) contains exact settings and Python signatures.
 
-GeneralManager provides:
+## One read request
 
-- provider adapters for Ollama, OpenAI-compatible APIs, Anthropic, and Gemini
-- HTTP, SSE, and WebSocket transports
-- conversation, message, and confirmation persistence
-- manager discovery, schema inspection, path finding, querying, and mutation
-  tools
-- grounding instructions, bounded retries, rate limits, and public error events
-- permission, origin, mutation allow-list, and audit hooks
+Every new HTTP, SSE and WebSocket read follows the same scheduler:
 
-The consuming project provides:
+1. The transport identifies the Django user or session, applies the configured
+   chat permission callable and rate limit, and loads conversation history.
+2. The planner receives the current request, projected history, application
+   definitions and a compact summary of exposed managers. It returns a read
+   plan or a mutation intent.
+3. Python validates the whole plan before application-data access: task IDs,
+   requirement shapes, completion criteria and dependencies must be consistent.
+4. Ready tasks use one executor role to discover schemas, query records and
+   request calculations. Dependencies determine which tasks may start; the
+   configured concurrency limit bounds simultaneous tasks.
+5. Successful observations become immutable evidence. Only compatible evidence
+   linked to the task's requirements may establish completion.
+6. Synthesis receives eligible selected evidence from resolved tasks, the user
+   request, conversation choices and application definitions. Its response must
+   name eligible evidence IDs, or use the closed clarification shape.
+7. The transport delivers tool activity, answer text and a terminal event with
+   usage and complete or partial task coverage.
 
-- the GeneralManager classes and generated GraphQL schema
-- explicit `chat_exposed` decisions
-- a provider, model, credentials, and network access
-- authentication and a chat permission callable
-- provider budgets, retention operations, monitoring, and a frontend
+The planner has one correction attempt and then one fallback attempt. Synthesis
+has its own bounded fallback. These attempts share their stage's deadline.
+Task complexity does not route work to different executor models. Explicit
+provider profiles assign the `planner`, `executor`, `synthesizer` and `fallback`
+roles; all mapped profiles must belong to one trust group.
 
-GeneralManager does not ship a chat user interface or choose which project data
-is appropriate to expose.
+A valid mutation intent leaves this read flow and enters the existing mutation
+continuation. Authentication, mutation allow-listing and configured confirmation
+still apply; read task completion cannot authorize a write.
 
-## One chat turn
+## Responsibilities and trust boundaries
 
-A normal read follows this sequence:
-
-1. The HTTP, SSE, or WebSocket transport identifies the Django user or session.
-2. GeneralManager applies the permission callable and cache-backed rate limit.
-3. The user message is appended to the active `ChatConversation`.
-4. GeneralManager builds a system prompt and adds summarized plus recent
-   conversation history.
-5. The configured provider receives provider-neutral messages and tool schemas.
-6. The model emits text or a structured tool call.
-7. GeneralManager validates and executes the tool against the exposed GraphQL
-   schema, then returns JSON to the model.
-8. The loop continues until the model emits a final answer and token usage.
-9. Tool exchanges and the assistant answer are persisted and emitted as
-   transport events.
-
-The frontend sees tool activity, but it never executes model-requested tools.
-Tool validation and execution stay on the server.
-
-## Schema exposure is explicit
-
-`GeneralManager.chat_exposed` defaults to `False`. Only classes that set it to
-`True` appear in the chat schema index. The index contains manager names,
-descriptions, scalar fields, relations, and supported filters derived from the
-generated GraphQL registry.
-
-This opt-in is an exposure boundary, not a replacement for authorization.
-Queries still execute with the current user as GraphQL context, so the
-project's normal permissions must enforce row- and operation-level access.
-
-## Discovery tools
-
-The default `tool_strategy` is `discovery`. It keeps the provider prompt small
-even when a project has hundreds of managers:
-
-| Tool | Purpose |
+| Layer | Responsibility |
 | --- | --- |
-| `search_managers` | Search exposed managers by name, description, fields, and relations. |
-| `get_manager_schema` | Return one manager's fields, filters, and relations. |
-| `find_path` | Find a relation path between two exposed managers. |
-| `query` | Execute a bounded, validated GraphQL read. |
-| `mutate` | Execute an authenticated, allow-listed GraphQL mutation. |
+| Application | Domain managers, executable GraphQL schema, business definitions, model credentials, access policy, retention schedule and UI |
+| Transport | Authentication context, chat admission, history, delivery and confirmation ownership |
+| Planner and executor | Propose structured work, select observed schema names and gather missing evidence |
+| Python scheduler and validators | Enforce plan shape, dependencies, tools, evidence eligibility, deadlines and completion |
+| Native GraphQL | Execute existing resolvers, middleware and manager/field permissions with the current user and request context |
+| Synthesizer | Explain the selected evidence and distinguish unanswered work or unresolved choices |
 
-The optional `direct` strategy generates one query tool per exposed manager.
-It may help a very small schema, but its tool list grows with the project. The
-discovery strategy is the scalable default.
+Manager `chat_exposed` defaults to `False`. Opt-in controls discovery, paths and
+chat query selection; it does not grant record access. HTTP passes the actual
+request, bound to the same user. WebSocket uses `ScopeChatContext` with the
+current user and ASGI scope. A Python query without an explicit context remains
+anonymous. See [schema and exposure](chat_schema.md).
 
-The query tool validates manager exposure, field and filter names, nested field
-selections, pagination, result limits, and configured query timeouts before it
-executes GraphQL. The model cannot use the tool to select a hidden manager or
-an unknown schema field.
+Model-generated plans, quoted text, tool results and application definitions
+have distinct roles. A plan is proposed work; a tool result is an observation;
+a user reply can select conversational scope. None is a privileged instruction
+or an independent mutation permission. See [definitions and choices](chat_prompting.md).
 
-## Grounding and recovery
+## Evidence, arithmetic and clarification
 
-The system prompt instructs the model to discover uncertain schema, answer data
-questions from tool results, copy result values exactly, report empty results,
-and avoid writes unless the user requested one. A project can append
-domain-specific instructions with the `system_prompt` chat setting.
+A schema observation is bound to manager, view, selected definitions and
+snapshot. A query records canonical call arguments and source provenance.
+Calculations refer to observed numeric leaves or verified earlier calculations;
+Python performs the arithmetic. A tool returning successfully does not mean the
+user's question is fully answered. See [evidence and calculations](chat_evidence.md).
 
-`max_retries_per_message` bounds non-mutation tool calls in one turn.
-`max_mutations_per_message` defaults to 8 and bounds writes, including writes
-that pause for confirmation. `max_total_rounds_per_message` can impose a lower
-finite cap across legacy provider, recovery, and summary rounds. When omitted, its
-budget is derived from the read and mutation limits so a normal final answer
-still has room after allowed tool calls. The final `done` event reports the
-aggregate token use from all provider rounds in that user turn, including
-resumed confirmations. Planned reads retain their separate orchestration budgets.
-`recover_missing_tool_calls` can add one corrective prompt when a model answers
-a data question without the required tool call or returns an empty answer after
-using tools. Recovery never fabricates tool output and does not bypass the tool
-retry limit.
+A concrete record ambiguity can produce a query-backed list of choices. An
+analytical ambiguity can ask for a metric, horizon, unit or other supported
+choice. The next user reply is bound to the original question and scope. It
+supplies no record facts; the executor must gather current data for the selected
+scope. Partial replies and conflicting definitions can leave a question open.
 
-Grounding reduces model mistakes; it does not make an unsuitable model safe.
-Evaluate the exact model, prompt, schema, and provider configuration before
-production use.
+## Deadlines, rounds and lifecycle
 
-## Conversation persistence
+The default planning/evidence stage is **90 seconds**, followed by a separate
+**30-second synthesis stage**. The evidence stage includes planning. Provider
+requests are bounded by the remaining stage time. Normal planned turns count
+provider rounds and observed token usage without a fixed successful-work round
+cap. Explicit evaluator dispatch caps are a separate mechanism.
 
-Chat uses three Django models:
+Repeated invalid actions stop only when the scheduler proves a validation cycle
+against unchanged task/evidence inputs after supplying the feedback. A valid
+schema exploration is allowed to continue within the deadline. Corrected
+queries, changed evidence and valid work do not form that invalid-action cycle.
 
-- `ChatConversation` identifies an authenticated user or anonymous session and
-  stores an optional history summary.
-- `ChatMessage` stores user, assistant, and tool exchange items in order.
-- `ChatPendingConfirmation` stores durable mutation confirmation state.
+At termination, the scheduler cancels outstanding tasks. PostgreSQL statement
+timeouts use Django's default connection and the smaller applicable query/stage
+budget. Cancellation of synchronous work on other backends is best effort; a
+worker thread can finish after the response stops awaiting it. These mechanisms
+do not promise a universal database or network wall-clock cutoff.
 
-An authenticated user reuses their most recently updated conversation. An
-anonymous actor is keyed by the Django session and therefore needs session
-middleware and a saved session key.
+Plans, task evidence, dependencies and calculation bindings live in memory for
+one turn. A disconnect or process restart ends that turn; it is not resumable.
+Conversations and rendered clarification metadata persist, but are not a saved
+scheduler. `planned.enabled=False` is deprecated and still dispatches planned
+reads. Disable the endpoint with `CHAT.enabled=False` or roll back the release
+when operational rollback is required.
 
-When history exceeds `summarize_after`, older messages can be summarized by the
-same provider. The generated summary plus the latest `max_recent_messages`
-become subsequent context. `ttl_hours` controls what the `chat_cleanup`
-management command considers stale; cleanup is not scheduled automatically.
+## Boundaries to account for
 
-## Transports
+- Typed GraphQL object/leaf selections and supported generated pages are
+  available. Unions, interfaces, fragments and arbitrary GraphQL roots are not.
+- Recursive manager-owned grouped outputs are not exposed by the chat contract;
+  native GraphQL grouping and supported `group_by` queries are separate features.
+- Pagination completeness describes observed data, not a transactional snapshot
+  of changing business records.
+- Exact source binding and arithmetic validation do not prove that a model has
+  interpreted every business definition correctly. Evaluate the actual model
+  and configuration on representative questions.
+- Diagnostic request guards, extended eval deadlines and offline scripted
+  success do not establish production readiness or model accuracy.
 
-All transports use the same provider, prompt, tools, persistence, permissions,
-and rate limits. Choose based on client behavior:
-
-| Transport | Best for | Streaming | Confirmed mutations |
-| --- | --- | --- | --- |
-| HTTP `POST /chat/` | Simple request/response clients | No | No pause-and-resume support |
-| SSE `POST /chat/stream/` | HTTP clients that consume a response stream | Yes | Resolve with `POST /chat/confirm/` |
-| WebSocket `/chat/` | Interactive browser or app clients | Yes | Resolve on the socket |
-
-The SSE endpoint uses a POST body, so the browser's GET-only `EventSource` API
-is not sufficient by itself. Use streaming `fetch` or an SSE client that
-supports POST.
-
-Every transport shares the same core event vocabulary and may emit
-`tool_call`, `tool_result`, `text_chunk`, `done`, and `error` as the turn
-requires. Confirmation-capable transports can also emit `confirm_mutation`.
-
-## Authentication, permission, and origins
-
-Django authentication identifies the actor. The optional chat `permission`
-callable is the endpoint-level authorization gate and receives `(user, scope)`.
-It should return `False` to deny access. If no callable is configured, chat does
-not add an endpoint-level denial.
-
-HTTP and SSE views are POST-only and CSRF-protected. The WebSocket application
-uses Channels' authentication middleware and validates origins. With
-`allowed_origins`, GeneralManager uses that explicit list; otherwise it uses
-Django's allowed-host validation.
-
-These layers complement manager and GraphQL permissions. They do not replace
-them.
-
-## Mutations and confirmation
-
-The model sees the `mutate` tool, but execution is denied unless the exact
-GraphQL mutation name appears in `allowed_mutations`. Anonymous actors cannot
-mutate.
-
-Names in `confirm_mutations` must also appear in `allowed_mutations`. For those
-operations, GeneralManager stores a pending confirmation and emits the proposed
-mutation and input without executing them. The client approves or rejects the
-same confirmation ID before `confirm_timeout_seconds` expires. Claiming and
-resolving confirmation state is transactional so repeated requests cannot
-execute the same pending operation twice.
-
-Keep both lists empty for a read-only assistant.
-
-## Limits, retention, and observability
-
-Chat rate limiting uses the Django cache and can enforce request, total-token,
-input-token, and output-token budgets per user, session, or client address. A
-local-memory cache only coordinates one process; multi-process deployments need
-a shared cache.
-
-`max_results` caps query rows, `query_timeout_seconds` applies a database query
-timeout where supported, and provider-specific timeout settings bound model
-requests. Public failures use stable error events instead of returning internal
-exception details.
-
-Optional WebSocket audit logging can emit sanitized message and tool activity
-to a project-supplied callable. HTTP, SSE, and WebSocket paths also emit Django
-signals for messages, tool calls, mutations, and errors where applicable.
-Redaction is key-name based and tool results can be truncated. Treat auditing
-as an observability hook, not a guarantee that arbitrary free-form user or
-model text contains no sensitive data.
-
-## Choosing and validating a model
-
-Use a model with reliable structured tool calling. Model size alone does not
-predict success: manager discovery, argument construction, multi-hop traversal,
-and exact answer grounding all matter.
-
-GeneralManager ships deterministic tests and live eval datasets. Run the
-[installed chat eval suite](../howto/run_chat_evals.md) with the same provider
-and model used by the application. Treat hard product-contract failures as
-behavior defects and strategy deviations as evidence that the model skipped a
-preferred discovery path.
-
-Continue with the [installation tutorial](../howto/install_llm_chat.md) for a
-working configuration or the [Chat API reference](../api/chat.md) for exact
-settings and event shapes. Prompt and eval contributors should also read
-[Chat prompt and eval iteration](chat_prompting.md).
+[Operations and troubleshooting](../howto/operate_chat.md) explains how to act
+on partial coverage, provider failures and deadline expiry. The continuing
+architectural decisions are recorded in [ADR 0008](../adr/0008-llm-chat-endpoint.md),
+[ADR 0010](../adr/0010-planned-chat-evidence.md) and
+[ADR 0011](../adr/0011-chat-schema-contracts.md).
