@@ -71,16 +71,29 @@ def test_cancelled_case_retains_native_provider_and_partial_scheduler_trace(
         execution = asyncio.create_task(
             harness.run_case(runtime, case, profile, lambda _: QueryThenWait())
         )
+        readiness = asyncio.create_task(entered.wait())
         try:
-            await asyncio.wait_for(entered.wait(), 1.0)
-        except BaseException:
-            execution.cancel()
-            await asyncio.gather(execution, return_exceptions=True)
-            raise
-        execution.cancel("private caller detail")
-        with pytest.raises(asyncio.CancelledError) as caught:
-            await execution
-        return caught.value
+            done, _ = await asyncio.wait(
+                {execution, readiness}, timeout=1.0, return_when=asyncio.FIRST_COMPLETED
+            )
+            if execution in done:
+                # Expose a real setup/runner error instead of hiding its outcome
+                # behind an unrelated readiness timeout.
+                outcome = await execution
+                pytest.fail(
+                    "case finished before the waiting provider was reached: "
+                    f"{harness.sanitize(outcome)!r}"
+                )
+            assert readiness in done, "case did not reach its waiting provider"
+            execution.cancel("private caller detail")
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await execution
+            return caught.value
+        finally:
+            for task in (execution, readiness):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(execution, readiness, return_exceptions=True)
 
     original = asyncio.run(cancel())
     record = original.gm_eval_interruption
