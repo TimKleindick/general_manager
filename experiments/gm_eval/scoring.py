@@ -717,6 +717,16 @@ def _equivalent_source_rows(
     expected = route["rows"]
     if not expected or identity not in required:
         return False
+    reference = {
+        row[route["identity_field"]]: {
+            _field_identity(field): value for field, value in row.items()
+        }
+        for row in expected
+    }
+    if len(reference) != len(expected) or any(
+        not required <= set(row) for row in reference.values()
+    ):
+        return False
     observed: dict[str, dict[str, Any]] = {}
     seen_queries: set[str] = set()
     for record in records:
@@ -731,29 +741,35 @@ def _equivalent_source_rows(
         seen_queries.add(query["id"])
         local_ids: set[str] = set()
         for row in record["identity_rows"]:
+            identities = [
+                value
+                for field, value in row.items()
+                if _field_identity(field) == identity
+            ]
+            if len(identities) != 1:
+                return False
+            key = identities[0]
+            if (
+                not isinstance(key, str)
+                or not key
+                or key not in reference
+                or key in local_ids
+            ):
+                return False
             selected: dict[str, Any] = {}
             for field, value in row.items():
                 normalized = _field_identity(field)
-                if normalized in required:
+                if normalized in reference[key]:
                     if normalized in selected:
                         return False
                     selected[normalized] = value
-            if set(selected) != required:
-                return False
-            key = selected[identity]
-            if not isinstance(key, str) or not key or key in local_ids:
+            if set(selected) != set(reference[key]):
                 return False
             local_ids.add(key)
             if key in observed and not _matches(observed[key], selected):
                 return False
             observed[key] = selected
-    reference = {
-        row[route["identity_field"]]: {
-            _field_identity(field): value for field, value in row.items()
-        }
-        for row in expected
-    }
-    return len(reference) == len(expected) and _matches(reference, observed)
+    return _matches(reference, observed)
 
 
 def _evidence_fields(records: Sequence[Mapping[str, Any]]) -> dict[str, set[str]]:

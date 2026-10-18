@@ -251,16 +251,35 @@ def _planned_revenue_inputs(
 ) -> list[dict[str, Any]]:
     """Declare reviewed input equivalence, independently of GM calculations.
 
-    EUR plans need no conversion. A mixed-currency route is not interchangeable
-    without its separately declared exchange-rate provenance, so it stays on the
-    existing source contract until that complete route is explicitly specified.
+    EUR plans need no conversion. Foreign inputs bind the same independent
+    currency/date/EUR-quote reference used by the numeric oracle, never a rate
+    reverse-engineered from an answer or copied from the calculation manager.
     """
     population = [
         row for row in data["project"] if projects is None or row["code"] in projects
     ]
-    if any(row["currency"] != "EUR" for row in population):
-        return []
     fields = ["code", "plan_year", "plan_units", "net_price", "currency"]
+    _, conversions = _revenues({**data, "project": population})
+    rows = []
+    for row in population:
+        inputs = {field: row[field] for field in fields}
+        conversion = conversions.get(row["code"])
+        if conversion is not None:
+            fx = {
+                "fx_rate": conversion["rate"],
+                "fx_as_of": conversion["as_of"],
+                "fx_source": conversion["source"],
+            }
+            if (
+                row.get("fx_rate") is None
+                or _decimal(row["fx_rate"]) != _decimal(fx["fx_rate"])
+                or any(
+                    row.get(field) != fx[field] for field in ("fx_as_of", "fx_source")
+                )
+            ):
+                return []
+            inputs.update(fx)
+        rows.append(inputs)
     return [
         {
             "manager": "Project",
@@ -268,7 +287,7 @@ def _planned_revenue_inputs(
             "unit": "EUR",
             "identity_field": "code",
             "required_fields": fields,
-            "rows": [{field: row[field] for field in fields} for row in population],
+            "rows": rows,
         }
     ]
 
