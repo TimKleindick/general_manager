@@ -9,9 +9,13 @@ A source requirement may now declare `equivalent_routes` in the evaluator's
 trusted oracle. This is a reviewed same-metric input contract, not permission to
 accept any manager that happens to produce the expected number. The current
 planned net revenue route accepts Project's declared plan year, quantity, net
-price and EUR currency inputs. Null quantities/prices remain unknown. Mixed
-currency inputs retain their existing source/provenance requirements until a
-complete conversion route is separately declared.
+price and currency inputs. Null quantities/prices remain unknown. Foreign
+currency conversion additionally requires selected `fxRate`, `fxAsOf` and
+`fxSource` matching the unique independent base-currency/EUR-quote reference
+used by the numeric oracle. EUR rows do not acquire unnecessary FX-field
+requirements. Neither matching amounts nor a claimed rate establish conversion
+provenance; missing or mismatched reference metadata cannot qualify. A foreign
+plan with null quantity/price stays unknown without fabricating a conversion.
 
 `oracle.source` owns route declarations and question-specific population. A
 single-project metric needs that project's complete eligible inputs; ranking
