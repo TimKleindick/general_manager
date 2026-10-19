@@ -1,4 +1,4 @@
-"""Offline-only entry point; Django fixtures execute in isolated child processes."""
+"""GM evaluation: offline checks and exact requests to a reviewed live supervisor."""
 
 from __future__ import annotations
 
@@ -16,29 +16,7 @@ import tempfile
 from typing import Any
 
 from .catalog import REFERENCE_VERSION
-
-
-class ValidationError(ValueError):
-    """A local experimental validation request is inconsistent."""
-
-
-def select_cases(
-    cases: list[dict[str, Any]], case_ids: Sequence[str], scale: int | None
-) -> list[dict[str, Any]]:
-    unknown = set(case_ids) - {c["id"] for c in cases}
-    if unknown:
-        message = f"unknown case IDs: {sorted(unknown)}"
-        raise ValidationError(message)
-    selected = [
-        c
-        for c in cases
-        if (not case_ids or c["id"] in case_ids)
-        and (scale is None or c["managers"] == scale)
-    ]
-    if not selected:
-        message = "no cases match selection"
-        raise ValidationError(message)
-    return selected
+from .selection import ValidationError, build_run_request, select_cases
 
 
 def catalog_report(*, reference_version: str = REFERENCE_VERSION) -> dict[str, Any]:
@@ -200,12 +178,12 @@ def fixture_report(cases: list[dict[str, Any]], seed: int) -> dict[str, Any]:
 
 
 def parser() -> argparse.ArgumentParser:
-    command = argparse.ArgumentParser(description=__doc__)
+    command = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     command.add_argument(
         "command",
         nargs="?",
         default="catalog",
-        choices=("catalog", "fixtures", "harness", "parity", "offline"),
+        choices=("catalog", "fixtures", "harness", "parity", "offline", "run"),
     )
     command.add_argument(
         "--case",
@@ -214,6 +192,23 @@ def parser() -> argparse.ArgumentParser:
         help="Repeat to select case IDs; catalog order is retained.",
     )
     command.add_argument("--scale", type=int, choices=(5, 10, 50, 100, 250))
+    command.add_argument(
+        "--first-message",
+        help="Run only: replace the first user message in each selected case; retain follow-ups and disable original Gold scoring.",
+    )
+    command.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="Run only: save the request without starting a provider or reading credentials.",
+    )
+    command.add_argument(
+        "--start-record",
+        type=Path,
+        help="Run only: independently reviewed bound start record.",
+    )
+    command.add_argument(
+        "--start-record-sha256", help="Run only: SHA-256 of that start record."
+    )
     command.add_argument("--seed", type=int, default=17)
     command.add_argument(
         "--profile",
@@ -331,7 +326,52 @@ def main(argv: Sequence[str] | None = None) -> int:
     options = parser().parse_args(args)
     from .catalog import load_catalog
 
-    selected = select_cases(load_catalog(), options.case, options.scale)
+    catalog = load_catalog()
+    if options.command == "run":
+        if any(
+            option == name or option.startswith(name + "=")
+            for option in args
+            for name in ("--scale", "--seed", "--profile")
+        ):
+            message = "--scale, --seed and --profile are offline-only; live settings belong to the reviewed start"
+            raise ValidationError(message)
+        request = build_run_request(
+            catalog, options.case, first_message=options.first_message
+        )
+        if options.prepare_only:
+            if (
+                options.start_record is not None
+                or options.start_record_sha256 is not None
+            ):
+                message = "prepare-only cannot consume a start record"
+                raise ValidationError(message)
+            output = options.output or Path(tempfile.mkdtemp(prefix="gm-eval-request-"))
+            output.mkdir(parents=True, exist_ok=True)
+            target = output / "run-request.json"
+            with target.open("x") as stream:
+                json.dump(request, stream, indent=2, sort_keys=True, ensure_ascii=False)
+                stream.write("\n")
+            print(json.dumps({"request": str(target), "model_requests": 0}))
+            return 0
+        if options.output is not None:
+            message = "live output is fixed by the reviewed start record"
+            raise ValidationError(message)
+        from .live import run_reviewed
+
+        return run_reviewed(
+            request,
+            start_record=options.start_record,
+            start_record_sha256=options.start_record_sha256,
+        )
+    if (
+        options.first_message is not None
+        or options.prepare_only
+        or options.start_record is not None
+        or options.start_record_sha256 is not None
+    ):
+        message = "first-message and start options require the run command"
+        raise ValidationError(message)
+    selected = select_cases(catalog, options.case, options.scale)
     output = options.output or Path(tempfile.mkdtemp(prefix="gm-eval-report-"))
     output.mkdir(parents=True, exist_ok=True)
     target = output / "report.json"

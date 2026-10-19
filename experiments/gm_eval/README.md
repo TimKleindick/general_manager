@@ -90,6 +90,57 @@ low/high scenario object only in the forecast scenario year slot. See
 
 ## Running and judging a candidate
 
+Use the same `run` command for any case selection. Repeat `--case`; the runner
+retains catalog order and executes every original turn of each selected case.
+Unknown IDs and duplicate IDs are errors before setup or authentication. Without
+`--case`, `run` selects **all 121 cases and 149 turns**. The separate offline
+`parity` command retains its small default infrastructure sample.
+
+```bash
+# Prepare intent locally; this does not authenticate or call a model.
+python -m experiments.gm_eval run --prepare-only --case E103 --case E107 \
+  --output /tmp/gm-eval-selection
+
+# Start the same selection with its reviewed infrastructure/start record.
+python -m experiments.gm_eval run --case E103 --case E107 \
+  --start-record "$GM_EVAL_START_RECORD" \
+  --start-record-sha256 "$GM_EVAL_START_SHA256"
+
+# No case arguments means the entire catalog, with a matching full-run record.
+python -m experiments.gm_eval run \
+  --start-record "$GM_EVAL_START_RECORD" \
+  --start-record-sha256 "$GM_EVAL_START_SHA256"
+```
+
+The reviewed infrastructure supplies `R26_EXPECTED_CONTROL_MANIFEST_SHA256` and
+the matching fresh start record. The command delegates to the existing serial
+supervisor; it never creates its own authentication, retry or admission path.
+Selection, models, budgets, source, output location and review receipts remain
+bound before execution. A record for a subset cannot authorize an invocation
+without `--case`. A saved request is intent, not permission to start.
+`--seed`, `--profile` and `--scale` belong to offline commands and are rejected
+for `run`; live settings come from the reviewed record.
+
+Optionally add `--first-message "Your explicit question"` to preparation and
+execution. It replaces only the first user message of **each** selected case;
+later messages are retained verbatim. An empty or whitespace-only override is
+rejected. Without the option, original messages remain unchanged. Preflight and
+execution use the same effective text. Reports retain original and effective
+messages and hashes, including partial interrupted conversations.
+
+An override changes the context of the whole conversation. All its turns are
+therefore **UNSCORED against the original Gold**, even if a later turn is
+unchanged or the supplied first text happens to equal an original. The original
+reference is not edited and no original-benchmark judge request is issued for
+that conversation. Such runs can be inspected as custom scenarios; they do not
+improve the benchmark score. Infrastructure failures and STOPs still apply.
+
+Local safety/transport qualification uses its own fixed test conversation and
+does not require a two-turn case in the requested live selection. Its separate
+offline role does not add a live case, alter the denominator or grant live
+authority. The same case ID may occur in both roles; qualification still denies
+network access and never reuses a real inference response.
+
 A candidate uses production role construction, `prepare_planned_turn`,
 `iter_planned_read_events`, native tools and durable conversation storage.
 The adapter is read-only. Explicit scripted providers test infrastructure;

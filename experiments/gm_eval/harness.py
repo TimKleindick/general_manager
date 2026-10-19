@@ -524,6 +524,7 @@ def _retain_case_interruption(
     trace: TraceRecorder,
     completed_turns: list[dict[str, Any]],
     active_turn: dict[str, Any] | None,
+    dialogue: dict[str, Any] | None = None,
 ) -> None:
     """Expose a sanitized partial trace to the caller that owns STOP/persistence.
 
@@ -569,6 +570,8 @@ def _retain_case_interruption(
             "trace": trace.as_dict(),
             "scheduler": prior.get("scheduler") if isinstance(prior, Mapping) else None,
         }
+        if dialogue is not None:
+            record["dialogue_input"] = dialogue
         cast(Any, error).gm_eval_interruption = sanitize(record)
     except Exception:  # noqa: BLE001, S110 -- diagnostics never mask the original interruption
         pass
@@ -583,6 +586,7 @@ async def run_case(
     route: str = "scheduler",
     mode: str = "offline",
     reference_version: str = REFERENCE_VERSION,
+    first_message: str | None = None,
 ) -> dict[str, Any]:
     """Run one isolated synthetic conversation; scoring is deliberately separate."""
     from django.conf import settings as django_settings
@@ -591,6 +595,9 @@ async def run_case(
     from general_manager.chat.settings import validate_chat_settings
 
     validate_reference_version(reference_version)
+    from .selection import dialogue_input
+
+    effective_case, dialogue = dialogue_input(case, first_message)
     if route not in {"scheduler", "consumer"}:
         raise ValueError("unknown_harness_route")
     if mode not in {"offline", "live"}:
@@ -668,7 +675,7 @@ async def run_case(
                 connection_failure = _harness_error(error)
         active_turn = None
         try:
-            for index, text in enumerate(case["turns"], start=1):
+            for index, text in enumerate(effective_case["turns"], start=1):
                 trace.turn = index
                 started = monotonic()
                 events = []
@@ -735,6 +742,7 @@ async def run_case(
                 trace=trace,
                 completed_turns=turns,
                 active_turn=active_turn,
+                dialogue=dialogue,
             )
             raise
         finally:
@@ -905,7 +913,8 @@ async def run_case(
         "schema_sha256": fingerprint(runtime.schema_index),
         "catalog_sha256": fingerprint(catalog),
         "case_sha256": fingerprint(case),
-        "prompt_sha256": fingerprint(case["turns"]),
+        "prompt_sha256": fingerprint(effective_case["turns"]),
+        "dialogue_input": dialogue,
         "fixture_sha256": fingerprint(runtime.seed_data),
         "source_hashes": hashes,
         "source_sha256": fingerprint(hashes),
