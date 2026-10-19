@@ -1873,6 +1873,18 @@ def judge_messages(request: Mapping[str, Any]) -> list[Message]:
     return compact_messages([Message(role="system", content=instruction), message])
 
 
+def _require_reference_dialogue(run: Mapping[str, Any]) -> None:
+    """A custom first message invalidates original Gold for every follow-up."""
+    dialogue = run.get("dialogue_input")
+    if dialogue is not None and (
+        not isinstance(dialogue, Mapping)
+        or dialogue.get("benchmark_comparable") is not True
+        or dialogue.get("first_message_override") is not None
+        or dialogue.get("original_turns") != dialogue.get("effective_turns")
+    ):
+        _invalid("modified_dialogue_has_no_reference")
+
+
 def build_adjudication_request(
     expectation: Mapping[str, Any],
     run: Mapping[str, Any],
@@ -1882,6 +1894,7 @@ def build_adjudication_request(
     extraction_policy: str | None = None,
 ) -> dict[str, Any]:
     """Prepare a replayable blind request, using zero-based oracle turn indices."""
+    _require_reference_dialogue(run)
     if (
         type(turn_index) is not int
         or expectation.get("turn_index") != turn_index
