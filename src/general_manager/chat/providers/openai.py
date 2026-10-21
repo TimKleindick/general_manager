@@ -15,7 +15,7 @@ from general_manager.chat.providers._shared import (
     DoneEvent,
     Message,
     ProviderCompletionError,
-    close_async_resource,
+    closing_async_resource,
     StreamingToolCallBuilder,
     TextChunkEvent,
     TokenUsage,
@@ -111,105 +111,152 @@ class OpenAIProvider(BaseLLMProvider):
             provider_messages.append(provider_message)
         return provider_messages
 
+    def complete_structured(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition],
+        *,
+        response_schema: Mapping[str, Any],
+    ) -> AsyncIterator[ChatEvent]:
+        """Opt into best-effort schema guidance without changing legacy calls."""
+        if self.provider_config.get("structured_outputs") is True:
+            return self.complete(messages, tools, response_schema=response_schema)
+        return self.complete(messages, tools)
+
     async def complete(
         self,
         messages: list[Message],
         tools: list[ToolDefinition],
+        *,
+        response_schema: Mapping[str, Any] | None = None,
     ) -> AsyncIterator[ChatEvent]:
         """Stream OpenAI text, tool calls, and usage events for one chat turn."""
         config = self.provider_config
-        client = self._build_async_client(config)
-        stream = await client.chat.completions.create(
-            model=config["model"],
-            stream=True,
-            stream_options={"include_usage": True},
-            messages=self._build_messages(messages),
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.input_schema,
-                    },
-                }
-                for tool in tools
-            ],
+        schema_guidance = (
+            response_schema is not None and config.get("structured_outputs") is True
         )
-        usage = TokenUsage()
-        tool_call_builders: dict[tuple[int, int], StreamingToolCallBuilder] = {}
-        seen_choices: set[int] = set()
-        completed_choices: set[int] = set()
-        try:
-            async for chunk in stream:
-                content = get_attr(chunk, "choices")
-                if isinstance(content, list):
-                    for index, choice in enumerate(content):
-                        choice_index = getattr(choice, "index", index)
-                        if not isinstance(choice_index, int):
-                            choice_index = index
-                        seen_choices.add(choice_index)
-                        reason = getattr(choice, "finish_reason", None)
-                        if reason in {"stop", "tool_calls"}:
-                            completed_choices.add(choice_index)
-                        elif reason is not None:
-                            raise ProviderCompletionError(
-                                "provider_response_incomplete"
-                            )
-                        delta = getattr(choice, "delta", None)
-                        text = getattr(delta, "content", None)
-                        if isinstance(text, str) and text:
-                            yield TextChunkEvent(content=text)
-                        tool_calls = getattr(delta, "tool_calls", None)
-                        if isinstance(tool_calls, list):
-                            for tool_index, tool_call in enumerate(tool_calls):
-                                call_index = getattr(tool_call, "index", tool_index)
-                                if not isinstance(call_index, int):
-                                    call_index = tool_index
-                                key = (choice_index, call_index)
-                                call_id = getattr(tool_call, "id", None)
-                                builder = tool_call_builders.get(key)
-                                if builder is None:
-                                    fallback_id = (
-                                        f"openai-tool-{choice_index}-{call_index}"
+        response_options: dict[str, Any] = {}
+        if schema_guidance:
+            # Existing phase schemas exceed OpenAI's strict subset. Keep their
+            # semantics intact and let the phase validators admit the result.
+            response_options["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "planned_response",
+                    "schema": deepcopy(dict(response_schema or {})),
+                    "strict": False,
+                },
+            }
+        client = self._build_async_client(config)
+        async with closing_async_resource(client):
+            stream = await client.chat.completions.create(
+                model=config["model"],
+                stream=True,
+                stream_options={"include_usage": True},
+                messages=self._build_messages(messages),
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.input_schema,
+                        },
+                    }
+                    for tool in tools
+                ],
+                **response_options,
+            )
+            usage = TokenUsage()
+            tool_call_builders: dict[tuple[int, int], StreamingToolCallBuilder] = {}
+            seen_choices: set[int] = set()
+            completed_choices: set[int] = set()
+            completion_failure: str | None = None
+            async with closing_async_resource(stream):
+                async for chunk in stream:
+                    content = get_attr(chunk, "choices")
+                    if isinstance(content, list):
+                        for index, choice in enumerate(content):
+                            choice_index = getattr(choice, "index", index)
+                            if not isinstance(choice_index, int):
+                                choice_index = index
+                            seen_choices.add(choice_index)
+                            reason = getattr(choice, "finish_reason", None)
+                            if reason in {"stop", "tool_calls"}:
+                                completed_choices.add(choice_index)
+                            elif reason is not None:
+                                if not schema_guidance:
+                                    raise ProviderCompletionError(
+                                        "provider_response_incomplete"
                                     )
-                                    builder = StreamingToolCallBuilder(
-                                        call_id=call_id
-                                        if isinstance(call_id, str) and call_id
-                                        else fallback_id
+                                completion_failure = "provider_response_incomplete"
+                            delta = getattr(choice, "delta", None)
+                            if schema_guidance and getattr(delta, "refusal", None):
+                                completion_failure = "provider_refusal"
+                            if completion_failure is not None:
+                                continue
+                            text = getattr(delta, "content", None)
+                            if isinstance(text, str) and text:
+                                yield TextChunkEvent(content=text)
+                            tool_calls = getattr(delta, "tool_calls", None)
+                            if isinstance(tool_calls, list):
+                                for tool_index, tool_call in enumerate(tool_calls):
+                                    call_index = getattr(tool_call, "index", tool_index)
+                                    if not isinstance(call_index, int):
+                                        call_index = tool_index
+                                    key = (choice_index, call_index)
+                                    call_id = getattr(tool_call, "id", None)
+                                    builder = tool_call_builders.get(key)
+                                    if builder is None:
+                                        fallback_id = (
+                                            f"openai-tool-{choice_index}-{call_index}"
+                                        )
+                                        builder = StreamingToolCallBuilder(
+                                            call_id=call_id
+                                            if isinstance(call_id, str) and call_id
+                                            else fallback_id
+                                        )
+                                        tool_call_builders[key] = builder
+                                    elif isinstance(call_id, str) and call_id:
+                                        builder.call_id = call_id
+                                    function = getattr(tool_call, "function", None)
+                                    builder.append(
+                                        name=getattr(function, "name", None),
+                                        arguments=getattr(function, "arguments", None),
                                     )
-                                    tool_call_builders[key] = builder
-                                elif isinstance(call_id, str) and call_id:
-                                    builder.call_id = call_id
-                                function = getattr(tool_call, "function", None)
-                                builder.append(
-                                    name=getattr(function, "name", None),
-                                    arguments=getattr(function, "arguments", None),
-                                )
-                        if getattr(choice, "finish_reason", None) == "tool_calls":
-                            for key in [
-                                key
-                                for key in tool_call_builders
-                                if key[0] == choice_index
-                            ]:
-                                event = tool_call_builders.pop(key).build()
-                                if event is not None:
-                                    yield event
-                chunk_usage = getattr(chunk, "usage", None)
-                if chunk_usage is not None:
-                    usage = TokenUsage(
-                        input_tokens=int(getattr(chunk_usage, "prompt_tokens", 0)),
-                        output_tokens=int(getattr(chunk_usage, "completion_tokens", 0)),
+                            if getattr(choice, "finish_reason", None) == "tool_calls":
+                                for key in [
+                                    key
+                                    for key in tool_call_builders
+                                    if key[0] == choice_index
+                                ]:
+                                    event = tool_call_builders.pop(key).build()
+                                    if event is not None:
+                                        yield event
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage is not None:
+                        usage = TokenUsage(
+                            input_tokens=int(getattr(chunk_usage, "prompt_tokens", 0)),
+                            output_tokens=int(
+                                getattr(chunk_usage, "completion_tokens", 0)
+                            ),
+                        )
+                if not seen_choices or seen_choices != completed_choices:
+                    if not schema_guidance:
+                        raise ProviderCompletionError()
+                    completion_failure = (
+                        completion_failure or "provider_response_incomplete"
                     )
-            if not seen_choices or seen_choices != completed_choices:
-                raise ProviderCompletionError()
-            for key in sorted(tool_call_builders):
-                event = tool_call_builders[key].build()
-                if event is not None:
-                    yield event
-            yield DoneEvent(usage=usage)
-        finally:
-            await close_async_resource(stream)
+                if completion_failure is not None:
+                    # completed_events observes usage immediately but admits
+                    # Done only after EOF, so this failure cannot become success.
+                    yield DoneEvent(usage=usage)
+                    raise ProviderCompletionError(completion_failure)
+                for key in sorted(tool_call_builders):
+                    event = tool_call_builders[key].build()
+                    if event is not None:
+                        yield event
+                yield DoneEvent(usage=usage)
 
 
 __all__ = ["OpenAIDependencyImportError", "OpenAIProvider"]

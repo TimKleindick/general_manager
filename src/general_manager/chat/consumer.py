@@ -43,6 +43,7 @@ from general_manager.chat.signals import (
     emit_chat_error,
     emit_chat_message_received,
     emit_chat_mutation_executed,
+    emit_chat_mutation_result,
     emit_chat_tool_called,
 )
 from general_manager.chat.settings import (
@@ -252,15 +253,21 @@ class ChatConsumer(_ChatConsumerBase):
             self._history_cache = []
         self._history_cache.append({"role": role, "content": content})
 
+    async def _admit_chat_action(self) -> bool:
+        """Renew the application's chat access policy before starting new work."""
+        permission = get_chat_permission()
+        if (
+            callable(permission)
+            and permission(self.scope.get("user"), self.scope) is False
+        ):
+            await self.close(code=4403)
+            return False
+        return True
+
     async def connect(self) -> None:
         """Initialize permissions and chat state without creating a write provider."""
         try:
-            permission = get_chat_permission()
-            if (
-                callable(permission)
-                and permission(self.scope.get("user"), self.scope) is False
-            ):
-                await self.close(code=4403)
+            if not await self._admit_chat_action():
                 return
             session = self.scope.get("session")
             session_key = getattr(session, "session_key", None)
@@ -367,6 +374,8 @@ class ChatConsumer(_ChatConsumerBase):
         self._active_turn = loop.create_future()
         started_background_turn = False
         try:
+            if not await self._admit_chat_action():
+                return
             if self.conversation is None:
                 self.conversation = await self._get_persistent_conversation()
             rate_limit_result = await sync_to_async(enforce_chat_rate_limit)(self.scope)
@@ -1226,13 +1235,7 @@ class ChatConsumer(_ChatConsumerBase):
                 )
             else:
                 result = {"status": "cancelled", "reason": cancellation_reason}
-            emit_chat_tool_called(
-                user=self.scope.get("user"),
-                tool_name="mutate",
-                args={"mutation": pending["mutation"], "input": pending["input"]},
-                result=result,
-            )
-            emit_chat_mutation_executed(
+            emit_chat_mutation_result(
                 user=self.scope.get("user"),
                 mutation=pending["mutation"],
                 input=pending["input"],
@@ -1278,6 +1281,8 @@ class ChatConsumer(_ChatConsumerBase):
                 tool_result=result,
                 tool_call_id=confirmation_id,
             )
+            if not confirmed and not await self._admit_chat_action():
+                return
             if bool(pending.get("rebuild_context_after_tool_result")):
                 from general_manager.chat.context import prepare_conversation_messages
                 from general_manager.chat.models import ChatConversation
@@ -1318,6 +1323,8 @@ class ChatConsumer(_ChatConsumerBase):
         from general_manager.chat.models import ChatPendingConfirmation
 
         if confirmed:
+            if not await self._admit_chat_action():
+                return
             rate_limited = await sync_to_async(enforce_chat_rate_limit)(
                 self.scope, count_request=False
             )

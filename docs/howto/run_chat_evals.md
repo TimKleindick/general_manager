@@ -136,10 +136,13 @@ remains FAIL or UNSCORED.
 
 ## 7. Migrate older integrations
 
-New runs identify `chat-evaluation/3` and use the production planned scheduler.
+New runs identify `chat-evaluation/4` and use the production planned scheduler.
 The selected no-argument provider class is bound across planner, executor,
-synthesizer and fallback, with serial evaluator execution. Old `/1` and `/2`
+synthesizer and fallback, with serial evaluator execution. Old `/1`, `/2` and `/3`
 reports remain readable and unchanged; they are not comparable new baselines.
+Contract `/4` adds a bounded result-list check; it does not establish factual
+correctness of arbitrary prose or quantity claims. See the
+[coverage limits](../concepts/chat_evaluation.md#packaged-answer-checks-have-limited-coverage).
 
 Remove `strategy="legacy"`, `recover_missing_tools=True` and custom `tool_defs`
 overrides from internal `run_case` callers. Omit `tool_defs` to use native

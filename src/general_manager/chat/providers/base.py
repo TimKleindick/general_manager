@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Final, Protocol, Self, TYPE_CHECKING
+from typing import Any, Final, Protocol, Self, TYPE_CHECKING, runtime_checkable
 
 if TYPE_CHECKING:
     from general_manager.chat.planned.schema_projection import (
@@ -100,4 +100,19 @@ class BaseLLMProvider(Protocol):
         tools: list[ToolDefinition],
     ) -> AsyncIterator[ChatEvent]:
         """Stream text, tool calls, and completion metadata for one turn."""
+        ...
+
+
+@runtime_checkable
+class StructuredOutputProvider(Protocol):
+    """Optional schema guidance; callers still own response validation."""
+
+    def complete_structured(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition],
+        *,
+        response_schema: Mapping[str, Any],
+    ) -> AsyncIterator[ChatEvent]:
+        """Stream a schema-guided response with the ordinary event contract."""
         ...

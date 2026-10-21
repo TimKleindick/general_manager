@@ -1205,11 +1205,9 @@ def test_reported_usage_is_limited_once_for_executor_and_synthesis_attempts(
     )
 
     assert [event["type"] for event in events][-1] == terminal_type
-    assert (
-        limiter_calls
-        == [{"input_tokens": 1, "output_tokens": 1, "count_request": False}]
-        * attempt_count
-    )
+    assert [call for call in limiter_calls if "input_tokens" in call] == [
+        {"input_tokens": 1, "output_tokens": 1, "count_request": False}
+    ] * attempt_count
     if terminal_type == "done":
         assert events[-1]["usage"] == {
             "input_tokens": attempt_count,
@@ -1260,7 +1258,8 @@ def test_malformed_executor_attempt_usage_is_recorded_before_private_limiter_fai
 
     assert failure_reason == "provider_failed"
     assert runner.usage == reported_usage
-    assert limiter_calls == [
+    assert all(call["count_request"] is False for call in limiter_calls)
+    assert [call for call in limiter_calls if "input_tokens" in call] == [
         {
             "input_tokens": reported_usage.input_tokens,
             "output_tokens": reported_usage.output_tokens,
@@ -1397,7 +1396,8 @@ def test_synthesis_usage_is_accounted_from_its_immutable_attempt_snapshots(
         )
     )
 
-    assert limiter_calls == [
+    assert all(call["count_request"] is False for call in limiter_calls)
+    assert [call for call in limiter_calls if "input_tokens" in call] == [
         {"input_tokens": 1, "output_tokens": 1, "count_request": False},
         {"input_tokens": 1, "output_tokens": 1, "count_request": False},
         {"input_tokens": 5, "output_tokens": 7, "count_request": False},

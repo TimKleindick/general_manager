@@ -4,7 +4,21 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import (
+    Context,
+    Decimal,
+    DecimalException,
+    DivisionByZero,
+    Inexact,
+    InvalidOperation,
+    MAX_EMAX,
+    MAX_PREC,
+    MIN_EMIN,
+    Overflow,
+    ROUND_HALF_EVEN,
+    Underflow,
+    localcontext,
+)
 from typing import NoReturn
 
 from general_manager.chat.planned.evidence import (
@@ -31,6 +45,44 @@ def _calculation_error(message: str, *, cause: BaseException | None = None) -> N
 
 def _type_error(message: str) -> NoReturn:
     raise TypeError(message)
+
+
+def _decimal_context(precision: int = 28, *, exact: bool = False) -> Context:
+    """Own every Decimal setting; neither host nor mutable defaults are policy."""
+    if not 1 <= precision <= MAX_PREC:
+        _calculation_error("calculation exceeds Decimal precision or exponent range.")
+    traps = [InvalidOperation, DivisionByZero, Overflow, Underflow]
+    if exact:
+        traps.append(Inexact)
+    return Context(
+        prec=precision,
+        rounding=ROUND_HALF_EVEN,
+        Emin=MIN_EMIN,
+        Emax=MAX_EMAX,
+        capitals=1,
+        clamp=0,
+        flags=[],
+        traps=traps,
+    )
+
+
+def _exact_sum(numbers: Sequence[Decimal]) -> Decimal:
+    """Cover the full coefficient span and all possible addition carries."""
+    nonzero = [number for number in numbers if number]
+    if not nonzero:
+        return Decimal(0)
+    minimum_exponent = min(int(number.as_tuple().exponent) for number in nonzero)
+    precision = max(
+        28,
+        max(number.adjusted() for number in nonzero)
+        - minimum_exponent
+        + 1
+        + len(str(len(nonzero))),
+        # Etiny = Emin - precision + 1 must include exact subnormal values.
+        MIN_EMIN - minimum_exponent + 1,
+    )
+    with localcontext(_decimal_context(precision, exact=True)):
+        return sum(nonzero, Decimal(0))
 
 
 @dataclass(frozen=True)
@@ -80,51 +132,60 @@ def calculate(operation: str, operands: Sequence[object]) -> Decimal | int:
         _calculation_error(
             f"{operation} requires at least one value after sequence expansion."
         )
-    numbers = [_decimal(value) for value in values]
-    if operation in ("multiply", "sum_products"):
-        if len(numbers) % 2:
-            _calculation_error("sum_products requires quantity/factor pairs.")
-        # Form exact products before sizing the complete sum, including cancellation.
-        with localcontext() as context:
-            context.prec = max(
-                28,
-                max(
-                    len(numbers[index].as_tuple().digits)
-                    + len(numbers[index + 1].as_tuple().digits)
-                    for index in range(0, len(numbers), 2)
-                ),
-            )
-            products = [
-                numbers[index] * numbers[index + 1]
-                for index in range(0, len(numbers), 2)
-            ]
-            nonzero = [item for item in products if item]
-            if not nonzero:
-                return Decimal(0)
-            context.prec = max(
-                28,
-                max(item.adjusted() for item in nonzero)
-                - min(int(item.as_tuple().exponent) for item in nonzero)
-                + 1
-                + len(str(len(nonzero))),
-            )
-            return sum(products, Decimal(0))
-    if operation == "sum":
-        return sum(numbers, Decimal(0))
-    if operation == "average":
-        return sum(numbers, Decimal(0)) / Decimal(len(numbers))
-    if operation == "minimum":
-        return min(numbers)
-    if operation == "maximum":
-        return max(numbers)
-    left, right = numbers
-    if operation == "difference":
-        return left - right
-    if right == 0:
-        _calculation_error("division by zero is not allowed.")
-    if operation == "ratio":
-        return left / right
-    return left / right * Decimal(100)
+    try:
+        with localcontext(_decimal_context()):
+            numbers = [_decimal(value) for value in values]
+            if operation in ("multiply", "sum_products"):
+                if len(numbers) % 2:
+                    _calculation_error("sum_products requires quantity/factor pairs.")
+                pairs = list(zip(numbers[::2], numbers[1::2], strict=True))
+                # Exact products precede the complete sum, including cancellation.
+                precision = max(
+                    28,
+                    max(
+                        len(left.as_tuple().digits) + len(right.as_tuple().digits)
+                        for left, right in pairs
+                    ),
+                    max(
+                        (
+                            MIN_EMIN
+                            - int(left.as_tuple().exponent)
+                            - int(right.as_tuple().exponent)
+                            + 1
+                            for left, right in pairs
+                            if left and right
+                        ),
+                        default=1,
+                    ),
+                )
+                with localcontext(_decimal_context(precision, exact=True)):
+                    return _exact_sum([left * right for left, right in pairs])
+            if operation == "sum":
+                return _exact_sum(numbers)
+            if operation == "average":
+                return _exact_sum(numbers) / Decimal(len(numbers))
+            if operation == "minimum":
+                return min(numbers)
+            if operation == "maximum":
+                return max(numbers)
+            left, right = numbers
+            if operation == "difference":
+                return _exact_sum([left, right.copy_negate()])
+            if right == 0:
+                _calculation_error("division by zero is not allowed.")
+            if operation == "percentage":
+                precision = max(
+                    len(left.as_tuple().digits) + 3,
+                    MIN_EMIN - int(left.as_tuple().exponent) + 1 if left else 1,
+                )
+                with localcontext(_decimal_context(precision, exact=True)):
+                    left *= Decimal(100)
+            # Division alone rounds, including the final average or percentage.
+            return left / right
+    except DecimalException as exc:
+        _calculation_error(
+            "calculation exceeds Decimal precision or exponent range.", cause=exc
+        )
 
 
 def calculate_evidence(
@@ -380,7 +441,7 @@ def _decimal(value: object) -> Decimal:
     ):
         _calculation_error("numeric operands must be scalar numbers.")
     try:
-        result = Decimal(str(value))
+        result = Decimal(str(value), context=_decimal_context())
     except (InvalidOperation, ValueError, TypeError) as exc:
         _calculation_error("numeric operands must be finite numbers.", cause=exc)
     if not result.is_finite():

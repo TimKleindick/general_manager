@@ -79,9 +79,11 @@ original calibration run, which are maintained as separate review evidence.
 That command is not part of the offline setup or the synthetic regression suite.
 The import-only regression does not establish that those external inputs exist.
 
-New candidate reports identify `execution_contract: chat-evaluation/3` and
+New candidate reports identify `execution_contract: chat-evaluation/4` and
 `strategy: planned`; the behavior fingerprint binds that execution contract.
 The answer Judge policy remains `answer-correctness-v3`. Historical field names
 such as `legacy_trace` and `legacy_diagnostics` remain format-compatible readers
 of transcript and lexical-score evidence; they do not select an old execution
 loop. Existing stored reports are not rewritten.
+The `/4` package contract adds a bounded lexical result-list check; it does not
+extend the independent answer Judge's semantic policy or regrade old runs.

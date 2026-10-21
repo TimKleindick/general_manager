@@ -124,6 +124,7 @@ from general_manager.chat.providers.base import (
 )
 from general_manager.chat.tool_metadata import TOOL_DESCRIPTIONS, TOOL_INPUT_SCHEMAS
 from general_manager.chat.settings import get_chat_settings
+from general_manager.chat.errors import public_chat_error
 
 
 StableReason = str
@@ -207,6 +208,16 @@ class SchedulerCallbacks:
         Callable[[Callable[..., Any], tuple[Any, ...], dict[str, Any]], Awaitable[Any]]
         | None
     ) = None
+
+
+class _PlannedRateLimitExceeded(RuntimeError):
+    """A configured quota denied new work, independently of model failures."""
+
+    public_reason = "rate_limited"
+
+    def __init__(self, metadata: Mapping[str, Any]) -> None:
+        super().__init__(self.public_reason)
+        self.retry_after_seconds = metadata.get("retry_after_seconds")
 
 
 @dataclass(frozen=True)
@@ -387,26 +398,39 @@ async def prepare_planned_turn(
         raise TimeoutError("planned evidence deadline elapsed")  # noqa: TRY003
     callbacks = callbacks or SchedulerCallbacks()
     observed_usages: list[TokenUsage] = []
+    usage_accounts: set[asyncio.Task[None]] = set()
+    quota_denial: _PlannedRateLimitExceeded | None = None
+
+    async def account_usage(usage: TokenUsage) -> None:
+        nonlocal quota_denial
+        denial = await _rate_limit_call(callbacks, scope or {}, usage=usage)
+        if denial is not None:
+            quota_denial = _PlannedRateLimitExceeded(denial)
 
     async def observe_usage(usage: TokenUsage) -> None:
         observed_usages.append(usage)
+        account = asyncio.create_task(account_usage(usage))
+        usage_accounts.add(account)
+        try:
+            await asyncio.shield(account)
+        finally:
+            if account.done():
+                usage_accounts.discard(account)
 
-    async def account_planner_usage(usages: Sequence[TokenUsage]) -> None:
-        if callbacks.enforce_rate_limit is not None:
-            for usage in usages:
-                try:
-                    await _call_sync(
-                        callbacks,
-                        callbacks.enforce_rate_limit,
-                        dict(scope or {}),
-                        input_tokens=usage.input_tokens,
-                        output_tokens=usage.output_tokens,
-                        count_request=False,
-                    )
-                except Exception:  # noqa: BLE001, S110
-                    pass
+    async def admit_attempt() -> None:
+        nonlocal quota_denial
+        if quota_denial is None:
+            denial = await _rate_limit_call(callbacks, scope or {})
+            if denial is not None:
+                quota_denial = _PlannedRateLimitExceeded(denial)
+        if quota_denial is not None:
+            raise quota_denial
 
     try:
+        if planner is not plan_request:
+            # Custom planners keep their existing signature; the native planner
+            # admits each correction/fallback attempt through before_attempt.
+            await admit_attempt()
         planned = await asyncio.wait_for(
             planner(
                 user_text,
@@ -418,6 +442,7 @@ async def prepare_planned_turn(
                     {
                         "configured_context": configured_context,
                         "on_usage": observe_usage,
+                        "before_attempt": admit_attempt,
                     }
                     if planner is plan_request
                     else {}
@@ -425,12 +450,23 @@ async def prepare_planned_turn(
             ),
             remaining,
         )
+        if not observed_usages:
+            for usage in planned.attempt_usages:
+                await observe_usage(usage)
     except InvalidPlanError as exc:
-        await account_planner_usage(observed_usages or exc.attempt_usages)
+        if not observed_usages:
+            for usage in exc.attempt_usages:
+                await observe_usage(usage)
         raise
-    except TimeoutError:
-        await account_planner_usage(observed_usages)
-        raise
+    finally:
+        # Cancellation must finish already observed bookings, without starting
+        # another provider attempt or booking immutable snapshots twice.
+        if usage_accounts:
+            await asyncio.gather(*usage_accounts, return_exceptions=True)
+    if quota_denial is not None:
+        # A valid plan cannot erase a known denial at the read/mutation boundary,
+        # even if a later admission callback or its cache becomes unavailable.
+        raise quota_denial
     # A planner needs the task-sized ledger; retain its already spent global rounds.
     task_budget = RoundBudget(
         tuple(task.task_id for task in planned.plan.tasks), enforce_limits=False
@@ -444,7 +480,6 @@ async def prepare_planned_turn(
         resolver = ManagerResolver(
             schema_index, load_manager_catalog(settings.catalog_source, schema_index)
         )
-    await account_planner_usage(observed_usages or planned.attempt_usages)
     return PreparedPlannedTurn(
         plan=planned.plan,
         budget=task_budget,
@@ -1076,6 +1111,31 @@ async def _call_sync(
     return await sync_to_async(fn)(*args, **kwargs)
 
 
+async def _rate_limit_call(
+    callbacks: SchedulerCallbacks,
+    scope: Mapping[str, Any],
+    *,
+    usage: TokenUsage | None = None,
+) -> Mapping[str, Any] | None:
+    """Use the existing limiter for either observation or no-count admission."""
+    if callbacks.enforce_rate_limit is None:
+        return None
+    kwargs: dict[str, Any] = {"count_request": False}
+    if usage is not None:
+        kwargs.update(
+            input_tokens=usage.input_tokens, output_tokens=usage.output_tokens
+        )
+    try:
+        result = await _call_sync(
+            callbacks, callbacks.enforce_rate_limit, dict(scope), **kwargs
+        )
+    except Exception:  # noqa: BLE001
+        # Preserve the existing private callback-outage policy. An explicit
+        # denial, unlike an unavailable callback, always stops new work.
+        return None
+    return result if isinstance(result, Mapping) else None
+
+
 @dataclass
 class _TaskRuntime:
     task: PlannedTask
@@ -1190,6 +1250,7 @@ class _Runner:
     runtimes: dict[str, _TaskRuntime] = field(default_factory=dict)
     usage: TokenUsage = field(default_factory=TokenUsage)
     _usage_accounts: set[asyncio.Task[None]] = field(default_factory=set)
+    quota_denial: _PlannedRateLimitExceeded | None = None
 
     def __post_init__(self) -> None:
         self.usage = self.prepared.usage
@@ -1287,18 +1348,18 @@ class _Runner:
                     self._usage_accounts.discard(account)
 
     async def _account_quota(self, usage: TokenUsage) -> None:
-        try:
-            await _call_sync(
-                self.callbacks,
-                cast(Callable[..., Any], self.callbacks.enforce_rate_limit),
-                dict(self.scope),
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                count_request=False,
-            )
-        except Exception:  # noqa: BLE001, S110
-            # Usage is already committed locally; a limiter outage is private.
-            pass
+        denial = await _rate_limit_call(self.callbacks, self.scope, usage=usage)
+        if denial is not None:
+            self.quota_denial = _PlannedRateLimitExceeded(denial)
+
+    async def admit_work(self) -> None:
+        """Reject new work after denial; already in-flight usage is still booked."""
+        if self.quota_denial is None:
+            denial = await _rate_limit_call(self.callbacks, self.scope)
+            if denial is not None:
+                self.quota_denial = _PlannedRateLimitExceeded(denial)
+        if self.quota_denial is not None:
+            raise self.quota_denial
 
     def _selected_records(self, runtime: _TaskRuntime) -> tuple[EvidenceRecord, ...]:
         return selected_evidence(
@@ -1459,6 +1520,7 @@ class _Runner:
     async def execute_tool(
         self, runtime: _TaskRuntime, call: ToolCallEvent
     ) -> tuple[Any, bool]:
+        await self.admit_work()
         # Reject unadvertised calls before any public side effect.  A model can
         # still fabricate tool names despite the provider tool definition.
         if call.name not in _ALLOWED_TOOL_NAMES:
@@ -1538,6 +1600,7 @@ class _Runner:
         cached = call.name != "get_manager_schema" and identity in self.call_cache
         query_schema_witness = self.query_schema_cache.get(identity) if cached else None
         deadline_rejected = False
+        quota_rejected = False
         if cached:
             result = self.call_cache[identity]
         else:
@@ -1550,6 +1613,9 @@ class _Runner:
                         deadline_rejected = True
                         result = {"status": "error", "code": "deadline_exceeded"}
                     else:
+                        # A different in-flight root may exhaust quota while
+                        # this call waits for the serialized backend slot.
+                        await self.admit_work()
                         tool_scope = dict(self.scope)
                         tool_scope["planned_query_timeout_ms"] = math.ceil(
                             remaining * 1000
@@ -1586,6 +1652,9 @@ class _Runner:
                                 sort_keys=True,
                                 separators=(",", ":"),
                             )
+                except _PlannedRateLimitExceeded:
+                    quota_rejected = True
+                    result = {"status": "error", "code": "rate_limited"}
                 except asyncio.CancelledError:
                     if call.name == "get_manager_schema" and isinstance(
                         backend_args.get("manager"), str
@@ -1605,7 +1674,7 @@ class _Runner:
                     }
                 except Exception:  # noqa: BLE001
                     result = {"status": "error", "code": "tool_failed"}
-                if not deadline_rejected:
+                if not deadline_rejected and not quota_rejected:
                     if call.name == "get_manager_schema":
                         # Capture order is authoritative. Commit freshness before
                         # releasing serialization or awaiting signals/persistence.
@@ -1660,8 +1729,10 @@ class _Runner:
                 "duplicate": cached,
             },
         )
-        if deadline_rejected:
-            await self.set_blocked(runtime, "deadline_exceeded")
+        if deadline_rejected or quota_rejected:
+            await self.set_blocked(
+                runtime, "rate_limited" if quota_rejected else "deadline_exceeded"
+            )
             return result, False
         if not cached:
             try:
@@ -2004,6 +2075,7 @@ class _Runner:
         if remaining <= 0:
             await self.set_blocked(runtime, "deadline_exceeded")
             return None
+        await self.admit_work()
         try:
             # Resolution is free; charge only immediately before a real
             # provider request can start.
@@ -2054,6 +2126,7 @@ class _Runner:
             )
             feedback = reference.get("action_validation_error")
             runtime.execution_state = execution_state_signature(reference)
+            await self.admit_work()
             result = await complete_provider_round(
                 provider,
                 messages,
@@ -2079,6 +2152,8 @@ class _Runner:
                     ),
                 },
             )
+        except _PlannedRateLimitExceeded:
+            raise
         except asyncio.CancelledError:
             self.observe_cancellation(
                 "observed", "executor_provider_round", runtime.task.task_id
@@ -2546,6 +2621,8 @@ class _Runner:
             async with semaphore:
                 try:
                     await self.run_task(runtime)
+                except _PlannedRateLimitExceeded:
+                    await self.set_blocked(runtime, "rate_limited")
                 except asyncio.CancelledError:
                     raise
                 except Exception:  # noqa: BLE001
@@ -2753,6 +2830,17 @@ async def iter_planned_read_events(
         "total": result.coverage.total,
     }
     await runner.audit("coverage", {"coverage": coverage})
+    if runner.quota_denial is not None:
+        await runner.audit(
+            "terminal",
+            {
+                "coverage": coverage,
+                "terminal_reason": "rate_limited",
+                "reason_origin": "scheduler",
+            },
+        )
+        yield public_chat_error(runner.quota_denial).as_event()
+        return
     if result.clarification is not None:
         question = result.clarification
         if conversation is not None:
@@ -2808,6 +2896,26 @@ async def iter_planned_read_events(
         )
         yield planned_error_event(reason)
         return
+    synthesis_usages: list[TokenUsage] = []
+
+    async def record_synthesis_usage(usage: TokenUsage) -> None:
+        synthesis_usages.append(usage)
+        await runner.account_usage(usage)
+        await runner.audit(
+            "usage",
+            {
+                "role": "synthesizer",
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+            },
+        )
+
+    async def account_remaining(usages: Sequence[TokenUsage]) -> None:
+        # Retain compatibility with injected stage functions that return only
+        # immutable usage snapshots. Native observations are never rebooked.
+        for usage in usages[len(synthesis_usages) :]:
+            await record_synthesis_usage(usage)
+
     try:
         synthesis = await synthesize_answer(
             prepared.user_text,
@@ -2826,20 +2934,23 @@ async def iter_planned_read_events(
             conversation_context=messages,
             task_context=runner.synthesis_task_context(),
             choice_context=prepared.choice_context,
+            on_usage=record_synthesis_usage,
+            before_attempt=runner.admit_work,
         )
-        for usage in synthesis.attempt_usages:
-            await runner.account_usage(usage)
-            await runner.audit(
-                "usage",
-                {
-                    "role": "synthesizer",
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                },
-            )
+        await account_remaining(synthesis.attempt_usages)
+    except _PlannedRateLimitExceeded as exc:
+        await runner.audit(
+            "terminal",
+            {
+                "coverage": coverage,
+                "terminal_reason": "rate_limited",
+                "reason_origin": "scheduler",
+            },
+        )
+        yield public_chat_error(exc).as_event()
+        return
     except SynthesisFailedError as exc:
-        for usage in exc.attempt_usages:
-            await runner.account_usage(usage)
+        await account_remaining(exc.attempt_usages)
         await runner.audit(
             "terminal",
             {
@@ -2851,8 +2962,7 @@ async def iter_planned_read_events(
         yield planned_error_event(exc.code)
         return
     except RoundBudgetExhausted as exc:
-        for usage in getattr(exc, "attempt_usages", ()):
-            await runner.account_usage(usage)
+        await account_remaining(getattr(exc, "attempt_usages", ()))
         await runner.audit(
             "terminal",
             {
@@ -2864,6 +2974,7 @@ async def iter_planned_read_events(
         yield planned_error_event("budget_exhausted")
         return
     except asyncio.CancelledError:
+        interrupted = True
         raise
     except Exception:  # noqa: BLE001
         await runner.audit(
@@ -2876,6 +2987,15 @@ async def iter_planned_read_events(
         )
         yield planned_error_event("synthesis_failed")
         return
+    finally:
+        if runner._usage_accounts:
+            await asyncio.gather(*runner._usage_accounts, return_exceptions=True)
+            runner._usage_accounts.clear()
+        if interrupted:
+            prepared.result = None
+            prepared.interrupted_result = runner.result()
+        else:
+            prepared.result = runner.result()
     if conversation is not None:
         try:
             await _call_sync(

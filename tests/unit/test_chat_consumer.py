@@ -558,6 +558,208 @@ class ChatConsumerConnectTests(unittest.TestCase):
         asyncio.run(run())
 
 
+@pytest.mark.parametrize("message_type", ["message", "confirm"])
+@pytest.mark.parametrize("decision", ["allow", "deny", "error"])
+def test_websocket_renews_chat_admission_before_new_work(message_type, decision):
+    consumer = ChatConsumer()
+    consumer.scope = {
+        "user": AnonymousUser(),
+        "session": _Session("existing-key"),
+    }
+    permission_calls = []
+    current_decision = "allow"
+    original_error = RuntimeError("private admission failure")
+
+    def permission(user, scope):
+        assert user is consumer.scope["user"]
+        assert scope is consumer.scope
+        permission_calls.append(current_decision)
+        if current_decision == "error":
+            raise original_error
+        return current_decision == "allow"
+
+    async def run():
+        nonlocal current_decision
+        with (
+            patch(
+                "general_manager.chat.consumer.get_chat_permission",
+                return_value=permission,
+            ),
+            patch.object(consumer, "accept", new=AsyncMock()),
+            patch.object(consumer, "close", new=AsyncMock()) as close,
+            patch.object(consumer, "send_json", new=AsyncMock()) as send,
+            patch.object(
+                consumer,
+                "_get_persistent_conversation",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(consumer, "_record_message", new=AsyncMock()) as record,
+            patch.object(consumer, "_load_history", new=AsyncMock(return_value=[])),
+            patch.object(
+                consumer, "_stream_message_turn", new=AsyncMock(return_value=False)
+            ) as message_turn,
+            patch.object(
+                consumer, "_stream_provider_turn", new=AsyncMock()
+            ) as continuation,
+            patch.object(
+                consumer,
+                "_claim_durable_pending_confirmation",
+                new=AsyncMock(return_value=True),
+            ) as claim,
+            patch(
+                "general_manager.chat.consumer.execute_confirmed_chat_mutation",
+                return_value={"status": "executed", "data": {}},
+            ) as mutate,
+            patch(
+                "general_manager.chat.consumer.enforce_chat_rate_limit",
+                return_value=None,
+            ) as rate_limit,
+            patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
+        ):
+            await consumer.connect()
+            current_decision = decision
+            payload = {"type": "message", "text": "Read data after connection"}
+            if message_type == "confirm":
+                consumer._pending_confirmation = {
+                    "id": "confirm-admission",
+                    "mutation": "createPart",
+                    "input": {"name": "Bolt"},
+                    "messages": [],
+                    "history": [],
+                    "durable": True,
+                    "expires_at": timezone.now() + timedelta(seconds=30),
+                }
+                payload = {
+                    "type": "confirm",
+                    "confirmation_id": "confirm-admission",
+                    "confirmed": True,
+                }
+            await consumer.receive_json(payload)
+
+            assert permission_calls == ["allow", decision]
+            if decision == "allow":
+                close.assert_not_awaited()
+                if message_type == "message":
+                    message_turn.assert_awaited_once()
+                    mutate.assert_not_called()
+                else:
+                    claim.assert_awaited_once()
+                    mutate.assert_called_once()
+                    continuation.assert_awaited_once()
+            else:
+                rate_limit.assert_not_called()
+                record.assert_not_awaited()
+                message_turn.assert_not_awaited()
+                claim.assert_not_awaited()
+                mutate.assert_not_called()
+                continuation.assert_not_awaited()
+                if decision == "deny":
+                    close.assert_awaited_once_with(code=4403)
+                else:
+                    assert chat_error.call_args.kwargs["error"] is original_error
+                    send.assert_awaited_once_with(
+                        {
+                            "type": "error",
+                            "message": "Chat request failed.",
+                            "code": "chat_error",
+                        }
+                    )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("action", ["reject", "timeout"])
+def test_revoked_websocket_cancels_confirmation_without_provider_resume(action):
+    consumer = ChatConsumer()
+    consumer.scope = {
+        "user": AnonymousUser(),
+        "session": _Session("existing-key"),
+    }
+    allowed = True
+    permission_calls = []
+
+    def permission(_user, _scope):
+        permission_calls.append(allowed)
+        return allowed
+
+    async def run():
+        nonlocal allowed
+        with (
+            patch(
+                "general_manager.chat.consumer.get_chat_permission",
+                return_value=permission,
+            ),
+            patch.object(consumer, "accept", new=AsyncMock()),
+            patch.object(consumer, "close", new=AsyncMock()) as close,
+            patch.object(consumer, "send_json", new=AsyncMock()) as send,
+            patch.object(
+                consumer,
+                "_get_persistent_conversation",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(consumer, "_record_message", new=AsyncMock()) as record,
+            patch.object(
+                consumer,
+                "_claim_durable_pending_confirmation",
+                new=AsyncMock(return_value=True),
+            ) as claim,
+            patch(
+                "general_manager.chat.consumer.execute_confirmed_chat_mutation"
+            ) as mutate,
+        ):
+            await consumer.connect()
+            allowed = False
+            consumer.provider = _ConfirmResumeProvider()
+            consumer._pending_confirmation = {
+                "id": "cancel-admission",
+                "mutation": "createPart",
+                "input": {"name": "Bolt"},
+                "messages": [],
+                "history": [],
+                "durable": True,
+                "expires_at": timezone.now() + timedelta(seconds=30),
+            }
+            consumer._confirmation_waiter = asyncio.get_running_loop().create_future()
+            if action == "reject":
+                await consumer.receive_json(
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "cancel-admission",
+                        "confirmed": False,
+                    }
+                )
+            else:
+                await consumer._await_confirmation_timeout(
+                    confirmation_id="cancel-admission", timeout_seconds=0
+                )
+
+            assert permission_calls == [True, False]
+            assert consumer.provider.calls == []
+            mutate.assert_not_called()
+            claim.assert_awaited_once()
+            assert consumer._pending_confirmation is None
+            assert consumer._confirmation_waiter is None
+            assert consumer._confirmation_timeout_task is None
+            result = {
+                "status": "cancelled",
+                "reason": "user_rejected"
+                if action == "reject"
+                else "confirmation_timed_out",
+            }
+            assert record.await_args.kwargs["tool_result"] == result
+            send.assert_awaited_once_with(
+                {
+                    "type": "tool_result",
+                    "id": "cancel-admission",
+                    "name": "mutate",
+                    "result": result,
+                }
+            )
+            close.assert_awaited_once_with(code=4403)
+
+    asyncio.run(run())
+
+
 class ChatConsumerMessageTests(unittest.TestCase):
     def test_provider_iterator_closes_a_stream_after_done(self) -> None:
         provider = _ClosableDoneProvider()

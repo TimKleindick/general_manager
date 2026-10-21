@@ -80,6 +80,15 @@ Once a token budget is exhausted, GeneralManager records the completed
 provider usage and rejects the next tool, confirmation write, summary, or
 provider round. A `rate_limited` event includes `retry_after_seconds`.
 
+Planned turns check admission before each planner, executor, and synthesis
+attempt, including correction and fallback, and before tool dispatch. These
+checks do not count another user request. Already observed usage is booked once
+even when parsing, cleanup, a later attempt, or client cancellation fails.
+Calls already in flight can exceed a limit before their usage becomes known;
+that usage is still recorded, while newly dispatched work is rejected. A quota
+denial does not trigger paid synthesis of partial results; committed evidence
+and usage remain available in the prepared turn's result or interrupted result.
+
 ### Audit settings
 
 The `audit` mapping is merged with:
@@ -139,12 +148,42 @@ Timeout enforcement depends on the execution path:
 | Provider path | Extra | Provider configuration |
 | --- | --- | --- |
 | `general_manager.chat.providers.OllamaProvider` | `chat-ollama` | `model` (default `gemma4:e4b`), `base_url` (default `http://127.0.0.1:11434`), `timeout_seconds` (default `60`) |
-| `general_manager.chat.providers.OpenAIProvider` | `chat-openai` | `model` (default `gpt-4.1-mini`), `api_key`, `base_url`, `timeout_seconds` (default `60`) |
+| `general_manager.chat.providers.OpenAIProvider` | `chat-openai` | `model` (default `gpt-4.1-mini`), `api_key`, `base_url`, `timeout_seconds` (default `60`), `structured_outputs` (default `False`) |
 | `general_manager.chat.providers.AnthropicProvider` | `chat-anthropic` | `model` (default `claude-3-5-haiku-latest`), `api_key`, `max_tokens` (default `1024`), `timeout_seconds` (default `60`) |
 | `general_manager.chat.providers.GeminiProvider` | `chat-google` | `model` (default `gemini-2.5-flash`), `api_key`; timeout behavior follows the execution-path distinctions above |
 
 `GoogleProvider` is an alias of `GeminiProvider`. The OpenAI provider accepts a
 `base_url` for OpenAI-compatible services.
+
+Each OpenAI completion owns its SDK client and response stream and closes them
+on completion, failure, cancellation, or early iterator closure. Client cleanup
+also runs if creating the response stream fails; cleanup preserves an existing
+request failure or cancellation.
+
+### Optional schema guidance
+
+Planner and synthesis requests can pass their existing response schemas through
+the optional `StructuredOutputProvider.complete_structured(messages, tools,
+*, response_schema=...)` capability in `providers.base`. Providers implementing
+only `complete(messages, tools)` retain that call unchanged. Evidence-executor
+rounds and the retained mutation loop use the ordinary completion path.
+
+For an OpenAI profile, set `provider_config["structured_outputs"] = True` to
+send `response_format={"type": "json_schema", "json_schema": {...,
+"strict": False}}`. This is best-effort schema guidance, without a strict
+schema-adherence guarantee. The original schemas contain conditional rules and
+optional fields outside OpenAI's strict subset; the adapter preserves them.
+Use this opt-in only with an endpoint and model supporting the
+[Chat Completions JSON Schema format](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+OpenAI-compatible endpoints do not necessarily support it. API rejection does
+not trigger a retry with schema guidance removed.
+
+All existing JSON, plan, choice-source and evidence validators still run.
+Refusal or incomplete output cannot produce an accepted result; available
+usage remains accounted for through the normal completion boundary. See the
+[OpenAI schema restrictions](https://developers.openai.com/api/docs/guides/structured-outputs)
+before selecting a model. Other built-in adapters currently keep their existing
+completion behavior.
 
 The configured model must implement structured tool or function calling.
 
@@ -344,7 +383,11 @@ error signal for server-side observability.
 | `chat_error` | HTTP, SSE, WebSocket | An unexpected server or provider failure. Show the generic message and correlate server-side logs or signals. |
 
 Permission denial returns HTTP 403 for HTTP/SSE and closes a WebSocket with
-code `4403`. A WebSocket startup failure closes with `1011`. CSRF rejection and
+code `4403`. WebSockets recheck the chat permission callable before each new
+message and positive mutation confirmation. Rejection or confirmation timeout
+still clears local pending state, but any provider continuation requires renewed
+chat admission. Native GraphQL permissions remain responsible for data access.
+A WebSocket startup failure closes with `1011`. CSRF rejection and
 non-POST HTTP methods use Django's standard HTTP 403 and 405 responses before a
 chat event is produced.
 
@@ -591,8 +634,11 @@ a legacy provider loop. Production mutation permissions and confirmation are
 unchanged. Each turn permits at most 10 provider dispatches, including planner
 and synthesis calls; native evidence/synthesis deadlines still apply.
 
-New reports carry `chat-evaluation/3`. Historical `/1` and `/2` reports remain
+New reports carry `chat-evaluation/4`. Historical `/1`, `/2` and `/3` reports remain
 readable but cannot be used as comparable baselines for current execution.
+Contract `/4` adds a bounded result-list membership check. The answer keyword
+score still does not establish factual correctness of every claim; see the
+[packaged check limits](../concepts/chat_evaluation.md#packaged-answer-checks-have-limited-coverage).
 Internal legacy strategy and injected-recovery options are removed; a request
 cap has the name `max_provider_requests`, with `max_tool_iterations` retained
 only as a per-turn request-cap alias. The two cap names cannot be combined.

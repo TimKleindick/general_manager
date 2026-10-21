@@ -22,7 +22,7 @@ production or installed CLI fallback.
 
 ## Execution and provider completion
 
-New installed/source evaluation runs identify `chat-evaluation/3`. They use one
+New installed/source evaluation runs identify `chat-evaluation/4`. They use one
 thin read-only adapter over the production planner, executor, synthesizer and
 native tools. The chosen provider is pinned across the roles; deterministic
 provider/tool replacements require explicit fixture configuration. Mutation plans
@@ -68,6 +68,34 @@ failure. Current runtime audit origins and matching task/turn evidence distingui
 scheduler/provider failures from a model declaring a block. A model cannot obtain
 an unscored exemption by using a technical-looking public code.
 
+### Packaged answer checks have limited coverage
+
+The installed report's **Answer quality** score measures expected keyword
+coverage and explicit exclusions. A score of 1.0 does not establish that every
+answer claim is correct. The product contract separately checks required values,
+selected contradictions, and a bounded list-membership rule.
+
+Contract `/4` adds the bounded list rule. It applies where the hard contract
+requests result values without additional answer keywords outside those values;
+mixed schema/data answer contracts are left to their other checks. It checks an
+initial bare comma/conjunction list or an initial bare
+bullet/numbered block containing at least one observed result value. Each inline
+item must be a single label token or an exact observed scalar; initial bullet
+blocks also accept unpunctuated multiword labels. Two comma-separated
+fragments without a conjunction are left to prose review. Matching ignores case
+and surrounding Markdown emphasis. Only aligned successful `query`/`query_*`
+results' `data` values support membership; schema/discovery text and failed
+results do not. Unrecognized list syntax is not recorded as a passing list check.
+
+This rule does not extract arbitrary prose, unknown inline multiword labels,
+punctuated multiword bullet sentences, prefaced or later lists,
+negated/excluded membership, entity-to-field associations,
+quantities, units, or derived calculations. A correct list followed by an
+invented quantity can still pass these packaged checks. Independent semantic
+claim adjudication remains necessary for that coverage; the source experiment's
+separate judge is described below. New checks do not reinterpret historical
+reports or demonstrate new live-model quality.
+
 ## Freeze the actual comparison cohort
 
 `select_eval_cases()` freezes ordered complete case definitions once.
@@ -82,7 +110,7 @@ fingerprints can differ and must be retained. Selection filter expressions
 explain provenance; the actual cohort determines comparison identity. A fixture
 identifier is not a snapshot of an arbitrary project's changing database.
 
-Historical contract `/1` and `/2` reports remain readable. Different contracts
+Historical contract `/1`, `/2` and `/3` reports remain readable. Different contracts
 or missing cohort proof cannot establish a comparable new regression baseline.
 Create a new baseline explicitly and preserve old files. Do not reinterpret a
 historical score using a new source, extraction schema or reference default.
