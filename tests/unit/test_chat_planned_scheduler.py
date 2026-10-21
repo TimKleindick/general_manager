@@ -1896,6 +1896,10 @@ def test_query_timeout_is_capped_when_the_serialized_tool_call_starts() -> None:
     assert seen_timeouts == [20]
 
 
+# Deadlock guard only: the probe checks concurrency/order, not startup latency.
+_PROBE_STARTUP_TIMEOUT_SECONDS = 5.0
+
+
 class _RoundProbe:
     def __init__(self, *, gate_first_rounds: int = 0) -> None:
         self.gate_first_rounds = gate_first_rounds
@@ -2036,7 +2040,9 @@ def test_scheduler_caps_provider_concurrency_at_three() -> None:
 
     async def run() -> None:
         execution = asyncio.create_task(runner.run())
-        await asyncio.wait_for(probe.first_rounds_started.wait(), timeout=0.2)
+        await asyncio.wait_for(
+            probe.first_rounds_started.wait(), timeout=_PROBE_STARTUP_TIMEOUT_SECONDS
+        )
         probe.release_first_rounds.set()
         await execution
 
@@ -2070,7 +2076,9 @@ def test_scheduler_admits_ready_roots_in_plan_order() -> None:
 
     async def run() -> None:
         execution = asyncio.create_task(runner.run())
-        await asyncio.wait_for(probe.first_rounds_started.wait(), timeout=0.2)
+        await asyncio.wait_for(
+            probe.first_rounds_started.wait(), timeout=_PROBE_STARTUP_TIMEOUT_SECONDS
+        )
         assert probe.started_tasks == list(plan_order[:2])
         probe.release_first_rounds.set()
         await execution
