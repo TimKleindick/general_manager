@@ -380,13 +380,14 @@ def test_readiness_distinguishes_unscored_from_quality_fail_on_the_full_denomina
 
 
 @pytest.mark.parametrize(
-    "historical_contract", ["chat-evaluation/1", "chat-evaluation/2"]
+    "historical_contract",
+    ["chat-evaluation/1", "chat-evaluation/2", "chat-evaluation/3"],
 )
 def test_old_baseline_is_readable_but_cannot_authorize_a_new_contract_gate(
     historical_contract,
 ):
     current = _summary(_strategy_result(False))
-    assert current.evaluation_contract == "chat-evaluation/3"
+    assert current.evaluation_contract == "chat-evaluation/4"
     historical = replace(current, evaluation_contract=historical_contract)
     comparison = compare_to_baseline(current, historical)
     assert not comparison.comparable
@@ -850,7 +851,8 @@ def test_actual_stage_deadline_retains_observed_usage_without_another_attempt(
         asyncio.run(request)
     assert provider.calls == provider.closed == 1
     if stage == "planning":
-        assert accounted == [
+        assert all(call["count_request"] is False for call in accounted)
+        assert [call for call in accounted if "input_tokens" in call] == [
             {"input_tokens": 7, "output_tokens": 11, "count_request": False}
         ]
     else:
@@ -967,7 +969,8 @@ def test_executor_observation_survives_own_stage_cancel_and_is_accounted_once(
             await executor._execute_one_pass(runtime, ())
         assert provider.calls == provider.closed == 1
         assert executor.usage == TokenUsage(7, 11)
-        assert accounted == [
+        assert all(call["count_request"] is False for call in accounted)
+        assert [call for call in accounted if "input_tokens" in call] == [
             {"input_tokens": 7, "output_tokens": 11, "count_request": False}
         ]
 
@@ -988,7 +991,7 @@ def test_executor_stage_cancel_settles_one_already_observed_quota_dispatch(monke
             accounted.append(kwargs)
 
         async def queued(function, args, kwargs):
-            if function is quota:
+            if function is quota and "input_tokens" in kwargs:
                 dispatches.append(True)
                 waiting.set()
                 await closed.wait()
@@ -1018,7 +1021,8 @@ def test_executor_stage_cancel_settles_one_already_observed_quota_dispatch(monke
         assert executor.runtimes["task_1"].reason == "deadline_exceeded"
         assert provider.calls == len(dispatches) == 1
         assert executor.usage == TokenUsage(7, 11)
-        assert accounted == [
+        assert all(call["count_request"] is False for call in accounted)
+        assert [call for call in accounted if "input_tokens" in call] == [
             {"input_tokens": 7, "output_tokens": 11, "count_request": False}
         ]
 

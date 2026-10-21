@@ -389,6 +389,36 @@ def _evidence_data(records: tuple[EvidenceRecord, ...]) -> list[dict[str, object
     ]
 
 
+def _response_schema(
+    records: tuple[EvidenceRecord, ...], choice_context: ChoiceContext | None = None
+) -> dict[str, Any]:
+    """Bind prompt and provider guidance to the same eligible evidence and choices."""
+    schema = deepcopy(_SYNTHESIS_SCHEMA)
+    if records:
+        schema["oneOf"][0]["properties"]["evidence_ids"]["items"]["enum"] = sorted(
+            {record.evidence_id for record in records}
+        )
+    schema["oneOf"][2]["properties"]["clarification"]["properties"]["selector"][
+        "properties"
+    ]["evidence_id"]["enum"] = sorted(
+        record.evidence_id for record in records if record.kind == "query"
+    )
+    if choice_context is not None:
+        topics = schema["oneOf"][1]["properties"]["clarification"]["properties"][
+            "requirements"
+        ]["items"]
+        topics["enum"] = [
+            topic
+            for topic in choice_context.allowed_topics
+            if topic != "record_selector"
+        ]
+        if "record_selector" not in choice_context.allowed_topics:
+            schema["oneOf"].pop(2)
+        if not topics["enum"]:
+            schema["oneOf"].pop(1)
+    return schema
+
+
 def _messages(
     user_text: str,
     records: tuple[EvidenceRecord, ...],
@@ -399,6 +429,7 @@ def _messages(
     task_context: Sequence[SynthesisTaskContext] = (),
     choice_context: ChoiceContext | None = None,
     previous_rejection: dict[str, object] | None = None,
+    response_schema: dict[str, Any] | None = None,
 ) -> list[Message]:
     visible_history = [
         message
@@ -422,15 +453,10 @@ def _messages(
         for index, record in enumerate(records)
         if record.kind == "schema"
     ) + history_slots(visible_history)
-    schema = deepcopy(_SYNTHESIS_SCHEMA)
-    if records:
-        schema["oneOf"][0]["properties"]["evidence_ids"]["items"]["enum"] = sorted(
-            {record.evidence_id for record in records}
-        )
-    schema["oneOf"][2]["properties"]["clarification"]["properties"]["selector"][
-        "properties"
-    ]["evidence_id"]["enum"] = sorted(
-        record.evidence_id for record in records if record.kind == "query"
+    schema = (
+        response_schema
+        if response_schema is not None
+        else _response_schema(records, choice_context)
     )
     reference: dict[str, object] = {
         "original_request": user_text,
@@ -444,18 +470,6 @@ def _messages(
     }
     if choice_context is not None:
         reference["choice_context"] = choice_context.as_mapping()
-        topics = schema["oneOf"][1]["properties"]["clarification"]["properties"][
-            "requirements"
-        ]["items"]
-        topics["enum"] = [
-            topic
-            for topic in choice_context.allowed_topics
-            if topic != "record_selector"
-        ]
-        if "record_selector" not in choice_context.allowed_topics:
-            schema["oneOf"].pop(2)
-        if not topics["enum"]:
-            schema["oneOf"].pop(1)
     if previous_rejection is not None:
         reference["previous_rejection"] = previous_rejection
     if task_context:
@@ -566,6 +580,7 @@ async def _attempt(
     timeout_seconds: float,
     *,
     on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
+    response_schema: Mapping[str, Any] | None = None,
 ) -> ProviderRoundResult:
     provider = build_profile_provider(profile_for_role(settings, role))
     budget.consume_global()
@@ -576,6 +591,7 @@ async def _attempt(
         timeout_seconds,
         classify_provider_errors=True,
         on_usage=on_usage,
+        response_schema=response_schema,
     )
 
 
@@ -590,6 +606,8 @@ async def synthesize_answer(
     conversation_context: Sequence[Message] = (),
     task_context: Sequence[SynthesisTaskContext] = (),
     choice_context: ChoiceContext | None = None,
+    on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
+    before_attempt: Callable[[], Awaitable[None]] | None = None,
 ) -> SynthesisResult:
     """Return one grounded answer, then use the fallback profile exactly once."""
     try:
@@ -612,6 +630,7 @@ async def synthesize_answer(
     except ChoiceValidationError as exc:
         raise SynthesisFailedError() from exc
     eligible_ids = frozenset(record.evidence_id for record in records)
+    response_schema = _response_schema(records, choice_context)
     messages = _messages(
         user_text,
         records,
@@ -620,6 +639,7 @@ async def synthesize_answer(
         conversation_context,
         task_context=task_context,
         choice_context=choice_context,
+        response_schema=response_schema,
     )
     loop = asyncio.get_running_loop()
     deadline = loop.time() + settings.synthesis_timeout_seconds
@@ -631,8 +651,26 @@ async def synthesize_answer(
         nonlocal total_usage
         total_usage = _add_usage(total_usage, usage)
         attempt_usages.append(usage)
+        if on_usage is not None:
+            await on_usage(usage)
 
     for role in ("synthesizer", "fallback"):
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise _DeadlineSynthesisError(total_usage, tuple(attempt_usages))
+        # A denied attempt must not be treated as a synthesis failure eligible
+        # for fallback. Keep admission outside the model/parse exception path.
+        if before_attempt is not None:
+            admission_timeout = asyncio.timeout(remaining)
+            try:
+                async with admission_timeout:
+                    await before_attempt()
+            except TimeoutError:
+                if not admission_timeout.expired():
+                    raise
+                raise _DeadlineSynthesisError(
+                    total_usage, tuple(attempt_usages)
+                ) from None
         remaining = deadline - loop.time()
         if remaining <= 0:
             raise _DeadlineSynthesisError(total_usage, tuple(attempt_usages))
@@ -642,7 +680,13 @@ async def synthesize_answer(
         try:
             async with stage_timeout:
                 result = await _attempt(
-                    role, messages, settings, budget, remaining, on_usage=record_usage
+                    role,
+                    messages,
+                    settings,
+                    budget,
+                    remaining,
+                    on_usage=record_usage,
+                    response_schema=response_schema,
                 )
             if len(attempt_usages) == before_usage:
                 await record_usage(result.usage)
@@ -670,6 +714,7 @@ async def synthesize_answer(
                 conversation_context,
                 task_context=task_context,
                 choice_context=choice_context,
+                response_schema=response_schema,
                 previous_rejection={
                     "code": "unrequested_or_answered_clarification",
                     "repair": "Use only the requested open or conflicting choices; otherwise answer from eligible evidence.",

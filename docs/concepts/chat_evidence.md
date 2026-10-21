@@ -45,6 +45,20 @@ source-backed requirements, paths, scopes and lineage. A numerical coincidence
 cannot establish compatible units or source populations. Supported operations
 and complete binding shapes are listed in the [API reference](../api/chat.md#planned-task-and-validation-types).
 
+Arithmetic uses an explicit local Decimal context, independent of the caller's
+precision, rounding, exponent limits, traps and status flags. Finite `sum`,
+`difference`, `multiply` and `sum_products` retain exact numeric values, with
+precision sized for the input coefficients, exponent span and addition carries.
+Exact subnormal values also retain the precision their exponents require.
+`average` first sums exactly. Its final division, `ratio` and `percentage` use
+28 significant digits with round-half-even; percentage scales its numerator
+exactly before division. These are significant digits, not a fixed number of
+decimal places or a currency rounding rule. Arithmetic, including intermediate
+products and sums, beyond Decimal's supported precision or exponent range raises
+`CalculationError` rather than publishing an
+infinite or silently underflowed value. Stored calculation values use the same
+policy when their derivations are verified again.
+
 
 An explicit calculation requirement with `binding=null` is valid pending work.
 It must acquire an exact binding through `bind_calculation` before calculation
@@ -169,7 +183,7 @@ real schema/query witnesses are read and one binding is assigned.
 
 Products are formed with enough precision for both input coefficients. The sum
 then covers the complete actual product exponent span and possible addition
-carries, independent of ambient Decimal precision. A small nonzero residual is
+carries, using the local arithmetic policy above. A small nonzero residual is
 retained when larger positive and negative products cancel, in any row order.
 
 Conversion requires one complete original query population and quantity/unit

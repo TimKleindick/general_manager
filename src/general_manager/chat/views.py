@@ -57,6 +57,7 @@ from general_manager.chat.signals import (
     emit_chat_error,
     emit_chat_message_received,
     emit_chat_mutation_executed,
+    emit_chat_mutation_result,
     emit_chat_tool_called,
 )
 from general_manager.chat.settings import (
@@ -889,16 +890,7 @@ async def _execute_confirmation_request(
             )
         else:
             result = {"status": "cancelled", "reason": "user_rejected"}
-        emit_chat_tool_called(
-            user=getattr(request, "user", None),
-            tool_name="mutate",
-            args={
-                "mutation": pending.mutation_name,
-                "input": pending.payload.get("input", {}),
-            },
-            result=result,
-        )
-        emit_chat_mutation_executed(
+        emit_chat_mutation_result(
             user=getattr(request, "user", None),
             mutation=pending.mutation_name,
             input=pending.payload.get("input", {}),

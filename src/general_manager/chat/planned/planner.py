@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 import json
 import re
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from general_manager.chat.planned.schema_projection import (
     history_slots,
@@ -275,6 +276,27 @@ def _invokes_configured_mutation(command: str, identifiers: tuple[str, ...]) -> 
     return False
 
 
+def _response_schema(
+    user_text: str,
+    messages: list[Message],
+    configured_context: str = "",
+) -> dict[str, Any]:
+    """Use the same phase contract for prompt and optional provider guidance."""
+    if _is_requested_write(user_text):
+        return deepcopy(_PLAN_SCHEMA)
+    visible_history = [
+        message
+        for message in messages
+        if not (message.role == "system" and message.content == configured_context)
+    ]
+    questions = choice_questions(visible_history)
+    if questions or configured_context:
+        return envelope_schema(
+            _PLAN_SCHEMA, questions, configured_context=configured_context
+        )
+    return deepcopy(_PLAN_SCHEMA)
+
+
 def _request_messages(
     user_text: str,
     messages: list[Message],
@@ -283,6 +305,7 @@ def _request_messages(
     correction: bool,
     rejection: dict[str, object] | None = None,
     configured_context: str = "",
+    response_schema: dict[str, Any] | None = None,
 ) -> list[Message]:
     visible_history = [
         message
@@ -298,7 +321,11 @@ def _request_messages(
             for message in planning_history
         ],
         "catalog_and_schema_summary": catalog_summary,
-        "required_json_schema": _PLAN_SCHEMA,
+        "required_json_schema": (
+            response_schema
+            if response_schema is not None
+            else _response_schema(user_text, messages, configured_context)
+        ),
         "valid_plan_examples": PLAN_EXAMPLES,
     }
     questions = (
@@ -310,9 +337,6 @@ def _request_messages(
     if questions or definition_context:
         reference["choice_questions"] = list(questions)
         reference["user_sources"] = user_quote_sources(visible_history)
-        reference["required_json_schema"] = envelope_schema(
-            _PLAN_SCHEMA, questions, configured_context=definition_context
-        )
     if definition_context:
         reference["application_definition_source"] = definition_source(
             definition_context
@@ -373,6 +397,7 @@ async def _attempt(
 ) -> ProviderRoundResult:
     provider = build_profile_provider(profile_for_role(settings, role))
     budget.consume_global()
+    response_schema = _response_schema(user_text, messages, configured_context)
     return await complete_provider_round(
         provider,
         _request_messages(
@@ -382,11 +407,13 @@ async def _attempt(
             correction=correction,
             rejection=rejection,
             configured_context=configured_context,
+            response_schema=response_schema,
         ),
         [],
         settings.evidence_timeout_seconds,
         classify_provider_errors=True,
         on_usage=on_usage,
+        response_schema=response_schema,
     )
 
 
@@ -399,6 +426,7 @@ async def plan_request(
     *,
     configured_context: str | None = None,
     on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
+    before_attempt: Callable[[], Awaitable[None]] | None = None,
 ) -> PlanningResult:
     """Request, correct once, then fall back once to a validated plan."""
     if configured_context is None:
@@ -420,6 +448,10 @@ async def plan_request(
     deadline_failures = 0
     rejection: dict[str, object] | None = None
     for role, correction in attempts:
+        # Admission failures are terminal orchestration decisions, not invalid
+        # model output to correct or retry with another profile.
+        if before_attempt is not None:
+            await before_attempt()
         before_usage = len(attempt_usages)
 
         async def record_usage(usage: TokenUsage, observed_role: str = role) -> None:

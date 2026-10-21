@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 import json
 from math import isfinite
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from general_manager.chat.planned.evidence import canonical_call_identity
 from general_manager.chat.planned.schema_projection import compact_messages
@@ -21,6 +21,7 @@ from general_manager.chat.providers.base import (
     BaseLLMProvider,
     DoneEvent,
     Message,
+    StructuredOutputProvider,
     TextChunkEvent,
     TokenUsage,
     ToolCallEvent,
@@ -120,6 +121,7 @@ async def complete_provider_round(
     *,
     classify_provider_errors: bool = False,
     on_usage: Callable[[TokenUsage], Awaitable[None]] | None = None,
+    response_schema: Mapping[str, Any] | None = None,
 ) -> ProviderRoundResult:
     """Buffer one bounded provider stream without changing legacy iteration.
 
@@ -147,9 +149,17 @@ async def complete_provider_round(
         async with deadline:
             prepared_messages = compact_messages(messages)
             try:
+                events = (
+                    provider.complete_structured(
+                        prepared_messages, tools, response_schema=response_schema
+                    )
+                    if response_schema is not None
+                    and isinstance(provider, StructuredOutputProvider)
+                    else provider.complete(prepared_messages, tools)
+                )
                 stream = aiter(
                     completed_events(
-                        provider.complete(prepared_messages, tools),
+                        events,
                         on_usage=account_usage,
                     )
                 )

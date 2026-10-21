@@ -7,7 +7,7 @@ import json
 from copy import deepcopy
 from typing import Any, TypeGuard
 
-EVALUATION_CONTRACT = "chat-evaluation/3"
+EVALUATION_CONTRACT = "chat-evaluation/4"
 SELECTION_MANIFEST_VERSION = "chat-eval-selection/1"
 
 

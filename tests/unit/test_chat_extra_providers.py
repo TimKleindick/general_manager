@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from django.test.utils import override_settings
+import pytest
 
 from general_manager.chat.providers import (
     AnthropicProvider,
@@ -89,6 +90,133 @@ class _OpenAIChatCompletions:
 class _OpenAIClient:
     def __init__(self) -> None:
         self.chat = SimpleNamespace(completions=_OpenAIChatCompletions())
+
+
+class _OwnedOpenAIStream(_AsyncIterator):
+    def __init__(self, owner) -> None:
+        super().__init__(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            index=0,
+                            finish_reason="stop",
+                            delta=SimpleNamespace(content="Hello", tool_calls=[]),
+                        )
+                    ],
+                    usage=None,
+                )
+            ]
+        )
+        self.owner = owner
+
+    async def __anext__(self) -> object:
+        if self._index == 1:
+            await self.owner.fail_or_wait("stream")
+        return await super().__anext__()
+
+    async def close(self) -> None:
+        self.owner.closed.append("stream")
+        if self.owner.cleanup_fails:
+            message = "stream cleanup failed"
+            raise RuntimeError(message)
+
+
+class _OwnedOpenAIClient:
+    def __init__(self, *, phase="", failure=None, cleanup_fails=False) -> None:
+        self.phase = phase
+        self.failure = failure
+        self.cleanup_fails = cleanup_fails
+        self.started = asyncio.Event()
+        self.closed = []
+        self.stream = _OwnedOpenAIStream(self)
+        self.chat = SimpleNamespace(completions=self)
+
+    async def fail_or_wait(self, phase):
+        if phase == self.phase:
+            if self.failure is not None:
+                raise self.failure
+            self.started.set()
+            await asyncio.Event().wait()
+
+    async def create(self, **_kwargs):
+        await self.fail_or_wait("create")
+        return self.stream
+
+    async def close(self) -> None:
+        self.closed.append("client")
+        if self.cleanup_fails:
+            message = "client cleanup failed"
+            raise RuntimeError(message)
+
+
+@pytest.mark.parametrize("early_close", [False, True])
+def test_openai_closes_owned_client_and_stream(early_close):
+    async def run():
+        client = _OwnedOpenAIClient()
+        with patch.object(OpenAIProvider, "_build_async_client", return_value=client):
+            events = OpenAIProvider().complete([], [])
+            if early_close:
+                assert isinstance(await anext(events), TextChunkEvent)
+                await events.aclose()
+            else:
+                collected = [event async for event in events]
+                assert isinstance(collected[-1], DoneEvent)
+            assert client.closed == ["stream", "client"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("phase", ["create", "stream"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_openai_closes_owned_resources_preserving_primary_failure(phase, cleanup_fails):
+    async def run():
+        failure = RuntimeError("request failed")
+        client = _OwnedOpenAIClient(
+            phase=phase, failure=failure, cleanup_fails=cleanup_fails
+        )
+        with patch.object(OpenAIProvider, "_build_async_client", return_value=client):
+            with pytest.raises(RuntimeError) as raised:
+                _ = [event async for event in OpenAIProvider().complete([], [])]
+            assert raised.value is failure
+            assert client.closed == (
+                ["client"] if phase == "create" else ["stream", "client"]
+            )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("phase", ["create", "stream"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_openai_closes_owned_resources_on_cancellation(phase, cleanup_fails):
+    async def run():
+        client = _OwnedOpenAIClient(phase=phase, cleanup_fails=cleanup_fails)
+
+        async def consume():
+            return [event async for event in OpenAIProvider().complete([], [])]
+
+        with patch.object(OpenAIProvider, "_build_async_client", return_value=client):
+            task = asyncio.create_task(consume())
+            await client.started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert client.closed == (
+                ["client"] if phase == "create" else ["stream", "client"]
+            )
+
+    asyncio.run(run())
+
+
+def test_openai_closes_client_when_stream_cleanup_fails():
+    async def run():
+        client = _OwnedOpenAIClient(cleanup_fails=True)
+        with patch.object(OpenAIProvider, "_build_async_client", return_value=client):
+            with pytest.raises(RuntimeError, match="stream cleanup failed"):
+                _ = [event async for event in OpenAIProvider().complete([], [])]
+            assert client.closed == ["stream", "client"]
+
+    asyncio.run(run())
 
 
 class _OpenAIFragmentedToolCompletions:

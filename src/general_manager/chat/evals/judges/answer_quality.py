@@ -1,4 +1,4 @@
-"""Judge: natural language answer quality."""
+"""Judge: expected keyword coverage, not factual correctness of every claim."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class AnswerQualityScore:
-    """Result of answer quality judgment."""
+    """Expected keyword coverage; a perfect score does not prove factuality."""
 
     passed: bool
     score: float  # 0.0 - 1.0
@@ -30,7 +30,8 @@ def judge_answer_quality(
     answer text.  The score is the fraction of expected items found.  The case
     passes when the score is >= 80% **and** none of the ``answer_excludes``
     items appear. Strict turn contracts set ``require_all`` so every expected
-    fact must be present.
+    fact must be present. Unknown extra claims are outside this metric: use the
+    product contract's bounded checks and independent semantic adjudication.
     """
     answer_lower = answer_text.lower()
 
