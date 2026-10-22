@@ -17,6 +17,7 @@ class AnswerSenseScore:
     score: float
     checks: dict[str, bool] = field(default_factory=dict)
     issues: list[str] = field(default_factory=list)
+    abstentions: list[str] = field(default_factory=list)
 
 
 def _passing_answer_sense() -> AnswerSenseScore:
@@ -164,6 +165,7 @@ def judge_answer_sense(
         )
 
     result_terms = {value.casefold() for value in expected_values}
+    abstentions: list[str] = []
     # Mixed schema/data contracts can legitimately list field names beside rows.
     if result_terms and all(
         str(value).casefold() in result_terms
@@ -173,6 +175,9 @@ def judge_answer_sense(
         if list_messages is not None:
             checks["no_unsupported_list_values"] = not list_messages
             issues.extend(list_messages)
+            abstentions = _quantity_prose_abstentions(
+                tool_calls, tool_results, answer_text, expected_values
+            )
 
     passed_count = sum(1 for passed in checks.values() if passed)
     score = passed_count / len(checks) if checks else 1.0
@@ -181,7 +186,40 @@ def judge_answer_sense(
         score=score,
         checks=checks,
         issues=issues,
+        abstentions=abstentions,
     )
+
+
+def _quantity_prose_abstentions(
+    tool_calls: list[dict[str, Any]],
+    tool_results: list[Any],
+    answer_text: str,
+    expected_values: list[str],
+) -> list[str]:
+    """Abstain on numeric prose outside a list contract's supported labels.
+
+    TurnRecord has no claim-to-measurement bindings. Even a matching scalar in
+    query data cannot establish a prose claim's subject, metric, unit or scope.
+    This bounded recognizer is not a general natural-language adjudicator.
+    """
+    # Detect the start, not the end, of an amount: units and exponent notation
+    # may follow immediately (7kg, .5kg, 7e3kg). This does not parse its value.
+    number = re.compile(r"(?<!\w)[+-]?\d")
+    reasons = []
+    prose = re.sub(
+        r"^(?:[ \t]*(?:[-*+] |\d+[.)] ))+", "", answer_text, flags=re.MULTILINE
+    )
+    for sentence in _answer_sentences(prose):
+        body = sentence.strip()
+        if (
+            body.strip(".*_` ").casefold()
+            in {value.casefold() for value in expected_values}
+            or _answer_list_messages(tool_calls, tool_results, sentence) == []
+        ):
+            continue
+        if number.search(body):
+            reasons.append("Unverifiable quantity prose in list answer: " + sentence)
+    return reasons
 
 
 def _as_dict(value: Any) -> dict[str, Any]:

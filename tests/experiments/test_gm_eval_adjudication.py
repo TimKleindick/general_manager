@@ -181,6 +181,16 @@ def response(packet: dict[str, Any], *, wrong: bool = False) -> str:
             "status": "completed",
             "request_sha256": packet["request_sha256"],
             "answer_sha256": packet["packet"]["answer_sha256"],
+            **(
+                {
+                    "additional_quantities": {
+                        "reviewed_entire_answer": True,
+                        "claims": [],
+                    }
+                }
+                if packet["schema_version"] == "1.6"
+                else {}
+            ),
             "facts": facts,
             "fact_support": {
                 field: {

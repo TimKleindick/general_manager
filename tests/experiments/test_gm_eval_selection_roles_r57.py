@@ -170,6 +170,11 @@ def _roundtrip(facts, *, semantic=True):
     ids = [e["id"] for e in request["packet"]["evidence"]]
     raw = {
         "schema_version": request["schema_version"],
+        **(
+            {"additional_quantities": {"reviewed_entire_answer": True, "claims": []}}
+            if request["schema_version"] == "1.6"
+            else {}
+        ),
         "status": "completed",
         "request_sha256": request["request_sha256"],
         "answer_sha256": request["packet"]["answer_sha256"],

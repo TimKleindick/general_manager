@@ -49,7 +49,7 @@ def test_build_summary_counts_contract_and_overall_passes() -> None:
     )
 
     assert summary == ReadinessSummary(
-        evaluation_contract="chat-evaluation/4",
+        evaluation_contract="chat-evaluation/5",
         failed=1,
         run_hash="hash1",
         gate="demo",

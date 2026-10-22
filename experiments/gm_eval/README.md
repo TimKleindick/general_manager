@@ -155,6 +155,25 @@ independent evidence, without Gold. The scorer checks exact results, arithmetic,
 units, populations and declared source routes. PASS, FAIL and UNSCORED all stay
 visible on the full selected denominator; not-executed work remains explicit.
 
+Current reference 1.17 uses adjudication schema 1.6 and the additional-quantities/1
+coverage policy. The **same single judge response** must review the complete
+current answer for extra quantities, including prose, tables and written-out
+amounts. Each extra claim needs a verbatim quote, a verifiability decision and
+source references supporting its entity, metric, unit, period/population and
+arithmetic. Matching numeric scalars alone do not establish support. This remains
+semantic judgment; deterministic quote/hash validation proves binding, not that
+the judge found every claim or judged it correctly.
+
+Only an otherwise PASS becomes UNSCORED for unverifiable, missing, malformed or
+stale additional coverage. Existing fact/semantic failures remain FAIL. Coverage
+is separate from the existing dimension verdicts and never repairs required facts
+or relaxes answer_supported. Saved coverage is validated again at scoring, and
+all cases stay in the selected denominator. No additional judge call is made.
+Archived reference versions retain schema 1.5 metadata; saved requests retain
+their original schemas and instructions. New current-reference metadata records
+the new judge contract; numeric Gold, conversations and historical reports are
+unchanged. Old live results do not measure this new gate.
+
 A separately reviewed source correction requires a new candidate/control binding.
 An offline reassessment of a saved answer has its own old-report hash, selected
 new reference and factual review; it is not a new candidate or judge invocation.

@@ -393,6 +393,11 @@ def test_blind_request_parse_score_roundtrip_uses_117_and_equivalent_source():
     packet = request["packet"]
     result = {
         "schema_version": request["schema_version"],
+        **(
+            {"additional_quantities": {"reviewed_entire_answer": True, "claims": []}}
+            if request["schema_version"] == "1.6"
+            else {}
+        ),
         "status": "completed",
         "request_sha256": request["request_sha256"],
         "answer_sha256": packet["answer_sha256"],

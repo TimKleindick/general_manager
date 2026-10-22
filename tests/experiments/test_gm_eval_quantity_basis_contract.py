@@ -91,7 +91,7 @@ def test_actual_siwc_judge_body_receives_generic_basis_contract(language, varian
     for part in RULE_PARTS:
         assert part in wire
     assert answer in wire
-    assert original["schema_version"] == packet["schema_version"] == "1.5"
+    assert original["schema_version"] == packet["schema_version"] == "1.6"
 
 
 @pytest.mark.parametrize(

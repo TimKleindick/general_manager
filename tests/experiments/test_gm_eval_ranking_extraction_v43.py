@@ -36,9 +36,9 @@ def test_ranking_coverage_has_one_shared_closed_vocabulary():
 
 
 def test_extraction_version_is_shared_with_oracle_metadata():
-    assert adjudication.SCHEMA_VERSION == "1.5"
-    assert getattr(semantic_contracts, "ADJUDICATION_SCHEMA_VERSION", None) == "1.5"
-    assert expected("E081")["adjudication_schema_version"] == "1.5"
+    assert adjudication.SCHEMA_VERSION == "1.6"
+    assert getattr(semantic_contracts, "ADJUDICATION_SCHEMA_VERSION", None) == "1.6"
+    assert expected("E081")["adjudication_schema_version"] == "1.6"
 
 
 @pytest.mark.parametrize(
@@ -81,7 +81,9 @@ def test_visible_order_is_never_filled_or_repaired_from_reference(damage):
 @pytest.mark.parametrize("version", ["1.3", "1.4"])
 def test_legacy_response_requires_its_original_request(monkeypatch, version):
     with monkeypatch.context() as old:
-        old.setattr(adjudication, "SCHEMA_VERSION", version)
+        archived = fixtures.expectation()
+        archived["adjudication_schema_version"] = version
+        old.setattr(fixtures, "expectation", lambda: archived)
         request = fixtures.request()
     raw = fixtures.response(request)
     assert (
@@ -91,7 +93,7 @@ def test_legacy_response_requires_its_original_request(monkeypatch, version):
         == "completed"
     )
     new_request = fixtures.request()
-    assert new_request["schema_version"] == "1.5"
+    assert new_request["schema_version"] == "1.6"
     assert (
         adjudication.parse_adjudication_response(
             new_request, raw, judge_id="offline-mismatch"
@@ -99,7 +101,7 @@ def test_legacy_response_requires_its_original_request(monkeypatch, version):
         == "judge_failure"
     )
     relabelled = json.loads(raw)
-    relabelled["schema_version"] = "1.5"
+    relabelled["schema_version"] = "1.6"
     assert (
         adjudication.parse_adjudication_response(
             new_request, json.dumps(relabelled), judge_id="offline-relabel"

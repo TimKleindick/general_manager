@@ -35,7 +35,7 @@ def test_units_and_measurement_basis_have_distinct_contracts():
     shapes = fact_schemas(expected("E027"))
     assert "tax basis" in shapes["unit"]["description"]
     assert "quantity basis" in JUDGE_INSTRUCTION
-    assert SCHEMA_VERSION == "1.5"
+    assert SCHEMA_VERSION == "1.6"
 
 
 def test_missing_exclusion_is_still_required():
@@ -140,7 +140,9 @@ def test_nested_identity_errors_are_never_repaired_from_gold(damage):
 
 def test_legacy_response_is_parseable_only_against_its_original_request(monkeypatch):
     with monkeypatch.context() as local:
-        local.setattr(adjudication, "SCHEMA_VERSION", "1.3")
+        archived = fixtures.expectation()
+        archived["adjudication_schema_version"] = "1.3"
+        local.setattr(fixtures, "expectation", lambda: archived)
         legacy = fixtures.request()
     raw = fixtures.response(legacy)
     parsed = adjudication.parse_adjudication_response(
@@ -148,7 +150,7 @@ def test_legacy_response_is_parseable_only_against_its_original_request(monkeypa
     )
     assert parsed["status"] == "completed"
     current = fixtures.request()
-    assert current["schema_version"] == "1.5"
+    assert current["schema_version"] == "1.6"
     assert (
         adjudication.parse_adjudication_response(
             current, raw, judge_id="offline-compatibility"
@@ -156,7 +158,7 @@ def test_legacy_response_is_parseable_only_against_its_original_request(monkeypa
         == "judge_failure"
     )
     relabeled = json.loads(raw)
-    relabeled["schema_version"] = "1.5"
+    relabeled["schema_version"] = "1.6"
     assert (
         adjudication.parse_adjudication_response(
             current, json.dumps(relabeled), judge_id="offline-compatibility"

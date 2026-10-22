@@ -108,7 +108,7 @@ def test_new_report_identifies_native_execution_without_revising_answer_policy(
 ):
     configure_case(monkeypatch)
     report = evaluate(tmp_path)
-    assert report["execution_contract"] == "chat-evaluation/4"
+    assert report["execution_contract"] == "chat-evaluation/5"
     assert report["strategy"] == "planned"
     assert report["eval_revision"] == "answer-correctness-v3"
     row = report["results"][0]

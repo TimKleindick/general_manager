@@ -80,6 +80,23 @@ _SINGLE_WINNER_COMPARISONS_DESCRIPTION = (
     "a wrong winner or value. Every comparison, table cell, order, scope and "
     "completeness claim remains independently required under answer_supported."
 )
+_QUANTITY_INSTRUCTION = """Review the ENTIRE current answer for additional quantitative assertions beyond
+the requested extracted facts. Include numeric and written-out amounts, counts,
+percentages, ranges and comparisons, including explanatory prose and tables.
+Return additional_quantities.reviewed_entire_answer=true only after that review.
+For every additional assertion supply a nonempty verbatim answer_quote, a reason,
+verifiable=true/false, and eligible evidence_ids. Verifiable requires evidence
+supporting the SAME subject/entity, metric, unit, period/population and arithmetic.
+A matching number in another row, field or tool call is not support. Never treat
+a broad fact_support quote as covering every assertion inside it. Use false and
+empty evidence_ids when the available evidence cannot verify an extra assertion,
+even if it might be correct. An empty claims list means there are no additional
+quantity assertions, not that the answer was difficult to review.
+This is an ADDITIONAL coverage check. Preserve all existing answer_supported and
+fact_support decisions, including false/unsupported for wrong or unsupported
+claims. Do not convert any existing failure to abstention, hide a wrong requested
+fact as an extra, repair values, or waive any semantic check.
+"""
 JUDGE_INSTRUCTION = "".join(
     (
         """You independently review one saved candidate answer.
@@ -131,6 +148,7 @@ including excluded entities, against evidence in answer_supported; a wrong rank,
 unsupported exclusion or incorrect total must still fail that check.
 """,
         _LEGACY_RANKED_IDS_INSTRUCTION,
+        _QUANTITY_INSTRUCTION,
         """For plan/actuals year maps, extract aggregate totals separately from optional
 component breakdowns; check every additional breakdown in its semantic check.
 Use stable entity IDs only when the answer or saved evidence resolves the name
@@ -1202,11 +1220,47 @@ def _discovery(
     return discovered
 
 
+def _quantity_schema(evidence_ids: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["reviewed_entire_answer", "claims"],
+        "properties": {
+            "reviewed_entire_answer": {"type": "boolean", "const": True},
+            "claims": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "answer_quote",
+                        "verifiable",
+                        "reason",
+                        "evidence_ids",
+                    ],
+                    "properties": {
+                        "answer_quote": {"type": "string"},
+                        "verifiable": {"type": "boolean"},
+                        "reason": {"type": "string"},
+                        "evidence_ids": {
+                            "type": "array",
+                            "uniqueItems": True,
+                            "items": {"type": "string", "enum": evidence_ids},
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
 def _response_schema(
     shapes: Mapping[str, Any],
     checks: list[dict[str, Any]],
     evidence_ids: list[str],
     data_fields: list[str],
+    *,
+    schema_version: str = SCHEMA_VERSION,
 ) -> dict[str, Any]:
     refs = {"type": "array", "items": {"type": "string"}, "uniqueItems": True}
 
@@ -1284,7 +1338,12 @@ def _response_schema(
         },
     }
     properties = {
-        "schema_version": {"const": SCHEMA_VERSION},
+        **(
+            {"additional_quantities": _quantity_schema(evidence_ids)}
+            if schema_version == "1.6"
+            else {}
+        ),
+        "schema_version": {"const": schema_version},
         "status": {"const": "completed"},
         "request_sha256": {"type": "string"},
         "answer_sha256": {"type": "string"},
@@ -1345,7 +1404,7 @@ def _response_schema(
                     "reason",
                 ],
                 "properties": {
-                    "schema_version": {"const": SCHEMA_VERSION},
+                    "schema_version": {"const": schema_version},
                     "status": {"const": "ungradable"},
                     "request_sha256": {"type": "string"},
                     "answer_sha256": {"type": "string"},
@@ -1829,6 +1888,8 @@ def judge_messages(request: Mapping[str, Any]) -> list[Message]:
     fields = request["packet"].get("fact_fields")
     ranking = fields.get("ranked_ids") if isinstance(fields, Mapping) else None
     instruction = JUDGE_INSTRUCTION
+    if request.get("schema_version") != "1.6":
+        instruction = instruction.replace(_QUANTITY_INSTRUCTION, "")
     # The exact description is already request-hash bound. Archived 1.14
     # requests retain their original system text rather than being reinterpreted.
     if (
@@ -1961,11 +2022,13 @@ def build_adjudication_request(
             }
         ),
     }
+    schema_version = expectation.get("adjudication_schema_version", SCHEMA_VERSION)
     packet["response_schema"] = _response_schema(
         packet["fact_fields"],
         packet["semantic_checks"],
         [row["id"] for row in packet["evidence"]],
         packet["grounding_contract"]["data_fields"],
+        schema_version=schema_version,
     )
     provenance = (
         _candidate_failure_provenance(run, turn)
@@ -1979,7 +2042,7 @@ def build_adjudication_request(
         provenance=provenance,
     )
     request = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
         "case_id": expectation["case_id"],
         "turn_index": turn_index,
         "candidate_failure_flags": failure_flags,
@@ -2090,7 +2153,7 @@ def _validate_request(request: Mapping[str, Any]) -> None:
         ):
             _invalid("invalid_clarification_contract")
     trace = observation.get("trace", {})
-    if request.get("schema_version") in {"1.3", "1.4", "1.5"}:
+    if request.get("schema_version") in {"1.3", "1.4", "1.5", "1.6"}:
         context = {
             "current_question": packet.get("current_question"),
             "visible_history": packet.get("visible_history"),
@@ -2239,10 +2302,47 @@ def _validate_history_support(
             _invalid("unsupported_history_scope")
 
 
+def _quantity_review_status(coverage: Any, answer: str, evidence_ids: list[str]) -> str:
+    """Validate the same coverage shape at parsing and saved-result consumption."""
+    valid = _matches_shape(coverage, _quantity_schema(evidence_ids))
+    if valid:
+        valid = all(
+            claim["answer_quote"].strip()
+            and claim["answer_quote"] in answer
+            and claim["reason"].strip()
+            and bool(claim["evidence_ids"]) == claim["verifiable"]
+            for claim in coverage["claims"]
+        )
+    if not valid:
+        return "invalid"
+    return (
+        "verified"
+        if all(claim["verifiable"] for claim in coverage["claims"])
+        else "unverifiable"
+    )
+
+
+def _quantity_coverage(
+    request: Mapping[str, Any], value: Mapping[str, Any], trace_digest: str
+) -> dict[str, Any]:
+    packet = request["packet"]
+    coverage = value.get("additional_quantities")
+    return {
+        "policy": "additional-quantities/1",
+        "status": _quantity_review_status(
+            coverage, packet["answer"], [row["id"] for row in packet["evidence"]]
+        ),
+        "review": deepcopy(coverage),
+        "answer_sha256": packet["answer_sha256"],
+        "request_sha256": request["request_sha256"],
+        "evidence_trace_sha256": trace_digest,
+    }
+
+
 def parse_adjudication_response(
     request: Mapping[str, Any], raw: str, *, judge_id: str
 ) -> dict[str, Any]:
-    """Validate a saved external response; every error stays explicitly unscored.
+    """Validate a saved external response without concealing established failures.
 
     The request's ``packet.response_schema`` describes the JSON structure. A
     completed response echoes ``schema_version``, ``request_sha256`` and
@@ -2257,6 +2357,10 @@ def parse_adjudication_response(
     hashes are additionally validated. Unknown fact values use null/absent
     support. To decline review, return only the three echoed headers,
     ``status: ungradable`` and a nonempty ``reason``.
+
+    Schema 1.6 also requires additional_quantities. Its coverage is validated
+    separately: missing or invalid coverage can abstain from a PASS but cannot
+    discard otherwise valid failure evidence from the original checks.
     """
     try:
         _validate_request(request)
@@ -2279,7 +2383,25 @@ def parse_adjudication_response(
                     and support.get("evidence_ids") == []
                 ):
                     _invalid("incomplete_data_fact_support")
-        if not _matches_shape(value, packet["response_schema"]):
+        schema = packet["response_schema"]
+        core = value
+        if request.get("schema_version") == "1.6":
+            # Validate prior checks independently so malformed new coverage cannot
+            # discard a proven FAIL and promote it to a judge/infrastructure error.
+            schema = deepcopy(schema)
+            completed = schema["oneOf"][0]
+            completed["properties"].pop("additional_quantities", None)
+            completed["required"] = [
+                name
+                for name in completed["required"]
+                if name != "additional_quantities"
+            ]
+            core = {
+                key: item
+                for key, item in value.items()
+                if key != "additional_quantities"
+            }
+        if not _matches_shape(core, schema):
             _invalid("invalid_adjudication_schema")
         if (
             value["answer_sha256"] != packet["answer_sha256"]
@@ -2368,6 +2490,11 @@ def parse_adjudication_response(
         }
         return {
             "status": "completed",
+            **(
+                {"quantity_coverage": _quantity_coverage(request, value, trace_digest)}
+                if request.get("schema_version") == "1.6"
+                else {}
+            ),
             "case_id": request["case_id"],
             "turn_index": request["turn_index"],
             "observation": observation,
@@ -2552,13 +2679,57 @@ def score_adjudicated(
         observation.pop("extraction", None)
         observation.pop("fact_support", None)
         judgment = None
-    return score_turn(
+    scored = score_turn(
         expectation,
         observation,
         registry=registry,
         semantic_judgment=judgment,
         failure_flags=flags,
     )
+    if expectation.get("adjudication_schema_version") == "1.6":
+        coverage = result.get("quantity_coverage")
+        extraction = observation.get("extraction", {})
+        valid = (
+            isinstance(coverage, Mapping)
+            and coverage.get("policy") == "additional-quantities/1"
+            and isinstance(extraction, Mapping)
+            and all(
+                isinstance(coverage.get(key), str)
+                and coverage[key] == extraction.get(key)
+                for key in ("answer_sha256", "request_sha256", "evidence_trace_sha256")
+            )
+        )
+        if valid:
+            evidence = observation.get("trace", {}).get("evidence", [])
+            derived = _quantity_review_status(
+                coverage.get("review"),
+                str(observation.get("answer", "")),
+                [
+                    row["id"]
+                    for row in evidence
+                    if isinstance(row, Mapping) and isinstance(row.get("id"), str)
+                ]
+                if isinstance(evidence, list)
+                else [],
+            )
+            valid = coverage.get("status") == derived
+        scored["quantity_coverage"] = (
+            deepcopy(coverage)
+            if valid
+            else {
+                "policy": "additional-quantities/1",
+                "status": "invalid",
+            }
+        )
+        # Existing FAIL/STOP classifications and dimension evidence are immutable.
+        if scored["passed"] and (not valid or coverage.get("status") != "verified"):
+            scored.update(
+                primary_failure="unscored",
+                classification="unscored",
+                passed=False,
+                scored=False,
+            )
+    return scored
 
 
 def score_terminal_no_answer(

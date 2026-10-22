@@ -314,7 +314,10 @@ class _Contract:
         self.physical_provenance_required = case["contract"] == "provenance"
         self.value: dict[str, Any] = {
             "schema_version": reference_version,
-            "adjudication_schema_version": ADJUDICATION_SCHEMA_VERSION,
+            # Archived reference contracts keep their original judge metadata.
+            "adjudication_schema_version": ADJUDICATION_SCHEMA_VERSION
+            if reference_version == "1.17"
+            else "1.5",
             "case_id": case["id"],
             "core_id": case["core_id"],
             "turn_index": turn,

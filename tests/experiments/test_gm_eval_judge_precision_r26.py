@@ -121,6 +121,11 @@ def _claims(
         )
     return {
         "schema_version": packet["schema_version"],
+        **(
+            {"additional_quantities": {"reviewed_entire_answer": True, "claims": []}}
+            if packet["schema_version"] == "1.6"
+            else {}
+        ),
         "status": "completed",
         "request_sha256": packet["request_sha256"],
         "answer_sha256": packet["packet"]["answer_sha256"],

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -310,13 +312,6 @@ def test_contract_requiring_schema_facts_does_not_treat_them_as_extra_rows() -> 
     assert "no_unsupported_list_values" not in result.contract_score.answer_sense.checks
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Open F4 coverage gap: bounded list checks do not adjudicate free prose "
-        "quantity claims; calculation evidence is absent from TurnRecord."
-    ),
-)
 def test_free_prose_invented_quantity_needs_independent_claim_adjudication() -> None:
     case = load_dataset("basic_queries")[0]
     record = _record(
@@ -324,4 +319,107 @@ def test_free_prose_invented_quantity_needs_independent_claim_adjudication() -> 
         "Steel, Aluminum and Cobalt. Steel is available with stock 1,000 kg.",
     )
     record.tool_calls[0]["args"]["manager"] = "MaterialManager"
-    assert not _score_case(case, [record]).passed
+    result = _score_case(case, [record])
+    assert not result.passed
+    assert result.status == "unscored"
+    assert result.abstentions
+    assert result.error is None
+    assert result.contract_score is not None and result.contract_score.passed
+
+
+@pytest.mark.parametrize("answer", ["The total is 42 kg.", "42"])
+def test_required_numeric_main_result_is_not_an_additional_list_claim(
+    answer: str,
+) -> None:
+    assert _score_case(_case(["42"]), [_record(["42"], answer)]).passed
+
+
+def test_german_article_is_not_a_quantity_claim() -> None:
+    assert _score_case(
+        _case(["Oak", "Elm"]),
+        [_record(["Oak", "Elm"], "Oak and Elm. Eine Übersicht ist beigefügt.")],
+    ).passed
+
+
+@pytest.mark.parametrize(
+    "quantity",
+    [
+        "1,000 kg",
+        "2.5 litres",
+        "12%",
+        "€45",
+        "100 units",
+        "7kg",
+        "7e3kg",
+        "7E+3 units",
+        ".5kg",
+    ],
+)
+@pytest.mark.parametrize("names", [["Oak", "Elm"], ["Item-X", "Item-Y"]])
+def test_quantity_prose_cannot_be_grounded_by_a_matching_scalar(
+    names: list[str], quantity: str
+) -> None:
+    record = _record(
+        names, " and ".join(names) + f". {names[0]} has {quantity} in stock."
+    )
+    record.tool_results[0]["data"].append({"unrelated": quantity})
+    result = _score_case(_case(names), [record])
+    assert result.status == "unscored"
+    assert not result.passed
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_quantity_abstention_never_hides_an_existing_failure(reverse: bool) -> None:
+    names = ["Oak", "Elm"]
+    fail = _record(names, "Oak, Elm and Birch. Oak has 7 kg in stock.")
+    unknown = _record(names, "Oak and Elm. Oak has 7 kg in stock.")
+    assert _score_case(_case(names), [fail]).status == "fail"
+    case = _case(names)
+    case.conversation *= 2
+    case.expectations = {"turns": [case.expectations, case.expectations]}
+    records = [fail, unknown]
+    if reverse:
+        records.reverse()
+    result = _score_case(case, records)
+    assert result.status == "fail"
+    assert not result.passed
+
+
+def test_quantity_abstention_is_reported_and_kept_in_readiness_denominator(
+    tmp_path: Path,
+) -> None:
+    from general_manager.chat.evals.readiness import build_summary
+    from general_manager.chat.evals.runner import _write_trace, print_report
+    from general_manager.chat.evals.traces import EvalTraceWriter
+
+    names = ["Oak", "Elm"]
+    case = _case(names)
+    record = _record(names, "Oak and Elm. Oak has 7 kg in stock.")
+    result = _score_case(case, [record])
+    summary = build_summary(
+        gate="offline",
+        run_metadata={
+            "run_hash": "synthetic",
+            "provider": "none",
+            "model": "none",
+            "fixture": "synthetic",
+            "datasets": ["synthetic"],
+        },
+        results=[result],
+    )
+    assert (summary.total, summary.passed, summary.failed, summary.unscored) == (
+        1,
+        0,
+        0,
+        1,
+    )
+    assert summary.pass_rate == 0
+    report = print_report([result], verbose=True)
+    assert "0 PASS, 0 FAIL, 1 UNSCORED" in report
+    assert result.abstentions[0] in report
+    path = tmp_path / "trace.jsonl"
+    _write_trace(EvalTraceWriter(path), case=case, records=[record], result=result)
+    trace = json.loads(path.read_text())
+    assert trace["status"] == "unscored"
+    assert trace["abstentions"] == result.abstentions
+    assert trace["contract"]["violations"] == []

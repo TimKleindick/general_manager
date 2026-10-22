@@ -196,10 +196,21 @@ class EvalResult:
     trace: dict[str, Any] = field(default_factory=dict)
     usage: dict[str, int] = field(default_factory=dict)
     failure_category: str | None = None
+    abstentions: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
-        if self.error is not None or any(not turn.passed for turn in self.turn_results):
+        return (
+            self._quality_passed
+            and not self.abstentions
+            and all(turn.passed for turn in self.turn_results)
+        )
+
+    @property
+    def _quality_passed(self) -> bool:
+        if self.error is not None or any(
+            not turn._quality_passed for turn in self.turn_results
+        ):
             return False
         if self.result_set_score is not None and not self.result_set_score.passed:
             return False
@@ -213,15 +224,21 @@ class EvalResult:
         return True
 
     @property
-    def status(self) -> str:
-        """Separate ungradable execution from a completed quality failure."""
-        if (
+    def _execution_unscored(self) -> bool:
+        return (
             self.error is not None
             and self.error != "missing_turn_answer"
             and self.failure_category != "model_task_failure"
-        ) or any(turn.status == "unscored" for turn in self.turn_results):
+        ) or any(turn._execution_unscored for turn in self.turn_results)
+
+    @property
+    def status(self) -> str:
+        """Preserve execution failures; new abstention cannot conceal a FAIL."""
+        if self._execution_unscored:
             return "unscored"
-        return "pass" if self.passed else "fail"
+        if not self._quality_passed:
+            return "fail"
+        return "pass" if self.passed else "unscored"
 
 
 @dataclass
@@ -467,6 +484,7 @@ def _score_case(
             tool_results=all_tool_results,
             answer_text=full_answer,
         )
+        result.abstentions = result.contract_score.answer_sense.abstentions
 
     # Tool sequence judge
     expected_tools = expectations.get("tool_calls")
@@ -544,6 +562,7 @@ def _write_trace(
             "answer": full_answer,
             "passed": result.passed,
             "status": result.status,
+            "abstentions": result.abstentions,
             "failure_category": result.failure_category,
             "evaluation_contract": EVALUATION_CONTRACT,
             "requests": result.requests,
@@ -562,6 +581,11 @@ def _write_trace(
                     "tool_results": record.tool_results,
                     "answer": record.answer,
                     "error": record.error,
+                    "abstentions": (
+                        result.turn_results[index].abstentions
+                        if index < len(result.turn_results)
+                        else result.abstentions
+                    ),
                     "requests": record.requests,
                     "passed": (
                         result.turn_results[index].passed
@@ -592,6 +616,7 @@ def _write_trace(
                         "score": result.contract_score.answer_sense.score,
                         "checks": result.contract_score.answer_sense.checks,
                         "issues": result.contract_score.answer_sense.issues,
+                        "abstentions": result.contract_score.answer_sense.abstentions,
                     },
                 }
             ),
@@ -1209,6 +1234,8 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
                 lines.append(f"  {r.case.name}: {r.case.description}")
                 if r.error:
                     lines.append(f"    error: {r.error}")
+                for reason in r.abstentions:
+                    lines.append(f"    abstention: {reason}")
                 if r.result_set_score and not r.result_set_score.passed:
                     lines.append(f"    result set: {r.result_set_score.reason}")
                 for index, turn in enumerate(r.turn_results, start=1):
@@ -1216,6 +1243,8 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
                         lines.append(f"    turn {index}: failed")
                         if turn.error:
                             lines.append(f"      error: {turn.error}")
+                        for reason in turn.abstentions:
+                            lines.append(f"      abstention: {reason}")
                         if turn.result_set_score and not turn.result_set_score.passed:
                             lines.append(
                                 f"      result set: {turn.result_set_score.reason}"
