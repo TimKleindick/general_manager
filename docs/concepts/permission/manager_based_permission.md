@@ -235,3 +235,18 @@ duplicate-name protection remains in place.
 ## Superuser bypass
 
 `BasePermission` short-circuits evaluation for users with `is_superuser=True`. Superusers skip all CRUD checks and associated queryset filters, ensuring the registry logic never blocks administrative maintenance tasks.
+
+## Delegation in mutation payloads
+
+For `__based_on__ = "parent"`, create and update checks accept both a `parent`
+manager object and the normalized `parent_id` produced by GraphQL. Normalized
+foreign-key values resolve through the relation's target field, including
+`to_field` relations. Delegation preserves the operation: creating a child checks
+its parent's **create** permission; updates check **update**, and deletes check
+**delete**.
+
+Updates check the proposed parent after applying explicit inputs over existing
+state. If Python callers provide both relation aliases, their input order follows
+ORM normalization: the last alias wins. Missing or null parents retain the
+configured default-permission behavior; invalid identifiers fail rather than
+falling back to those defaults.

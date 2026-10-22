@@ -220,6 +220,20 @@ class _ConfiguredManagerPermission(BasePermission):
             return None
 
         basis_object = getattr(self.instance, __based_on__, notExistent)
+        normalized_basis = False
+        if (
+            isinstance(self.instance, PermissionDataManager)
+            and isinstance(self.instance.permission_data, dict)
+            and self.instance.manager is not None
+            and f"{__based_on__}_id" in self.instance.permission_data
+        ):
+            field_type = self.instance.manager.Interface.get_field_type(__based_on__)
+            if isinstance(field_type, type) and issubclass(field_type, GeneralManager):
+                # Match ORM payload normalization: the last relation alias wins.
+                for key, value in self.instance.permission_data.items():
+                    if key in (__based_on__, f"{__based_on__}_id"):
+                        basis_object = value
+                        normalized_basis = key != __based_on__
         if (
             basis_object is not None
             and basis_object is not notExistent
@@ -232,6 +246,24 @@ class _ConfiguredManagerPermission(BasePermission):
                 if isinstance(basis_object, dict):
                     basis_object = field_type(**basis_object)
                 else:
+                    if normalized_basis:
+                        from django.db.models import ForeignKey
+                        from general_manager.interface.orm_interface import (
+                            OrmInterfaceBase,
+                        )
+
+                        interface = self.instance.manager.Interface
+                        if issubclass(interface, OrmInterfaceBase):
+                            relation = interface._model._meta.get_field(__based_on__)
+                            if (
+                                isinstance(relation, ForeignKey)
+                                and not relation.target_field.primary_key
+                            ):
+                                # A normalized FK value can target a unique non-PK field.
+                                related = relation.related_model._default_manager.get(
+                                    **{relation.target_field.name: basis_object}
+                                )
+                                basis_object = related.pk
                     basis_object = field_type(id=basis_object)
         if basis_object is notExistent:
             if self._is_class_context:

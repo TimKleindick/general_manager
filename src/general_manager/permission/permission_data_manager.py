@@ -110,7 +110,11 @@ class PermissionDataManager(Generic[GeneralManagerData]):
         Returns:
             Wrapper exposing the merged permission state.
         """
-        merged_data: dict[str, object] = {**dict(base_data), **update_data}
+        # Keep explicit updates after existing state, including relation aliases.
+        merged_data: dict[str, object] = {
+            key: value for key, value in base_data if key not in update_data
+        }
+        merged_data.update(update_data)
         return cls(merged_data, base_data.__class__)
 
     @property
