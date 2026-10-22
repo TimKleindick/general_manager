@@ -53,7 +53,7 @@ def test_bounded_list_gate_has_a_distinct_versioned_run_fingerprint() -> None:
         prompt="same prompt",
         tool_definitions=[],
     )
-    assert current["evaluation_contract"] == "chat-evaluation/4"
+    assert current["evaluation_contract"] == "chat-evaluation/5"
     historical = {key: value for key, value in current.items() if key != "run_hash"}
     historical["evaluation_contract"] = "chat-evaluation/3"
     assert current["run_hash"] != stable_hash(historical)

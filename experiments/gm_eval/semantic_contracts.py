@@ -6,7 +6,7 @@ from hashlib import sha256
 import json
 from typing import Any
 
-ADJUDICATION_SCHEMA_VERSION = "1.5"
+ADJUDICATION_SCHEMA_VERSION = "1.6"
 RANKING_KNOWN_VALUES_ONLY = "known_values_only"
 RANKING_COVERAGE = {
     RANKING_KNOWN_VALUES_ONLY: (

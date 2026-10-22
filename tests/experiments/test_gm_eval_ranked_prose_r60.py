@@ -106,9 +106,10 @@ def test_archived_114_shape_keeps_its_legacy_system_text_under_new_code():
 
 
 def test_nonranking_114_request_keeps_its_original_system_text():
-    from tests.experiments.test_gm_eval_adjudication import request
-
-    assert sha256(api().judge_messages(request())[0].content.encode()).hexdigest() == (
+    case = next(row for row in load_catalog() if row["id"] == "E004")
+    contract = expected_turn(case, 0, reference_version="1.14")
+    request = api().build_adjudication_request(contract, saved_run(), 0)
+    assert sha256(api().judge_messages(request)[0].content.encode()).hexdigest() == (
         LEGACY_JUDGE_SHA256
     )
 

@@ -136,11 +136,12 @@ remains FAIL or UNSCORED.
 
 ## 7. Migrate older integrations
 
-New runs identify `chat-evaluation/4` and use the production planned scheduler.
+New runs identify `chat-evaluation/5` and use the production planned scheduler.
 The selected no-argument provider class is bound across planner, executor,
-synthesizer and fallback, with serial evaluator execution. Old `/1`, `/2` and `/3`
+synthesizer and fallback, with serial evaluator execution. Old `/1`, `/2`, `/3` and `/4`
 reports remain readable and unchanged; they are not comparable new baselines.
-Contract `/4` adds a bounded result-list check; it does not establish factual
+Contract `/5` retains the bounded result-list check and adds conservative
+quantity-prose abstention after a recognized list; it does not establish factual
 correctness of arbitrary prose or quantity claims. See the
 [coverage limits](../concepts/chat_evaluation.md#packaged-answer-checks-have-limited-coverage).
 

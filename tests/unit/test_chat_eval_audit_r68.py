@@ -381,13 +381,18 @@ def test_readiness_distinguishes_unscored_from_quality_fail_on_the_full_denomina
 
 @pytest.mark.parametrize(
     "historical_contract",
-    ["chat-evaluation/1", "chat-evaluation/2", "chat-evaluation/3"],
+    [
+        "chat-evaluation/1",
+        "chat-evaluation/2",
+        "chat-evaluation/3",
+        "chat-evaluation/4",
+    ],
 )
 def test_old_baseline_is_readable_but_cannot_authorize_a_new_contract_gate(
     historical_contract,
 ):
     current = _summary(_strategy_result(False))
-    assert current.evaluation_contract == "chat-evaluation/4"
+    assert current.evaluation_contract == "chat-evaluation/5"
     historical = replace(current, evaluation_contract=historical_contract)
     comparison = compare_to_baseline(current, historical)
     assert not comparison.comparable

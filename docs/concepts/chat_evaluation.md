@@ -22,7 +22,7 @@ production or installed CLI fallback.
 
 ## Execution and provider completion
 
-New installed/source evaluation runs identify `chat-evaluation/4`. They use one
+New installed/source evaluation runs identify `chat-evaluation/5`. They use one
 thin read-only adapter over the production planner, executor, synthesizer and
 native tools. The chosen provider is pinned across the roles; deterministic
 provider/tool replacements require explicit fixture configuration. Mutation plans
@@ -55,7 +55,9 @@ preserved rather than converted into a quality verdict.
   the quality contract. A diagnosed rejected-action cycle is a model failure.
 - **UNSCORED:** a technical provider, transport, deadline or budget failure
   prevents a valid quality assessment. A partial answer does not erase a proven
-  technical failure in another task.
+  technical failure in another task. An otherwise passing answer also remains
+  UNSCORED when the quantity-coverage check cannot verify an additional claim;
+  this new abstention never replaces an existing FAIL, including across turns.
 
 Both FAIL and UNSCORED prevent readiness. Keep the entire selected denominator;
 never drop unscored cases to improve the pass rate. An empty selection is not a
@@ -90,10 +92,15 @@ results do not. Unrecognized list syntax is not recorded as a passing list check
 This rule does not extract arbitrary prose, unknown inline multiword labels,
 punctuated multiword bullet sentences, prefaced or later lists,
 negated/excluded membership, entity-to-field associations,
-quantities, units, or derived calculations. A correct list followed by an
-invented quantity can still pass these packaged checks. Independent semantic
-claim adjudication remains necessary for that coverage; the source experiment's
-separate judge is described below. New checks do not reinterpret historical
+quantities, units, or derived calculations. Contract `/5` additionally abstains
+on digit-bearing prose after a recognized list, excluding supported bare numeric
+labels and list numbering. This is conservative: a matching scalar in tool data
+does not prove the prose claim's entity, metric, unit or scope. Abstention reasons
+are separate from contract violations and execution errors and appear in traces
+and verbose reports. Main numeric answers outside the recognized-list grammar
+are not treated as additional claims. Written-out quantities and arbitrary prose
+remain outside this bounded detector. Independent semantic claim adjudication
+remains necessary; the source experiment's separate judge is described below. New checks do not reinterpret historical
 reports or demonstrate new live-model quality.
 
 ## Freeze the actual comparison cohort

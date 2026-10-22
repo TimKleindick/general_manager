@@ -634,9 +634,10 @@ a legacy provider loop. Production mutation permissions and confirmation are
 unchanged. Each turn permits at most 10 provider dispatches, including planner
 and synthesis calls; native evidence/synthesis deadlines still apply.
 
-New reports carry `chat-evaluation/4`. Historical `/1`, `/2` and `/3` reports remain
+New reports carry `chat-evaluation/5`. Historical `/1`, `/2`, `/3` and `/4` reports remain
 readable but cannot be used as comparable baselines for current execution.
-Contract `/4` adds a bounded result-list membership check. The answer keyword
+Contract `/5` retains the bounded result-list check and adds separate
+quantity-prose abstention after a recognized list. The answer keyword
 score still does not establish factual correctness of every claim; see the
 [packaged check limits](../concepts/chat_evaluation.md#packaged-answer-checks-have-limited-coverage).
 Internal legacy strategy and injected-recovery options are removed; a request
