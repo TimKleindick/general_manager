@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.86.4 (2026-10-22)
+
+### Bug Fixes
+
+- Resolve normalized parent permission delegation
+  ([`202fd38`](https://github.com/TimKleindick/general_manager/commit/202fd38d4cbe3d2cab9b5ccd64b444ee732f716a))
+
+### Documentation
+
+- Clarify Meilisearch task timeout exceptions
+  ([`e7fbc29`](https://github.com/TimKleindick/general_manager/commit/e7fbc2993f4f52dcb17f17386a6f8a683499c5b2))
+
+- Document recent public API changes
+  ([`13d5d66`](https://github.com/TimKleindick/general_manager/commit/13d5d66f9620cf65c787764708e77648fbc9ab51))
+
+- Qualify filterable identity shadow settings
+  ([`c566fb9`](https://github.com/TimKleindick/general_manager/commit/c566fb92cdcc0129d0b796fb833a9f71af1f2a5b))
+
+
 ## v0.86.3 (2026-10-14)
 
 ### Bug Fixes
