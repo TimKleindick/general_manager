@@ -162,25 +162,11 @@ class TestGraphQLHistoricalReads(GeneralManagerTransactionTestCase):
         for at in (denied_at, None):
             response = self.detail(at)
             self.assertResponseNoErrors(response)
-            self.assertEqual(
-                response.json()["data"]["snapshotRecord"],
-                {
-                    "name": None,
-                    "cachedName": None,
-                    "parent": None,
-                },
-            )
+            self.assertIsNone(response.json()["data"]["snapshotRecord"])
         self.record.update(ignore_permission=True, visible=True)
         response = self.detail(denied_at)
         self.assertResponseNoErrors(response)
-        self.assertEqual(
-            response.json()["data"]["snapshotRecord"],
-            {
-                "name": None,
-                "cachedName": None,
-                "parent": None,
-            },
-        )
+        self.assertIsNone(response.json()["data"]["snapshotRecord"])
         for at, names in ((self.before_change, ["Old record"]), (denied_at, [])):
             response = self.query(
                 "query($at: DateTime!) @asOf(date: $at) { "
@@ -210,5 +196,5 @@ class TestGraphQLHistoricalReads(GeneralManagerTransactionTestCase):
 
     def test_http_before_creation_does_not_fall_back_to_current(self):
         response = self.detail(self.before_creation)
-        self.assertResponseHasErrors(response)
+        self.assertResponseNoErrors(response)
         self.assertIsNone(response.json()["data"]["snapshotRecord"])
