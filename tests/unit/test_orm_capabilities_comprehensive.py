@@ -339,6 +339,126 @@ class TestOrmReadCapability:
         assert has_application_atomic.call_count == 2
         has_application_atomic.assert_called_with("secondary")
 
+    @pytest.fixture
+    def historical_read_backend(self):
+        """Provide configurable persistence/history boundaries for real read execution."""
+
+        class Model:
+            history = object()
+
+            class DoesNotExist(Exception):
+                pass
+
+        history = Mock(spec=OrmHistoryCapability)
+
+        class InterfaceInstance:
+            _model = Model
+
+            def __init__(self) -> None:
+                self.pk = 7
+                self._search_date = timezone.now()
+
+            @classmethod
+            def require_capability(cls, _name, *, expected_type):
+                return history
+
+        manager = Mock()
+        manager.get.return_value = SimpleNamespace(pk=7)
+        support = Mock()
+        support.get_manager.return_value = manager
+        with (
+            patch(
+                "general_manager.interface.capabilities.orm.support.get_support_capability",
+                return_value=support,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.support.is_soft_delete_enabled",
+                return_value=False,
+            ),
+            patch(
+                "general_manager.interface.capabilities.orm.with_observability",
+                side_effect=lambda *_args, **kwargs: kwargs["func"](),
+            ),
+        ):
+            yield InterfaceInstance(), manager, history
+
+    @pytest.mark.parametrize("ambient", [False, True], ids=["explicit", "ambient"])
+    @pytest.mark.parametrize("live_exists", [False, True], ids=["missing-live", "live"])
+    def test_history_backend_refusal_does_not_return_live_data(
+        self, historical_read_backend, ambient, live_exists
+    ):
+        instance, manager, history = historical_read_backend
+        if not live_exists:
+            manager.get.side_effect = instance._model.DoesNotExist("missing live row")
+        backend_error = HistoryNotSupportedError("history backend unavailable")
+        history.get_historical_record.side_effect = backend_error
+        history.get_historical_record_by_pk.side_effect = backend_error
+        context = as_of(instance._search_date) if ambient else nullcontext()
+        expected_error = (
+            HistoricalReadNotSupportedError if ambient else HistoryNotSupportedError
+        )
+
+        with context, pytest.raises(expected_error) as raised:
+            OrmReadCapability().get_data(instance)
+
+        if ambient:
+            assert raised.value.__cause__ is backend_error
+        else:
+            assert raised.value is backend_error
+        if live_exists:
+            history.get_historical_record.assert_called_once_with(
+                type(instance), manager.get.return_value, instance._search_date
+            )
+            history.get_historical_record_by_pk.assert_not_called()
+        else:
+            history.get_historical_record_by_pk.assert_called_once_with(
+                type(instance), instance.pk, instance._search_date
+            )
+            history.get_historical_record.assert_not_called()
+
+    @pytest.mark.parametrize("ambient", [False, True], ids=["explicit", "ambient"])
+    def test_missing_live_and_historical_rows_preserve_original_lookup_error(
+        self, historical_read_backend, ambient
+    ):
+        instance, manager, history = historical_read_backend
+        missing_error = instance._model.DoesNotExist("original missing row")
+        manager.get.side_effect = missing_error
+        history.get_historical_record_by_pk.return_value = None
+        context = as_of(instance._search_date) if ambient else nullcontext()
+
+        with context, pytest.raises(instance._model.DoesNotExist) as raised:
+            OrmReadCapability().get_data(instance)
+
+        assert raised.value is missing_error
+        history.get_historical_record_by_pk.assert_called_once_with(
+            type(instance), instance.pk, instance._search_date
+        )
+        history.get_historical_record.assert_not_called()
+
+    @pytest.mark.parametrize("error_type", [NotImplementedError, TypeError])
+    def test_history_capability_loss_after_preflight_fails_closed(
+        self, historical_read_backend, error_type
+    ):
+        instance, manager, history = historical_read_backend
+        lookup_error = error_type("history capability became unavailable")
+        # A custom capability provider can succeed during preflight but fail
+        # when the read obtains its handler; the live row must not escape.
+        with (
+            as_of(instance._search_date),
+            patch.object(
+                type(instance),
+                "require_capability",
+                side_effect=[history, lookup_error],
+            ),
+            pytest.raises(HistoricalReadNotSupportedError) as raised,
+        ):
+            OrmReadCapability().get_data(instance)
+
+        assert raised.value.__cause__ is lookup_error
+        manager.get.assert_called_once_with(pk=instance.pk)
+        history.get_historical_record.assert_not_called()
+        history.get_historical_record_by_pk.assert_not_called()
+
     def test_get_data_retrieves_instance_by_pk(self):
         """Test that get_data retrieves model instance by primary key."""
         capability = OrmReadCapability()
