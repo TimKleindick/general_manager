@@ -20,7 +20,7 @@ These tutorials walk you through common development tasks when working with Gene
 16. [Operate workflow outbox/dead letters](workflow_ops.md)
 17. [Run search reconciliation](search_reconciliation.md)
 18. [Upload files through GraphQL](graphql_file_uploads.md)
-19. [Use direct S3 uploads](graphql_file_uploads_s3.md)
+19. [Use S3 uploads through the authenticated proxy](graphql_file_uploads_s3.md)
 20. [Add LLM chat to a GeneralManager project](install_llm_chat.md)
 21. [Run the installed chat evaluation suite](run_chat_evals.md)
 22. [Keep ORM writes and history on one database](orm_atomic_writes.md)

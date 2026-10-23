@@ -1577,3 +1577,76 @@ def test_optional_download_metadata_and_hostile_basename_fallbacks(
         database_alias="default",
     ) == ("friendly.png", "image/png")
     assert views._download_basename("folder/bad\x00name.png") == "download"
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(GENERAL_MANAGER=_ENABLED_UPLOADS)
+def test_native_s3_proxy_rejects_replay_concurrent_transfer_and_wrong_owner(
+    owner: object,
+    other_user: object,
+    pending_upload: Callable[..., PendingUpload],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from general_manager.uploads import views
+    from general_manager.uploads.s3 import S3ProxyUploadAdapter
+    from tests.unit.test_upload_s3_adapter import FakeS3Client, FakeS3Storage
+
+    client = FakeS3Client()
+    storage = FakeS3Storage(client)
+    registry = UploadAdapterRegistry()
+    resolved = registry.resolve(storage)
+    assert isinstance(resolved, S3ProxyUploadAdapter)
+    monkeypatch.setattr(views, "upload_adapter_registry", registry)
+    monkeypatch.setattr(ProxyUploadRecord._meta.get_field("avatar"), "storage", storage)
+    upload = pending_upload(
+        adapter_id=resolved.adapter_id,
+        adapter_version=str(resolved.adapter_version),
+        storage_fingerprint=resolved.storage_fingerprint(),
+    )
+
+    def transfer(user: object) -> HttpResponse:
+        return views.proxy_upload_view(
+            _request(user=user, authorization=upload.authorization), upload.intent.id
+        )
+
+    other = pending_upload(
+        adapter_id=resolved.adapter_id,
+        adapter_version=str(resolved.adapter_version),
+        storage_fingerprint=resolved.storage_fingerprint(),
+    )
+    mismatched = views.proxy_upload_view(
+        _request(user=owner, authorization=upload.authorization), other.intent.id
+    )
+    assert mismatched.status_code == 401
+    assert transfer(other_user).status_code == 404
+    assert client.put_calls == []
+    started, release = Event(), Event()
+    original_put = client.put_object
+
+    def blocking_put(**kwargs: Any) -> Any:
+        started.set()
+        assert release.wait(timeout=5)
+        return original_put(**kwargs)
+
+    monkeypatch.setattr(client, "put_object", blocking_put)
+
+    def first_transfer() -> HttpResponse:
+        close_old_connections()
+        try:
+            return transfer(owner)
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(first_transfer)
+        assert started.wait(timeout=5)
+        try:
+            assert transfer(owner).status_code == 409
+        finally:
+            release.set()
+        assert first.result(timeout=5).status_code == 204
+    assert transfer(owner).status_code == 409
+    assert len(client.put_calls) == 1
+    assert client.put_calls[0]["IfNoneMatch"] == "*"
+    assert len(client.objects) == 1
+    assert client.presigned_url_calls == []

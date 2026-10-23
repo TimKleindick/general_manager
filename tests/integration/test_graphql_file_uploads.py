@@ -13,6 +13,8 @@ from unittest.mock import patch
 from uuid import UUID
 
 import pytest
+import graphene
+from types import SimpleNamespace
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
@@ -26,6 +28,7 @@ from general_manager import api
 from general_manager.api.graphql import GraphQL
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.manager.input import Input
 from general_manager.uploads.adapters import (
     ExactPublicDownloadAdapter,
     ProxyUploadAdapter,
@@ -400,6 +403,107 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
             **headers,
         )
         self.assertEqual(response.status_code, 204, response.content)
+
+    def _create_with_file_constructor_input(self, value, *, user=None):
+        """Exercise the generated schema with an optional ORM constructor input."""
+        interface = self.UploadProfile.Interface
+        with patch.object(
+            interface,
+            "input_fields",
+            {**interface.input_fields, "document": Input(str, required=False)},
+        ):
+            mutation = GraphQL.generate_create_mutation_class(
+                self.UploadProfile, {"success": graphene.Boolean()}
+            )
+            root = type(
+                "FileInputMutation",
+                (graphene.ObjectType,),
+                {"create": mutation.Field()},
+            )
+            query = type(
+                "FileInputQuery",
+                (graphene.ObjectType,),
+                {"ready": graphene.Boolean()},
+            )
+            schema = graphene.Schema(query=query, mutation=root)
+            return schema.execute(
+                'mutation($file: UploadToken!) { create(title: "File input", document: $file) { success } }',
+                variable_values={"file": value},
+                context_value=SimpleNamespace(user=user or self.user),
+            )
+
+    def test_file_constructor_input_rejects_raw_storage_key(self) -> None:
+        result = self._create_with_file_constructor_input("documents/private.pdf")
+        self.assertTrue(result.errors)
+        self.assertEqual(result.errors[0].extensions["code"], "UPLOAD_TOKEN_INVALID")
+        self.assertFalse(self.UploadProfile.Interface._model.objects.exists())
+
+    def test_file_constructor_input_consumes_token_and_rejects_replay(self) -> None:
+        body = b"%PDF-1.4\nfile input fixture\n%%EOF\n"
+        begun = self._begin(
+            field="document",
+            filename="input.pdf",
+            body=body,
+            content_type="application/pdf",
+        )
+        self._transfer(begun, body, content_type="application/pdf")
+        created = self._create_with_file_constructor_input(begun["token"])
+        self.assertIsNone(created.errors)
+        intent = UploadIntent.objects.get(original_filename="input.pdf")
+        self.assertEqual(intent.state, UploadIntentState.CONSUMED.value)
+        row = self.UploadProfile.Interface._model.objects.get()
+        self.assertEqual(row.document.name, intent.final_key)
+        self.assertNotEqual(row.document.name, begun["token"])
+        replay = self._create_with_file_constructor_input(begun["token"])
+        self.assertEqual(replay.errors[0].extensions["code"], "UPLOAD_ALREADY_CONSUMED")
+        self.assertEqual(self.UploadProfile.Interface._model.objects.count(), 1)
+
+    def test_file_constructor_input_preserves_actor_binding(self) -> None:
+        body = b"%PDF-1.4\nactor binding fixture\n%%EOF\n"
+        begun = self._begin(
+            field="document",
+            filename="owner.pdf",
+            body=body,
+            content_type="application/pdf",
+        )
+        self._transfer(begun, body, content_type="application/pdf")
+        other_user = get_user_model().objects.create_user(username="other-upload-owner")
+        result = self._create_with_file_constructor_input(
+            begun["token"], user=other_user
+        )
+        self.assertTrue(result.errors)
+        self.assertFalse(self.UploadProfile.Interface._model.objects.exists())
+        intent = UploadIntent.objects.get(original_filename="owner.pdf")
+        self.assertNotEqual(intent.state, UploadIntentState.CONSUMED.value)
+
+    def test_file_constructor_input_preserves_field_binding(self) -> None:
+        begun = self._begin(field="avatar", filename="wrong-field.png", body=_PNG)
+        self._transfer(begun, _PNG)
+        result = self._create_with_file_constructor_input(begun["token"])
+        self.assertEqual(result.errors[0].extensions["code"], "UPLOAD_BINDING_MISMATCH")
+        self.assertFalse(self.UploadProfile.Interface._model.objects.exists())
+
+    def test_file_constructor_input_preserves_operation_binding(self) -> None:
+        target = self.UploadProfile.create(
+            creator_id=self.user.pk,
+            title="Existing target",
+            ignore_permission=True,
+        )
+        body = b"%PDF-1.4\noperation fixture\n%%EOF\n"
+        begun = self._begin(
+            field="document",
+            filename="update-only.pdf",
+            body=body,
+            content_type="application/pdf",
+            operation="UPDATE",
+            object_id=str(target.id),
+        )
+        self._transfer(begun, body, content_type="application/pdf")
+        result = self._create_with_file_constructor_input(begun["token"])
+        self.assertEqual(result.errors[0].extensions["code"], "UPLOAD_BINDING_MISMATCH")
+        self.assertEqual(self.UploadProfile.Interface._model.objects.count(), 1)
+        target_row = self.UploadProfile.Interface._model.objects.get()
+        self.assertFalse(target_row.document.name)
 
     def test_begin_proxy_create_query_and_signed_get_head_download(self) -> None:
         begun = self._begin(field="avatar", filename="portrait.png", body=_PNG)
