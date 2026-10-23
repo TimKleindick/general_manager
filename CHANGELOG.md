@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.86.6 (2026-10-23)
+
+### Bug Fixes
+
+- Prevent GraphQL mutation control overrides
+  ([`9d53f97`](https://github.com/TimKleindick/general_manager/commit/9d53f97531d756662ccddd6f596dc21ffc9bcb3a))
+
+- Reject mutation controls before upload preflight
+  ([`0d0c0c7`](https://github.com/TimKleindick/general_manager/commit/0d0c0c77e24a0f03257e8a354d3b48e341516dfa))
+
+
 ## v0.86.5 (2026-10-23)
 
 ### Bug Fixes
