@@ -6,24 +6,14 @@ from general_manager.chat.planned.evidence import EvidenceStore
 from general_manager.chat.planned.models import PlannedTask
 
 INSTRUCTION = (
-    " SELECTIVE_SCHEMA_BINDING: pending_schema_bindings identifies explicit detail work. "
-    "Inspect the manager's own compact overview first. observed_sources points only to "
-    "current same-task observations in task_evidence; it is not a completed requirement. "
-    "Follow the output field and root argument type signatures for the actual query and "
-    "calculation paths. Select only missing object/input/enum definitions named by that "
-    "manager's observed type_manifest. Before binding, discover every required "
-    "next-hop input/enum/object name with targeted detail reads at that same snapshot; "
-    "these discovery observations may remain unlinked and cannot complete the task. "
-    "Once the needed type set is known, use bind_schema with requirement_id, types and "
-    "the exact observed snapshot, then read those details with the same manager, names, "
-    "snapshot and requirement_id. Binding alone supplies no schema evidence; "
-    "read or repeat the exact selected definitions to link every bound type. "
-    "Do not try to rebind or widen a declared selection. Manager references require their target's own "
-    "overview and requirement. Never replace missing details with a full-schema rescue. "
-    "Once current required fields, filters, entity identity and unit contracts are "
-    "observed, bind calculations, calculate and complete with the eligible evidence; "
-    "schema_complete=false for selective views is not an obstacle. Preserve declared "
-    "legacy full requirements, snapshot/exposure checks and legitimate blockers."
+    "SELECTIVE_SCHEMA_BINDING: read the manager's own overview; discover all needed next-hop "
+    "object/input/enum names from its type_manifest and same-snapshot details. observed_sources are "
+    "not completed requirements. When selectors are known, bind_schema once "
+    "(requirement_id/types/snapshot), then read those exact definitions linked to that ID. Binding "
+    "is not evidence. No rebind/widen/full rescue; manager references need their own "
+    "overview/requirement. With fields, filters, identities and units witnessed, "
+    "bind/calculate/complete; selective schema_complete=false is valid. Preserve legacy full and "
+    "snapshot/exposure checks. "
 )
 
 
