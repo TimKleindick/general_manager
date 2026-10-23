@@ -17,7 +17,22 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip \
     && pip install -r /app/requirements/production.txt
 
-COPY . /app
+# Copy application inputs explicitly; runtime credentials stay on the host.
+COPY README.md LICENSE /app/
+COPY src/ /app/src/
+COPY example_project/outer_rim_logistics/pyproject.toml \
+    example_project/outer_rim_logistics/README.md \
+    example_project/outer_rim_logistics/__init__.py \
+    example_project/outer_rim_logistics/manage.py \
+    /app/example_project/outer_rim_logistics/
+COPY example_project/outer_rim_logistics/orl/ /app/example_project/outer_rim_logistics/orl/
+COPY example_project/outer_rim_logistics/crew/ /app/example_project/outer_rim_logistics/crew/
+COPY example_project/outer_rim_logistics/maintenance/ /app/example_project/outer_rim_logistics/maintenance/
+COPY example_project/outer_rim_logistics/mission/ /app/example_project/outer_rim_logistics/mission/
+COPY example_project/outer_rim_logistics/supply/ /app/example_project/outer_rim_logistics/supply/
+COPY example_project/outer_rim_logistics/docker/entrypoint.sh \
+    example_project/outer_rim_logistics/docker/entrypoint-celery.sh \
+    /app/example_project/outer_rim_logistics/docker/
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -e /app \

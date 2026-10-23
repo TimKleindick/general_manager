@@ -29,6 +29,27 @@ cp .env.example .env
 docker compose up --build
 ```
 
+The application build uses the repository-root `.dockerignore`; the supporting
+service builds use the `.dockerignore` in this directory. Runtime secret files,
+local environment files, certificates, logs, and backups are excluded from the
+build contexts. Application images copy only package files and entrypoint
+scripts. Keep credentials in the runtime secret mounts.
+
+If you previously built images after creating real secret files, treat those
+credentials as exposed to anyone with access to the images or their layers.
+Rotate the affected credentials, rebuild with `docker compose build --no-cache`,
+and remove the affected images and cached layers from builders and registries
+under your control. Rebuilding does not remove credentials from older images.
+
+Run the build-context regression checks from the repository root:
+
+```bash
+python tests/packaging/test_docker_build_context.py -v
+```
+
+Docker is required for the two synthetic-secret image-layer checks. Without it,
+those checks are skipped and only the static COPY boundary checks run.
+
 Services (all via Nginx):
 - App: `https://localhost:${ORL_HTTPS_PORT}/graphql/`
 - Metrics: `https://localhost:${ORL_HTTPS_PORT}/metrics/`
