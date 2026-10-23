@@ -521,6 +521,7 @@ def generate_create_mutation_class(
                 for field_name, value in kwargs.items()
                 if value is not NOT_PROVIDED
             }
+            _reject_mutation_authorization_controls(kwargs)
             _preflight_mutation_uploads(
                 info=info,
                 general_manager_class=generalManagerClass,
@@ -633,6 +634,7 @@ def generate_update_mutation_class(
                 for field_name, value in kwargs.items()
                 if value is not NOT_PROVIDED
             }
+            _reject_mutation_authorization_controls(kwargs)
             _preflight_mutation_uploads(
                 info=info,
                 general_manager_class=generalManagerClass,

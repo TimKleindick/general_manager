@@ -26,6 +26,7 @@ class GraphQLMutationControlsTest(GeneralManagerTransactionTestCase):
         class ProtectedControlRecord(GeneralManager):
             class Interface(DatabaseInterface):
                 name = models.CharField(max_length=100)
+                document = models.FileField(blank=True, default="")
 
             class Permission(ManagerBasedPermission):
                 __create__: ClassVar[list[str]] = ["isAdmin"]
@@ -67,6 +68,36 @@ class GraphQLMutationControlsTest(GeneralManagerTransactionTestCase):
                     self.assertEqual(
                         raised.exception.extensions["code"], "BAD_USER_INPUT"
                     )
+                    self.assertEqual(self.Record.Interface._model.objects.count(), 1)
+                    self.assertEqual(self.Record(id=self.record.id).name, "Original")
+
+    def test_raw_controls_are_rejected_before_file_upload_preflight(self) -> None:
+        from general_manager.uploads.services import preflight_upload_tokens
+
+        for generate, identification in (
+            (generate_create_mutation_class, {}),
+            (generate_update_mutation_class, {"id": self.record.id}),
+        ):
+            mutation = generate(self.Record, {"success": graphene.Boolean()})
+            for control in ("creator_id", "ignore_permission"):
+                with self.subTest(operation=generate.__name__, control=control):
+                    with patch(
+                        "general_manager.uploads.services.preflight_upload_tokens",
+                        wraps=preflight_upload_tokens,
+                    ) as preflight:
+                        with self.assertRaises(GraphQLError) as raised:
+                            mutation.mutate(
+                                None,
+                                self.info,
+                                **identification,
+                                document="",
+                                **{control: True},
+                            )
+                        self.assertIn("reserved key", str(raised.exception))
+                        self.assertEqual(
+                            raised.exception.extensions["code"], "BAD_USER_INPUT"
+                        )
+                        preflight.assert_not_called()
                     self.assertEqual(self.Record.Interface._model.objects.count(), 1)
                     self.assertEqual(self.Record(id=self.record.id).name, "Original")
 

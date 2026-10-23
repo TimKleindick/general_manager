@@ -20,8 +20,8 @@ and `history_comment` for manager execution metadata. Schema generation rejects
 editable interface fields with these names, including relation aliases such as
 `creator` that normalize to `creator_id`. Rename colliding fields or make them
 read-only. At runtime, payloads containing `creator_id` or `ignore_permission`
-are rejected with `BAD_USER_INPUT`, including collisions introduced by relation
-normalization. The actor always comes from the authenticated context. The
+are rejected with `BAD_USER_INPUT` before upload-token processing. A second
+check rejects collisions introduced by relation normalization. The actor always comes from the authenticated context. The
 optional `historyComment` argument remains available as audit metadata.
 
 ## Capability hints
