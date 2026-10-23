@@ -82,7 +82,7 @@ intent, and adapter. Do not send it to a storage endpoint.
 ```javascript
 const response = await fetch(instructions.uploadUrl, {
   method: instructions.method,
-  credentials: "same-origin",
+  credentials: "same-origin", // Cross-origin session cookies require "include".
   headers: Object.fromEntries(instructions.headers.map(({name, value}) => [name, value])),
   body: file,
 });
@@ -109,11 +109,18 @@ request timeouts, reverse-proxy body limit, bandwidth, and temporary disk for
 1 MiB in memory before using temporary disk; the HTTP stack may buffer separately.
 Keep admission quotas, transfer rate limits, lease duration, and declared-size
 checks enabled. There is no multipart or resumable upload support.
+The adapter rejects declared
+sizes above the [S3 single-PUT limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html)
+of 5 GiB (5,368,709,120 bytes) when issuing instructions and before opening a
+spool, and also bounds actual streamed bytes. A larger global `MAX_BYTES` does
+not increase this S3-specific limit; other storage backends remain unaffected.
 
 Clients must follow the returned transport instead of assuming S3 URLs. Same-origin
 uploads need no bucket PUT CORS configuration. Cross-origin application clients
 need the application's existing authenticated CORS/CSRF configuration, including
-the returned Authorization header. Existing storage GET/download CORS requirements
+the returned Authorization header, an explicit allowed origin and credentialed
+requests. Use `credentials: "include"` for cross-origin session cookies; the
+`GMUpload` header does not replace the authenticated session. Existing storage GET/download CORS requirements
 are separate. Do not remove bucket permissions or CORS rules blindly during an
 application upgrade.
 

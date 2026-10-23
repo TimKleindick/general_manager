@@ -1263,7 +1263,11 @@ class UploadAdapterRegistry:
         with self._lock:
             explicit = self._resolve_explicit_factory(resolved_storage)
             if explicit is not None:
-                adapter = self._build_adapter(explicit, resolved_storage)
+                if isinstance(explicit, type) and issubclass(explicit, S3UploadAdapter):
+                    return S3ProxyUploadAdapter(resolved_storage)
+                adapter = self._build_adapter(
+                    cast(UploadAdapterFactory, explicit), resolved_storage
+                )
                 if isinstance(adapter, S3UploadAdapter):
                     return S3ProxyUploadAdapter(resolved_storage)
                 return adapter
@@ -1285,13 +1289,27 @@ class UploadAdapterRegistry:
         with self._lock:
             explicit = self._resolve_explicit_factory(resolved_storage)
             if explicit is not None:
-                adapter = self._build_adapter(explicit, resolved_storage)
-                if _adapter_identity(adapter) == identity:
-                    return adapter
                 from general_manager.uploads.s3 import (
                     S3ProxyUploadAdapter,
                     S3UploadAdapter,
                 )
+
+                if (
+                    isinstance(explicit, type)
+                    and issubclass(explicit, S3UploadAdapter)
+                    and identity
+                    == (
+                        S3ProxyUploadAdapter.adapter_id,
+                        S3ProxyUploadAdapter.adapter_version,
+                    )
+                ):
+                    try:
+                        return S3ProxyUploadAdapter(resolved_storage)
+                    except UploadBackendUnsupportedError:
+                        return None
+                adapter = self._build_adapter(explicit, resolved_storage)
+                if _adapter_identity(adapter) == identity:
+                    return adapter
 
                 if isinstance(adapter, S3UploadAdapter) and identity == (
                     S3ProxyUploadAdapter.adapter_id,
