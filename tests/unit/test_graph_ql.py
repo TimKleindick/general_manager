@@ -2849,9 +2849,7 @@ class GraphQLTests(TestCase):
 
     def test_list_resolver_with_invalid_filter_exclude(self):
         """
-        Test that the list resolver returns the original queryset when filter or exclude arguments are invalid JSON.
-
-        If JSON decoding fails for the filter or exclude parameters, ensures the resolver returns the unfiltered queryset under the "items" key.
+        Invalid JSON leaves predicates unapplied while retaining default pagination.
         """
         mock_instance = MagicMock()
         mock_qs = MagicMock()
@@ -2868,7 +2866,10 @@ class GraphQLTests(TestCase):
             ),
         ):
             result = resolver(mock_instance, self.info, filter="bad", exclude="bad")
-            self.assertEqual(result["items"], mock_qs)
+            self.assertEqual(result["items"], mock_qs.__getitem__.return_value)
+            mock_qs.__getitem__.assert_called_once_with(slice(0, 10))
+            mock_qs.filter.assert_not_called()
+            mock_qs.exclude.assert_not_called()
 
     def test_create_filter_options_includes_scalar_filter_variants(self):
         """

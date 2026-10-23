@@ -546,8 +546,8 @@ def test_request_resolver_rejects_global_operations_after_local_materialization(
             return_value=local,
         ),
     ):
-        payload = resolver(object(), _ResolverInfo())
-    assert payload["pageInfo"]["total_count"] is None
+        with pytest.raises(GraphQLError, match="global pagination"):
+            resolver(object(), _ResolverInfo())
 
     with (
         patch(
@@ -579,34 +579,29 @@ def test_request_resolver_rejects_global_operations_after_local_materialization(
             order_by=[{"field": "name", "direction": "ASC"}],
         )
 
-    # The first operation check normally validates ordering before the source
-    # is planned. Once that check has already been handled by a caller, the
-    # incomplete-response guard still translates malformed ordering input.
+    # Operand authorization parses ordering before planning or evaluating the
+    # incomplete-source guard. Malformed direction is rejected at that boundary.
     with (
-        patch(
-            "general_manager.api.graphql_resolvers.get_read_permission_filter",
-            return_value=conditional,
-        ),
         patch(
             "general_manager.api.graphql_resolvers.apply_query_parameter_plan",
             return_value=local,
-        ),
+        ) as plan_query,
         patch(
             "general_manager.api.graphql_resolvers._requested_request_global_operation",
             return_value=None,
-        ),
-        pytest.raises(GraphQLError, match="must be ASC or DESC"),
+        ) as check_global_operation,
+        pytest.raises(GraphQLOrderingInputError, match="must be ASC or DESC"),
     ):
         resolver(
             object(),
             _ResolverInfo(),
             order_by=[{"field": "name", "direction": "SIDEWAYS"}],
         )
+    plan_query.assert_not_called()
+    check_global_operation.assert_not_called()
 
 
-def test_request_resolver_preserves_upstream_page_metadata_without_client_pagination() -> (
-    None
-):
+def test_request_resolver_uses_default_page_for_complete_snapshot() -> None:
     item = _ResolverManager(id=1)
     source = RequestBucket(
         _ResolverManager,
@@ -626,8 +621,9 @@ def test_request_resolver_preserves_upstream_page_metadata_without_client_pagina
         return_value=allow_all,
     ):
         payload = resolver(object(), _ResolverInfo())
-    assert payload["pageInfo"]["current_page"] == 2
-    assert payload["pageInfo"]["page_size"] == 3
+    assert payload["pageInfo"]["current_page"] == 1
+    assert payload["pageInfo"]["page_size"] == 10
+    assert payload["pageInfo"]["total_count"] == 1
 
 
 def test_instance_read_without_permission_class_defaults_to_allowed() -> None:

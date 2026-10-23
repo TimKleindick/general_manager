@@ -262,19 +262,33 @@ GENERAL_MANAGER = {
 }
 ```
 
-Exact mode continues scanning backend pages for each manager until it can return
-the exact authorized total, even when the requested result page is already
-filled. Set `GENERAL_MANAGER["GRAPHQL_SEARCH_TOTAL_MODE"]` to `"bounded"` to
-cap each manager's backend hit scan. The scan limit must be a positive integer
-and defaults to `1000`; the effective per-manager cap is at least the requested
-page end (`page` / `pageSize`) so the current page can still be filled where
-possible. Bounded mode returns the authorized hits found before the cap and
-sets `totalIsExact` to `false` when the resolver hits the cap before observing
-an empty or partial backend page.
+`GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT` is a positive, server-owned candidate budget
+(default `1000`) shared across all manager types in one search resolver call.
+Both total modes obey it. Client-selected `page`, `pageSize`, `types`, and
+`totalMode` cannot increase the budget. Each backend request is limited to the
+remaining budget, and returned hits consume it before hydration or authorization;
+denied, stale, and unexpected-type hits also count.
 
-Clients can override the configured mode per request with `totalMode:
-"exact"` or `totalMode: "bounded"`. Invalid values are rejected as GraphQL
-user-input errors.
+Exact mode scans until all selected types are exhausted. If the budget is
+consumed before exhaustion is established, it raises a GraphQL error with code
+`SEARCH_SCAN_LIMIT_EXCEEDED` and returns no partial exact result. This is
+conservative at the boundary: a full final backend page does not prove that
+there are no more hits, even when a backend's best-effort total equals the cap.
+Narrow the query or select bounded mode instead.
+
+Bounded mode returns the authorized hits found within the same budget and sets
+`totalIsExact` to `false` if exhaustion was not observed. In that case,
+`pageInfo.totalCount` and `pageInfo.totalPages` are `null`. A requested page beyond
+the budget can be incomplete or empty. Cross-type searches spend the budget in
+the existing manager iteration order; bounded results therefore represent only
+the scanned candidates, not a globally complete ranked page.
+
+Clients may choose `totalMode: "exact"` or `totalMode: "bounded"` but cannot
+disable the limit. Invalid modes and non-positive limits are rejected as GraphQL
+user-input errors. A backend returning more hits than requested raises
+`SEARCH_SCAN_LIMIT_EXCEEDED` before those hits are hydrated. This candidate budget
+does not bound time or memory spent internally by a search backend, nor combine
+budgets across separate GraphQL fields or requests.
 
 Note: GraphQL currently keys `types` off manager class names. If you override
 `type_label`, keep it aligned with the class name when using `types` filters.

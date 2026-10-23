@@ -110,6 +110,9 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
     repeated ``connection_init``.
     """
 
+    max_subscriptions: int = 32
+    subscription_setup_timeout: float = 10.0
+
     connection_acknowledged: bool
     connection_params: dict[str, object]
 
@@ -126,6 +129,7 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         self.connection_acknowledged = False
         self.connection_params = {}
         self.active_subscriptions: dict[str, asyncio.Task[None]] = {}
+        self._subscription_setups: dict[str, asyncio.Task[None]] = {}
         subprotocols = self.scope.get("subprotocols", ())
         selected_subprotocol = (
             "graphql-transport-ws"
@@ -145,13 +149,15 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         Notes:
             Awaiting cancelled tasks suppresses asyncio.CancelledError so task cancellation completes silently.
         """
-        tasks = list(self.active_subscriptions.values())
+        setups = getattr(self, "_subscription_setups", {})
+        tasks = list(setups.values()) + list(self.active_subscriptions.values())
         for task in tasks:
             task.cancel()
         for task in tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self.active_subscriptions.clear()
+        setups.clear()
 
     async def receive_json(self, content: object, **_: object) -> None:
         """
@@ -226,6 +232,51 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         await self._send_protocol_message(response)
 
     async def _handle_subscribe(self, content: Mapping[str, object]) -> None:
+        """Reserve bounded capacity before starting cancellable subscription setup."""
+        if not self.connection_acknowledged:
+            await self.close(code=4401)
+            return
+        operation_id = content.get("id")
+        if not isinstance(operation_id, str) or not isinstance(
+            content.get("payload", {}), dict
+        ):
+            await self.close(code=4403)
+            return
+
+        if not hasattr(self, "_subscription_setups"):
+            self._subscription_setups = {}
+        if operation_id in self._subscription_setups:
+            await self.close(code=4409)
+            return
+        occupied = len(self.active_subscriptions) + len(self._subscription_setups)
+        if occupied >= self.max_subscriptions:
+            if operation_id in self.active_subscriptions:
+                await self.close(code=4409)
+                return
+            await self._reject_subscription_setup(
+                operation_id, "Concurrent subscription limit exceeded."
+            )
+            return
+
+        # Register before yielding so concurrent setup requests cannot share a slot.
+        task = asyncio.create_task(self._start_subscription(content))
+        self._subscription_setups[operation_id] = task
+        try:
+            await asyncio.wait_for(task, timeout=self.subscription_setup_timeout)
+        except TimeoutError:
+            await self._reject_subscription_setup(
+                operation_id, "Subscription setup timed out."
+            )
+        finally:
+            self._subscription_setups.pop(operation_id, None)
+
+    async def _reject_subscription_setup(self, operation_id: str, message: str) -> None:
+        await self._send_protocol_message(
+            {"type": "error", "id": operation_id, "payload": [{"message": message}]}
+        )
+        await self._send_protocol_message({"type": "complete", "id": operation_id})
+
+    async def _start_subscription(self, content: Mapping[str, object]) -> None:
         """
         Handle an incoming GraphQL "subscribe" protocol message and initiate or deliver the corresponding subscription results.
 
@@ -427,7 +478,12 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
             return
 
         if operation_id in self.active_subscriptions:
-            await self._stop_subscription(operation_id)
+            try:
+                await self._stop_subscription(operation_id)
+            except BaseException:
+                # Setup may time out while the previous stream is closing.
+                await self._close_iterator(subscription)
+                raise
 
         self.active_subscriptions[operation_id] = asyncio.create_task(
             self._stream_subscription(
@@ -532,8 +588,12 @@ class GraphQLSubscriptionConsumer(AsyncJsonWebsocketConsumer):
         if task is None:
             return
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        try:
             await task
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
 
     async def _send_execution_result(
         self, operation_id: str, result: ExecutionResult

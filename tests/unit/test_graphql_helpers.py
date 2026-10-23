@@ -9,7 +9,7 @@ from unittest import mock
 import pytest
 import graphene  # type: ignore[import]
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from graphql import GraphQLError, OperationType
 from graphql import parse
 from graphql.language.ast import (
@@ -49,6 +49,7 @@ from general_manager.uploads.errors import InvalidImageError, UploadError
 from general_manager.utils.format_string import snake_to_camel
 from general_manager.api.graphql_resolvers import (
     apply_grouping,
+    normalize_pagination,
     apply_pagination,
     apply_query_parameter_plan,
     apply_query_parameters,
@@ -625,6 +626,49 @@ class GraphQLHelperTests(SimpleTestCase):
         first_page = apply_pagination(queryset, page=None, page_size=5)
 
         assert [item.identification["id"] for item in first_page] == [0, 1, 2, 3, 4]
+
+    def test_apply_pagination_no_args_uses_finite_default(self) -> None:
+        queryset = SimpleBucket(
+            _DummyManager, [_DummyManager(id=value) for value in range(12)]
+        )
+        assert len(apply_pagination(queryset, None, None)) == 10
+
+    def test_oversized_page_is_rejected_before_getting_source(self) -> None:
+        getter = mock.Mock(side_effect=AssertionError("must not obtain source"))
+        resolver = create_list_resolver(getter, _DummyManager)
+        with pytest.raises(ValueError, match="pageSize must not exceed 100"):
+            resolver(None, mock.Mock(), page_size=101)
+        getter.assert_not_called()
+
+    def test_maximum_page_size_is_allowed_and_empty_metadata_is_finite(self) -> None:
+        effective = normalize_pagination(None, 100)
+        assert effective.page_size == 100
+        assert effective.page == 1
+        resolver = create_list_resolver(
+            lambda _parent, _inactive: SimpleBucket(_DummyManager, []), _DummyManager
+        )
+        payload = resolver(None, mock.Mock(field_nodes=()))
+        assert payload["items"] == []
+        assert payload["pageInfo"] == {
+            "total_count": 0,
+            "page_size": 10,
+            "current_page": 1,
+            "total_pages": 0,
+        }
+
+    def test_invalid_pagination_settings_fail_closed(self) -> None:
+        for config in (
+            {"GRAPHQL_DEFAULT_PAGE_SIZE": 0},
+            {"GRAPHQL_DEFAULT_PAGE_SIZE": True},
+            {"GRAPHQL_MAX_PAGE_SIZE": False},
+            {"GRAPHQL_MAX_PAGE_SIZE": "100"},
+            {"GRAPHQL_DEFAULT_PAGE_SIZE": 101, "GRAPHQL_MAX_PAGE_SIZE": 100},
+        ):
+            with (
+                override_settings(GENERAL_MANAGER=config),
+                pytest.raises(ValueError, match="GRAPHQL_"),
+            ):
+                normalize_pagination(None, None)
 
     def test_apply_pagination_preserves_empty_group_bucket(self) -> None:
         """An empty grouped page must not invoke GroupBucket's invalid empty slice."""

@@ -107,7 +107,24 @@ Stop a stream by sending:
 {"type": "complete", "id": "project-1"}
 ```
 
-If `complete.id` is missing, not a string, or does not match an active subscription, the message is ignored. Sending a second `subscribe` message with an existing `id` first creates the replacement iterator, then cancels and awaits the previous task before the replacement stream is registered. Cancellation errors from the previous task are suppressed, but other exceptions raised by the previous task propagate and prevent the replacement from being registered. Disconnecting the WebSocket cancels and awaits every active subscription task; only cancellation errors are suppressed during disconnect.
+Each socket admits at most 32 active streams and in-progress subscription setups
+combined. The consumer reserves a setup slot before awaiting resolver work; a
+replacement also needs a spare slot while its previous stream remains active.
+At capacity, a new operation receives `error` followed by `complete`, without
+running subscription setup. A replacement at capacity, or a duplicate id whose
+setup is still running, closes the socket with `4409`.
+
+Subscription setup has a 10-second cooperative timeout. Timed-out setup is
+cancelled, its reservation is released, and the operation receives `error` then
+`complete`. Disconnect also cancels in-progress setup. A replacement iterator is
+closed if cancelling the previous stream fails or setup times out. Subclasses
+may override the consumer's positive `max_subscriptions` and
+`subscription_setup_timeout` class attributes to tune these bounds. The timeout
+cannot interrupt synchronous blocking work or resolver code that suppresses
+cancellation; custom resolvers must cooperate with cancellation. These per-socket
+bounds do not limit how many sockets a client can open.
+
+If `complete.id` is missing, not a string, or does not match an active subscription, the message is ignored. Sending a second `subscribe` message with an existing `id` first creates the replacement iterator, then cancels and awaits the previous task before the replacement stream is registered. Cancellation errors from the previous task are suppressed, while cancellation of the setup itself propagates. Other exceptions raised by the previous task propagate and prevent the replacement from being registered. Disconnecting the WebSocket cancels and awaits every active subscription task; only cancellation errors are suppressed during disconnect.
 
 `ping` messages receive `pong`; when the `ping` payload is not `null`, it is echoed. Missing or `null` ping payloads produce `{"type": "pong"}` with no `payload` key:
 
@@ -123,6 +140,7 @@ Protocol-level validation uses WebSocket close codes without custom close reason
 - `4400`: incoming JSON is not an object, the message has no recognized `type`, or the `type` is missing.
 - `4401`: `subscribe` was sent before `connection_init`. This acknowledgement check runs before validating `id` or `payload`, so a pre-acknowledgement `subscribe` with malformed fields still closes with `4401`.
 - `4403`: the subscription `id` is not a string or the subscription `payload` is not an object.
+- `4409`: the operation id already has an in-progress setup, or replacing an active id would exceed the subscription limit.
 - `4429`: `connection_init` was sent more than once.
 
 Repeated `connection_init` is idempotent only after the first `connection_init`
@@ -160,7 +178,7 @@ task errors still propagate from the await.
 
 - Subscriptions require Django Channels. If `get_channel_layer()` returns `None`, the resolver raises a descriptive GraphQL error explaining that `CHANNEL_LAYERS` must be configured.
 - Managers are automatically decorated with `@data_change` and emit `pre_data_change` and `post_data_change` signals. GraphQL receives `post_data_change` immediately, but deep-copies the event identification and schedules websocket publication with `transaction.on_commit()` using the changed manager's database alias. For ordinary events created inside a transaction, both the instance channel group (`gm_subscriptions.<Manager>.<digest>`) and class channel group (`gm_subscriptions.<Manager>.__class__`) receive the event only after the outermost commit. Events registered in a rolled-back transaction or savepoint disappear without publication.
-- For ordinary identified row-level class events, subscriptions hydrate the changed manager and call `can_read_instance()` together in an async-safe worker using the user captured when the subscription starts, before yielding the event. In particular, a newly created object is visible to hydration only after it is committed, eliminating the pre-commit create race while preserving object-level permission checks. This event-level object authorization is separate from later field-level authorization for the selected payload. Aggregate batch `refresh` events have no identification, yield `item = null`, and are exempt from object-level permission hydration and checking.
+- For ordinary identified row-level class events, subscriptions hydrate the changed manager and call `can_read_instance()` together in an async-safe worker using the user captured when the subscription starts, before yielding the event. In particular, a newly created object is visible to hydration only after it is committed, eliminating the pre-commit create race while preserving object-level permission checks. This event-level object authorization is separate from later field-level authorization for the selected payload. Aggregate batch `refresh` events have no identification and skip object hydration, but check `Permission(manager_class, request_user).check_operation_permission("read")` in an async-safe worker before yielding `item = null`. The class gate is constructed afresh for every refresh. A denial suppresses the event; a permission error terminates the stream through normal cleanup. Managers without a permission class retain default-allow behavior.
 - Selected normal, measurement, and stored-file payload fields evaluate their
   field-level read permissions, value access, and formatting together in an
   async-safe worker. This allows uncached foreign keys to other GeneralManagers
@@ -217,7 +235,7 @@ During an explicit batch, row-level events are replaced by one `refresh` event
 for each affected manager class. A detail subscription receives refreshes for
 its own manager and for manager classes in its dependency groups, then
 rehydrates its own item. A class-wide subscription receives `action = refresh`
-with `item = null`; the event contains no row identification. This intentionally
+with `item = null` only when the class-level read operation is allowed; the event contains no row identification. This intentionally
 discloses that some item changed during the explicit batch, and the client
 observes the aggregate refresh when the batch flushes. It does not disclose
 which rows changed, how many changed, or their original actions.
