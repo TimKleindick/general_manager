@@ -492,6 +492,35 @@ class BeginFileUploadTests(TestCase):
         assert intent.staging_key.startswith("gm-staging/")
         assert intent.staging_key not in repr(result)
 
+    def test_native_s3_admission_persists_proxy_identity_and_bound_credential(
+        self,
+    ) -> None:
+        from general_manager.uploads import services
+        from tests.unit.test_upload_s3_adapter import FakeS3Client, FakeS3Storage
+
+        client = FakeS3Client()
+        storage = FakeS3Storage(client)
+        field = UploadProfileRecord._meta.get_field("avatar")
+        with (
+            patch.object(field, "storage", storage),
+            patch.object(services, "upload_adapter_registry", UploadAdapterRegistry()),
+        ):
+            result = begin_file_upload(user=self.user, request=valid_request())
+        intent = UploadIntent.objects.get(pk=result.intent_id)
+        assert intent.adapter_id == "s3-proxy"
+        assert result.instructions.transport is UploadTransport.PROXY
+        credential = result.instructions.headers["Authorization"].removeprefix(
+            "GMUpload "
+        )
+        assert services.verify_upload_transfer_credential(
+            credential,
+            intent_id=intent.id,
+            owner_pk=self.user.pk,
+            adapter_id="s3-proxy",
+            max_age=120,
+        )
+        assert client.presigned_url_calls == []
+
     def test_creation_requires_an_authenticated_saved_owner(self) -> None:
         unsaved = get_user_model()(username="unsaved")
 

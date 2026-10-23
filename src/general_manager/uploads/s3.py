@@ -34,7 +34,6 @@ from general_manager.uploads.types import ObjectVersion, UploadTransport
 
 _ExceptionT = TypeVar("_ExceptionT", bound=Exception)
 _ResultT = TypeVar("_ResultT")
-_MAX_SINGLE_PUT_BYTES = 5 * 1024**3
 _MAX_SIGV4_EXPIRY_SECONDS = 604_800
 
 
@@ -455,6 +454,21 @@ class S3ProxyUploadAdapter:
             "S3 storage could not create a public URL.",
         )
 
+    def public_download_url(
+        self,
+        key: str,
+        *,
+        version: ObjectVersion,
+    ) -> str:
+        """Return an unsigned public URL only for an immutable S3 VersionId."""
+        return _exact_public_download_url(
+            self.storage,
+            bucket=self._bucket,
+            public=self.supports_public_urls,
+            key=key,
+            version=version,
+        )
+
     def storage_fingerprint(self) -> str:
         return build_storage_fingerprint(
             self.storage,
@@ -524,59 +538,10 @@ class S3UploadAdapter:
         headers: Mapping[str, str] | None = None,
         expires_in: int = 900,
     ) -> UploadInstructions:
-        del upload_url, headers
-        if (
-            isinstance(size, bool)
-            or not isinstance(size, int)
-            or size < 0
-            or size > _MAX_SINGLE_PUT_BYTES
-        ):
-            raise _exception(
-                UploadBackendUnsupportedError,
-                "S3 direct uploads require a valid single-PUT object size.",
-            )
-        if (
-            isinstance(expires_in, bool)
-            or not isinstance(expires_in, int)
-            or expires_in <= 0
-            or expires_in > _MAX_SIGV4_EXPIRY_SECONDS
-        ):
-            raise _exception(
-                UploadBackendUnsupportedError,
-                "S3 direct upload expiry exceeds the SigV4 limit.",
-            )
-        checksum_base64 = _hex_checksum_to_base64(checksum_sha256)
-        params: dict[str, object] = {
-            "Bucket": self._bucket,
-            "Key": stage_key,
-            "ContentType": content_type,
-            "ContentLength": size,
-            "ChecksumSHA256": checksum_base64,
-            **self._object_options.staging_put_arguments,
-        }
-        url = _sdk_call(
-            lambda: self._client.generate_presigned_url(
-                "put_object",
-                Params=params,
-                ExpiresIn=expires_in,
-            ),
-            "S3 could not create upload instructions.",
-        )
-        if not isinstance(url, str) or not url:
-            raise _exception(
-                UploadStorageError,
-                "S3 returned malformed upload instructions.",
-            )
-        return UploadInstructions(
-            transport=UploadTransport.DIRECT,
-            method="PUT",
-            url=url,
-            headers={
-                "Content-Type": content_type,
-                "Content-Length": str(size),
-                "x-amz-checksum-sha256": checksum_base64,
-                **self._object_options.staging_headers,
-            },
+        # Retain this adapter for persisted legacy identities, never new PUTs.
+        raise _exception(
+            UploadBackendUnsupportedError,
+            "New S3 upload intents require the authenticated proxy transport.",
         )
 
     def inspect_staged(self, stage_key: str) -> ObjectVersion:
@@ -950,54 +915,14 @@ class S3UploadAdapter:
         *,
         version: ObjectVersion,
     ) -> str:
-        """Return an unsigned public URL for one immutable S3 VersionId."""
-
-        if not self.supports_public_urls or not version.version_id:
-            raise _exception(
-                PublicUploadUrlUnsupportedError,
-                "This S3 storage lacks exact-version public URLs.",
-            )
-        if getattr(self.storage, "custom_domain", None):
-            raise _exception(
-                PublicUploadUrlUnsupportedError,
-                "S3 custom domains cannot prove exact-version URL semantics.",
-            )
-        url = _sdk_call(
-            lambda: self.storage.url(  # type: ignore[call-arg]
-                key,
-                parameters={"VersionId": version.version_id},
-            ),
-            "S3 storage could not create an exact public URL.",
-        )
-        if not isinstance(url, str) or not url:
-            raise _exception(
-                UploadStorageError,
-                "S3 storage returned a malformed exact public URL.",
-            )
-        parsed = urlsplit(url)
-        try:
-            parameters = parse_qsl(
-                parsed.query,
-                keep_blank_values=True,
-                strict_parsing=True,
-            )
-        except ValueError:
-            parameters = []
-        if parameters != [("versionId", version.version_id)]:
-            raise _exception(
-                PublicUploadUrlUnsupportedError,
-                "S3 public URLs must preserve the exact VersionId.",
-            )
-        if not _public_url_matches_s3_storage(
+        """Return an unsigned public URL only for an immutable S3 VersionId."""
+        return _exact_public_download_url(
             self.storage,
-            url=url,
             bucket=self._bucket,
-        ):
-            raise _exception(
-                PublicUploadUrlUnsupportedError,
-                "S3 public URLs must use the configured S3 service endpoint.",
-            )
-        return url
+            public=self.supports_public_urls,
+            key=key,
+            version=version,
+        )
 
     def storage_fingerprint(self) -> str:
         return build_storage_fingerprint(
@@ -1549,3 +1474,60 @@ def _is_precondition_error(exc: Exception) -> bool:
         "ConditionalRequestConflict",
         "PreconditionFailed",
     }
+
+
+def _exact_public_download_url(
+    storage: Storage,
+    *,
+    bucket: str,
+    public: bool,
+    key: str,
+    version: ObjectVersion,
+) -> str:
+    """Share the legacy endpoint/version checks without its direct-write policy."""
+    if not public or not version.version_id or version.version_id == "null":
+        raise _exception(
+            PublicUploadUrlUnsupportedError,
+            "This S3 storage lacks exact-version public URLs.",
+        )
+    if getattr(storage, "custom_domain", None):
+        raise _exception(
+            PublicUploadUrlUnsupportedError,
+            "S3 custom domains cannot prove exact-version URL semantics.",
+        )
+    url = _sdk_call(
+        lambda: storage.url(  # type: ignore[call-arg]
+            key,
+            parameters={"VersionId": version.version_id},
+        ),
+        "S3 storage could not create an exact public URL.",
+    )
+    if not isinstance(url, str) or not url:
+        raise _exception(
+            UploadStorageError,
+            "S3 storage returned a malformed exact public URL.",
+        )
+    parsed = urlsplit(url)
+    try:
+        parameters = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+        )
+    except ValueError:
+        parameters = []
+    if parameters != [("versionId", version.version_id)]:
+        raise _exception(
+            PublicUploadUrlUnsupportedError,
+            "S3 public URLs must preserve the exact VersionId.",
+        )
+    if not _public_url_matches_s3_storage(
+        storage,
+        url=url,
+        bucket=bucket,
+    ):
+        raise _exception(
+            PublicUploadUrlUnsupportedError,
+            "S3 public URLs must use the configured S3 service endpoint.",
+        )
+    return url

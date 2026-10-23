@@ -1254,19 +1254,24 @@ class UploadAdapterRegistry:
 
     def resolve(self, storage: Storage | None = None) -> UploadAdapter:
         resolved_storage = storage if storage is not None else _default_storage()
+        from general_manager.uploads.s3 import (
+            S3ProxyUploadAdapter,
+            S3UploadAdapter,
+            _looks_like_s3_storage,
+        )
+
         with self._lock:
             explicit = self._resolve_explicit_factory(resolved_storage)
             if explicit is not None:
-                return self._build_adapter(explicit, resolved_storage)
+                adapter = self._build_adapter(explicit, resolved_storage)
+                if isinstance(adapter, S3UploadAdapter):
+                    return S3ProxyUploadAdapter(resolved_storage)
+                return adapter
 
-            from general_manager.uploads.s3 import S3ProxyUploadAdapter, S3UploadAdapter
-
-            if S3UploadAdapter.supports_direct(resolved_storage):
-                return S3UploadAdapter(resolved_storage)
-            try:
+            # Known S3 backends must support conditional writes; do not fall back
+            # to the generic proxy's weaker storage API when validation fails.
+            if _looks_like_s3_storage(resolved_storage):
                 return S3ProxyUploadAdapter(resolved_storage)
-            except UploadBackendUnsupportedError:
-                pass
             return ProxyUploadAdapter(resolved_storage)
 
     def resolve_by_id(
@@ -1283,6 +1288,19 @@ class UploadAdapterRegistry:
                 adapter = self._build_adapter(explicit, resolved_storage)
                 if _adapter_identity(adapter) == identity:
                     return adapter
+                from general_manager.uploads.s3 import (
+                    S3ProxyUploadAdapter,
+                    S3UploadAdapter,
+                )
+
+                if isinstance(adapter, S3UploadAdapter) and identity == (
+                    S3ProxyUploadAdapter.adapter_id,
+                    S3ProxyUploadAdapter.adapter_version,
+                ):
+                    try:
+                        return S3ProxyUploadAdapter(resolved_storage)
+                    except UploadBackendUnsupportedError:
+                        return None
                 return None
             if identity == (
                 ProxyUploadAdapter.adapter_id,

@@ -504,11 +504,9 @@ def generate_create_mutation_class(
     )
     model = getattr(interface_cls, "_model", None)
     has_model = isinstance(model, type) and issubclass(model, models.Model)
-    file_field_names = tuple(
-        name
-        for name in _file_token_field_names(interface_cls, write_fields)
-        if name not in generalManagerClass.Interface.input_fields
-    )
+    # ORM constructor inputs remain exposed as create arguments, so file inputs
+    # need the same token and intent checks as every other writable file field.
+    file_field_names = _file_token_field_names(interface_cls, write_fields)
 
     def create_mutation(
         self: object,

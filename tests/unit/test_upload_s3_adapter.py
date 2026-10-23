@@ -568,7 +568,8 @@ def test_s3_direct_mode_requires_explicit_sigv4_configuration(
     storage = FakeS3Storage(client)
 
     assert S3UploadAdapter.supports_direct(storage) is False
-    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    with pytest.raises(UploadBackendUnsupportedError):
+        UploadAdapterRegistry().resolve(storage)
     with pytest.raises(UploadBackendUnsupportedError):
         S3UploadAdapter(storage)
 
@@ -607,7 +608,8 @@ def test_s3_custom_endpoint_requires_explicit_true_conditional_copy_capability(
     )
 
     assert S3UploadAdapter.supports_direct(storage) is False
-    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    with pytest.raises(UploadBackendUnsupportedError):
+        UploadAdapterRegistry().resolve(storage)
 
 
 def test_s3_custom_endpoint_allows_explicit_conditional_copy_capability() -> None:
@@ -618,7 +620,7 @@ def test_s3_custom_endpoint_allows_explicit_conditional_copy_capability() -> Non
     )
 
     assert S3UploadAdapter.supports_direct(storage) is True
-    assert isinstance(UploadAdapterRegistry().resolve(storage), S3UploadAdapter)
+    assert isinstance(UploadAdapterRegistry().resolve(storage), S3ProxyUploadAdapter)
 
 
 def test_s3_direct_construction_rejects_unapproved_custom_endpoint() -> None:
@@ -638,7 +640,8 @@ def test_s3_adapters_reject_insecure_aws_endpoint() -> None:
     )
 
     assert S3UploadAdapter.supports_direct(storage) is False
-    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    with pytest.raises(UploadBackendUnsupportedError):
+        UploadAdapterRegistry().resolve(storage)
     with pytest.raises(UploadBackendUnsupportedError):
         S3ProxyUploadAdapter(storage)
 
@@ -675,45 +678,12 @@ def test_registry_prefers_explicit_adapter_over_builtin_s3() -> None:
     assert resolved.storage is storage
 
 
-def test_s3_missing_optional_dependencies_fall_back_without_import_error() -> None:
+def test_s3_missing_optional_dependencies_fail_closed_without_import_error() -> None:
     storage = OfficialLookingS3Storage()
 
     assert S3UploadAdapter.supports_direct(storage) is False
-    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
-
-
-def test_s3_presigned_upload_binds_stage_metadata() -> None:
-    client = FakeS3Client()
-    adapter = S3UploadAdapter(FakeS3Storage(client))
-    checksum = hashlib.sha256(b"payload").hexdigest()
-
-    instructions = adapter.create_upload_instructions(
-        stage_key="gm-staging/intent.bin",
-        upload_url=None,
-        content_type="text/plain",
-        size=7,
-        checksum_sha256=checksum,
-    )
-
-    assert instructions.transport is UploadTransport.DIRECT
-    assert instructions.method == "PUT"
-    assert instructions.fields == {}
-    assert instructions.headers["Content-Type"] == "text/plain"
-    assert instructions.headers["Content-Length"] == "7"
-    assert instructions.headers["x-amz-checksum-sha256"] == base64.b64encode(
-        bytes.fromhex(checksum)
-    ).decode("ascii")
-    operation, call = client.presigned_url_calls[0]
-    assert operation == "put_object"
-    assert call["Params"] == {
-        "Bucket": "uploads",
-        "Key": "gm-staging/intent.bin",
-        "ContentType": "text/plain",
-        "ContentLength": 7,
-        "ChecksumSHA256": instructions.headers["x-amz-checksum-sha256"],
-    }
-    assert "gm-staging/intent.bin" not in repr(instructions)
-    assert "credential=secret" not in repr(instructions)
+    with pytest.raises(UploadBackendUnsupportedError):
+        UploadAdapterRegistry().resolve(storage)
 
 
 def test_s3_presigned_put_rejects_objects_above_the_single_put_limit() -> None:
@@ -754,19 +724,13 @@ def test_s3_presigned_put_rejects_expiry_beyond_sigv4_limit(
 
 def test_s3_bucket_owner_enforced_staging_omits_acl() -> None:
     client = FakeS3Client()
-    adapter = S3UploadAdapter(FakeS3Storage(client))
-    checksum = hashlib.sha256(b"payload").hexdigest()
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
 
-    instructions = adapter.create_upload_instructions(
-        stage_key="gm-staging/intent.bin",
-        upload_url=None,
-        content_type="text/plain",
-        size=7,
-        checksum_sha256=checksum,
-    )
+    proxy = S3ProxyUploadAdapter(adapter.storage)
+    proxy.save_stage("gm-staging/proxy.bin", [b"payload"], content_type="text/plain")
 
-    assert "x-amz-acl" not in instructions.headers
-    assert "ACL" not in client.presigned_url_calls[0][1]["Params"]
+    assert "ACL" not in proxy._client.put_calls[0]
+    assert "ACL" not in client.put_calls[0]
 
 
 def test_s3_staging_propagates_safe_bucket_owner_acl() -> None:
@@ -777,21 +741,12 @@ def test_s3_staging_propagates_safe_bucket_owner_acl() -> None:
             object_parameters={"ACL": "bucket-owner-full-control"},
         )
     )
-    checksum = hashlib.sha256(b"payload").hexdigest()
     version = _stage(client)
 
-    instructions = adapter.create_upload_instructions(
-        stage_key="gm-staging/intent.bin",
-        upload_url=None,
-        content_type="text/plain",
-        size=7,
-        checksum_sha256=checksum,
-    )
+    proxy = S3ProxyUploadAdapter(adapter.storage)
+    proxy.save_stage("gm-staging/proxy.bin", [b"payload"], content_type="text/plain")
 
-    assert instructions.headers["x-amz-acl"] == "bucket-owner-full-control"
-    assert client.presigned_url_calls[0][1]["Params"]["ACL"] == (
-        "bucket-owner-full-control"
-    )
+    assert client.put_calls[0]["ACL"] == ("bucket-owner-full-control")
     adapter.materialize(
         "gm-staging/intent.bin",
         version,
@@ -819,7 +774,8 @@ def test_s3_public_final_acl_requires_private_staging_prefix(
     )
 
     assert S3UploadAdapter.supports_direct(storage) is False
-    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    with pytest.raises(UploadBackendUnsupportedError):
+        UploadAdapterRegistry().resolve(storage)
     with pytest.raises(UploadBackendUnsupportedError):
         S3UploadAdapter(storage)
 
@@ -828,7 +784,8 @@ def test_s3_public_bucket_policy_requires_private_staging_prefix() -> None:
     storage = FakeS3Storage(FakeS3Client(), public=True)
 
     assert S3UploadAdapter.supports_direct(storage) is False
-    assert isinstance(UploadAdapterRegistry().resolve(storage), ProxyUploadAdapter)
+    with pytest.raises(UploadBackendUnsupportedError):
+        UploadAdapterRegistry().resolve(storage)
     with pytest.raises(UploadBackendUnsupportedError):
         S3UploadAdapter(storage)
 
@@ -851,17 +808,11 @@ def test_s3_public_bucket_policy_allows_explicit_private_staging_prefix() -> Non
 
     assert S3UploadAdapter.supports_direct(storage) is True
     adapter = S3UploadAdapter(storage)
-    checksum = hashlib.sha256(b"payload").hexdigest()
 
-    instructions = adapter.create_upload_instructions(
-        stage_key="gm-staging/intent.bin",
-        upload_url=None,
-        content_type="text/plain",
-        size=7,
-        checksum_sha256=checksum,
-    )
+    proxy = S3ProxyUploadAdapter(adapter.storage)
+    proxy.save_stage("gm-staging/proxy.bin", [b"payload"], content_type="text/plain")
 
-    assert "x-amz-acl" not in instructions.headers
+    assert "ACL" not in proxy._client.put_calls[0]
 
 
 def test_s3_stages_private_with_kms_and_applies_public_acl_on_final_copy() -> None:
@@ -880,13 +831,8 @@ def test_s3_stages_private_with_kms_and_applies_public_acl_on_final_copy() -> No
     adapter = S3UploadAdapter(storage)
     version = _stage(client)
 
-    instructions = adapter.create_upload_instructions(
-        stage_key="gm-staging/intent.bin",
-        upload_url=None,
-        content_type="text/plain",
-        size=version.size,
-        checksum_sha256=version.checksum_sha256,
-    )
+    proxy = S3ProxyUploadAdapter(adapter.storage)
+    proxy.save_stage("gm-staging/proxy.bin", [b"payload"], content_type="text/plain")
     adapter.materialize(
         "gm-staging/intent.bin",
         version,
@@ -894,15 +840,9 @@ def test_s3_stages_private_with_kms_and_applies_public_acl_on_final_copy() -> No
         intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
     )
 
-    expected_headers = {
-        "x-amz-server-side-encryption": "aws:kms",
-        "x-amz-server-side-encryption-aws-kms-key-id": "alias/uploads",
-        "x-amz-server-side-encryption-bucket-key-enabled": "true",
-    }
-    assert expected_headers.items() <= instructions.headers.items()
-    assert "x-amz-acl" not in instructions.headers
-    assert "x-amz-storage-class" not in instructions.headers
-    put_params = client.presigned_url_calls[0][1]["Params"]
+    assert "ACL" not in client.put_calls[0]
+    assert "StorageClass" not in client.put_calls[0]
+    put_params = client.put_calls[0]
     assert put_params["ServerSideEncryption"] == "aws:kms"
     assert put_params["SSEKMSKeyId"] == "alias/uploads"
     assert put_params["BucketKeyEnabled"] is True
@@ -924,13 +864,8 @@ def test_s3_archive_storage_class_is_final_only(storage_class: str) -> None:
     adapter = S3UploadAdapter(storage)
     version = _stage(client)
 
-    instructions = adapter.create_upload_instructions(
-        stage_key="gm-staging/intent.bin",
-        upload_url=None,
-        content_type="text/plain",
-        size=version.size,
-        checksum_sha256=version.checksum_sha256,
-    )
+    proxy = S3ProxyUploadAdapter(adapter.storage)
+    proxy.save_stage("gm-staging/proxy.bin", [b"payload"], content_type="text/plain")
     adapter.materialize(
         "gm-staging/intent.bin",
         version,
@@ -938,8 +873,8 @@ def test_s3_archive_storage_class_is_final_only(storage_class: str) -> None:
         intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
     )
 
-    assert "x-amz-acl" not in instructions.headers
-    assert "x-amz-storage-class" not in instructions.headers
+    assert "ACL" not in proxy._client.put_calls[0]
+    assert "StorageClass" not in proxy._client.put_calls[0]
     assert client.copy_calls[0]["StorageClass"] == storage_class
 
 
@@ -1446,7 +1381,7 @@ def test_s3_delete_without_version_id_fails_closed() -> None:
 
 @pytest.mark.parametrize(
     "operation",
-    ["presign_put", "head", "get", "delete", "presign_get"],
+    ["head", "get", "delete", "presign_get"],
 )
 def test_s3_normalizes_sdk_failures(operation: str) -> None:
     client = FakeS3Client()
@@ -1461,15 +1396,7 @@ def test_s3_normalizes_sdk_failures(operation: str) -> None:
     )
 
     with pytest.raises(UploadStorageError) as captured:
-        if operation == "presign_put":
-            adapter.create_upload_instructions(
-                stage_key="gm-staging/intent.bin",
-                upload_url=None,
-                content_type="text/plain",
-                size=1,
-                checksum_sha256="a" * 64,
-            )
-        elif operation == "head":
+        if operation == "head":
             adapter.inspect_staged("gm-staging/intent.bin")
         elif operation == "get":
             adapter.open_stage("gm-staging/intent.bin", version)
@@ -1937,7 +1864,7 @@ def test_s3_direct_rejects_malformed_signing_and_incomplete_copy_identity(
 
     monkeypatch.setattr(client, "generate_presigned_url", malformed_url)
 
-    with pytest.raises(UploadStorageError, match="malformed upload instructions"):
+    with pytest.raises(UploadBackendUnsupportedError, match="proxy"):
         adapter.create_upload_instructions(
             stage_key="gm-staging/malformed.bin",
             upload_url=None,
@@ -2304,3 +2231,111 @@ def test_s3_signing_preserves_explicit_upload_errors(
     with pytest.raises(UploadStorageChangedError) as captured:
         adapter.private_download_url("files/report.txt", expires_in=60)
     assert captured.value is explicit
+
+
+@pytest.mark.parametrize("registration", [None, "factory", "instance", "subclass"])
+def test_new_s3_intents_always_use_proxy_and_legacy_ids_remain_resolvable(
+    registration: str | None,
+) -> None:
+    class LegacySubclass(S3UploadAdapter):
+        pass
+
+    client = FakeS3Client()
+    storage = FakeS3Storage(client)
+    registry = UploadAdapterRegistry()
+    if registration == "factory":
+        registry.register(FakeS3Storage, S3UploadAdapter)
+    elif registration == "instance":
+        legacy = S3UploadAdapter(storage)
+        registry.register(FakeS3Storage, lambda _storage: legacy)
+    elif registration == "subclass":
+        registry.register(FakeS3Storage, LegacySubclass)
+
+    adapter = registry.resolve(storage)
+    assert isinstance(adapter, S3ProxyUploadAdapter)
+    instructions = adapter.create_upload_instructions(
+        stage_key="gm-staging/new",
+        upload_url="/gm/uploads/new",
+        content_type="text/plain",
+        size=3,
+        checksum_sha256=hashlib.sha256(b"abc").hexdigest(),
+        headers={"Authorization": "GMUpload test"},
+    )
+    assert instructions.transport is UploadTransport.PROXY
+    assert instructions.headers["Authorization"] == "GMUpload test"
+    assert isinstance(
+        registry.resolve_by_id("s3-proxy", 1, storage), S3ProxyUploadAdapter
+    )
+    assert client.presigned_url_calls == []
+    assert isinstance(
+        registry.resolve_by_id("s3-versioned", 1, storage), S3UploadAdapter
+    )
+
+
+def test_legacy_s3_adapter_cannot_issue_new_put_credentials() -> None:
+    client = FakeS3Client()
+    adapter = S3UploadAdapter(FakeS3Storage(client))
+    with pytest.raises(UploadBackendUnsupportedError, match="proxy"):
+        adapter.create_upload_instructions(
+            stage_key="gm-staging/new",
+            upload_url=None,
+            content_type="text/plain",
+            size=3,
+            checksum_sha256=hashlib.sha256(b"abc").hexdigest(),
+        )
+    assert client.presigned_url_calls == []
+
+
+def test_new_s3_intents_fail_closed_without_conditional_put() -> None:
+    client = FakeS3Client(conditional_put=False)
+    with pytest.raises(UploadBackendUnsupportedError):
+        UploadAdapterRegistry().resolve(FakeS3Storage(client))
+    assert client.presigned_url_calls == []
+
+
+def test_versioned_public_proxy_retains_exact_download_url() -> None:
+    client = FakeS3Client()
+    storage = FakeS3Storage(client, public=True)
+    storage.upload_staging_prefix_private = True
+    adapter = UploadAdapterRegistry().resolve(storage)
+    assert isinstance(adapter, S3ProxyUploadAdapter)
+    version = adapter.save_stage(
+        "files/report.txt", [b"abc"], content_type="text/plain"
+    )
+    assert adapter.public_download_url("files/report.txt", version=version) == (
+        "https://uploads.s3.us-east-1.amazonaws.com/files/report.txt"
+        f"?versionId={version.version_id}"
+    )
+    assert client.presigned_url_calls == []
+
+
+@pytest.mark.parametrize("version_id", [None, "", "null"])
+def test_public_proxy_rejects_missing_or_mutable_null_version(
+    version_id: str | None,
+) -> None:
+    storage = FakeS3Storage(FakeS3Client(versioning=False), public=True)
+    storage.upload_staging_prefix_private = True
+    adapter = S3ProxyUploadAdapter(storage)
+    version = ObjectVersion(version_id, '"etag"', "a" * 64, 3, "text/plain")
+    with pytest.raises(PublicUploadUrlUnsupportedError):
+        adapter.public_download_url("files/report.txt", version=version)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"public": False},
+        {"public": True, "custom_domain": "cdn.example.test"},
+        {"public": True, "public_url_host": "attacker.example.test"},
+        {"public": True, "ignore_url_parameters": True},
+    ],
+)
+def test_public_proxy_retains_public_optin_and_endpoint_validation(
+    options: dict[str, Any],
+) -> None:
+    client = FakeS3Client()
+    storage = FakeS3Storage(client, **options)
+    storage.upload_staging_prefix_private = True
+    adapter = S3ProxyUploadAdapter(storage)
+    with pytest.raises(PublicUploadUrlUnsupportedError):
+        adapter.public_download_url("files/report.txt", version=_stage(client))

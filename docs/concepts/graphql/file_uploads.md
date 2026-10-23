@@ -19,8 +19,8 @@ storage paths or URLs.
    transfer instructions. Only a digest of the token is stored. Proxy transfer
    uses a different short-lived `Authorization: GMUpload ...` credential.
 3. A proxy endpoint streams a bounded body into a server-generated staging key.
-   A direct adapter, such as S3, signs one private staging key and later records
-   its immutable object version.
+   New built-in S3 intents also use the authenticated proxy with conditional
+   storage operations; legacy direct intent identities remain resolvable.
 4. The generated mutation replaces the token with a redacted upload candidate
    before the manager's normal permission check. A denied permission does not
    claim the token or create/update an ORM row.
@@ -90,7 +90,10 @@ capabilities because every download rechecks the current model field binding.
 
 When uploads are enabled, generated mutation inputs for ORM file fields use the
 `UploadToken` scalar. Generated outputs are `StoredFile` or `StoredImage`, not
-`String`:
+`String`. Every exposed editable ORM file input passes through token validation,
+including fields also declared in `Interface.input_fields`. Raw storage keys are
+not accepted, and upload tokens remain bound to their actor, manager, field and
+operation and can be consumed only once:
 
 ```graphql
 type StoredFile {
@@ -167,7 +170,7 @@ both `GET` and `HEAD`. Responses use `Content-Disposition: inline`,
 `X-Content-Type-Options: nosniff`, and private cache controls without revealing a
 filesystem path.
 
-S3 returns a private presigned exact-`VersionId` URL. It cannot be revoked after issue,
+The legacy direct S3 adapter returns a private presigned exact-`VersionId` URL. It cannot be revoked after issue,
 so replacement or permission changes leave a residual capability window until
 the configured TTL expires. `public=True` is accepted only when an adapter
 explicitly declares a genuinely public URL capability. Legacy values use the
@@ -181,11 +184,10 @@ fail closed with `downloadUrl: null`. Public URLs have no expiry.
 
 - Upload-enabled managers must use the same database alias as
   `FILE_UPLOADS.INTENT_DATABASE`; cross-database sagas are not supported.
-- Direct S3 requires versioning and safe conditional copy. When those two direct
-  prerequisites are missing, the `s3-proxy` adapter can use authenticated,
-  conditional put/get/delete operations without weakening exact-object or
-  no-overwrite guarantees. Unsafe signing, transport, or conditional-operation
-  capabilities still fail closed.
+- New built-in S3 intents always use `s3-proxy`. Conditional put/get/delete,
+  safe signing and transport, and private staging are required. Previously issued
+  direct PUT URLs are not revoked; legacy identities remain usable for existing
+  intent processing and downloads, but cannot issue new PUT credentials.
 - There is no GraphQL multipart upload, resumable upload, S3 multipart upload,
   deduplication, asset library, transformation pipeline, or built-in virus
   scanner.
