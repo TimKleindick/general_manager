@@ -5,19 +5,22 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import base64
 from dataclasses import dataclass, field
+from email.message import Message
 import json
 import random
 from types import MappingProxyType
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import Request as UrlRequest, urlopen as stdlib_urlopen
+from urllib.request import HTTPRedirectHandler, Request as UrlRequest, build_opener
 from uuid import uuid4
 from typing import (
     Callable,
+    IO,
     Iterable,
     Literal,
     Mapping,
+    NoReturn,
     Protocol,
     TypeVar,
     TypedDict,
@@ -1893,12 +1896,42 @@ def map_request_transport_error(
     return mapped
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Leave redirect responses to the normal HTTP error handling path."""
+
+    def http_error_302(
+        self,
+        req: UrlRequest,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: Message,
+    ) -> NoReturn:
+        # Reject before urllib parses Location, preserving malformed responses too.
+        raise HTTPError(req.full_url, code, msg, headers, fp)
+
+    http_error_301 = http_error_302
+    http_error_303 = http_error_302
+    http_error_307 = http_error_302
+    http_error_308 = http_error_302
+
+
 class UrllibRequestTransport(SharedRequestTransport):
     """First-party JSON transport backed by Python's stdlib HTTP client.
 
     The transport supports absolute HTTP(S) URLs, JSON request bodies, decoded
     JSON object/list responses, operation-level timeout overrides, and HTTP
-    status mapping through `RequestTransportStatusError`.
+    status mapping through `RequestTransportStatusError`. The default opener
+    rejects redirects, including same-origin redirects, instead of forwarding
+    credentials or accessing response-controlled destinations. An injected
+    `urlopen` callable is responsible for its own redirect policy.
+
+    The default opener does not inherit handlers registered globally with
+    `urllib.request.install_opener`; environment proxy settings still apply.
+    For custom TLS contexts or explicit proxy handlers, build an opener with
+    those handlers plus redirect rejection and pass its `open` method as
+    `urlopen`. Reject 301/302/303/307/308 before parsing `Location` to preserve
+    the upstream status and headers even when that header is malformed.
     """
 
     def __init__(
@@ -1907,7 +1940,9 @@ class UrllibRequestTransport(SharedRequestTransport):
         urlopen: UrlopenCallable | None = None,
         json_dumps: Callable[[object], str] | None = None,
     ) -> None:
-        self._urlopen = urlopen or stdlib_urlopen
+        self._urlopen = urlopen or cast(
+            UrlopenCallable, build_opener(_NoRedirectHandler()).open
+        )
         self._json_dumps = json_dumps or json.dumps
 
     def send(

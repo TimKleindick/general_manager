@@ -105,6 +105,31 @@ Then the default `execute_request_plan()` implementation delegates to that trans
 
 For most HTTP integrations, start with the built-in `UrllibRequestTransport`. Keep a custom `SharedRequestTransport` subclass only when the upstream service needs special request signing, non-JSON wire behavior, or custom response parsing.
 
+The built-in transport does not follow HTTP redirects, including redirects to
+the same origin. Redirect responses raise `RequestTransportError` through
+`execute()` (`RequestTransportStatusError` through `send()`), preserving the
+upstream status code and response headers. Configure the final upstream URL
+directly. This prevents response-controlled destinations from receiving
+credentials or request bodies and blocks redirect-based access to internal
+services, including HTTPS-to-HTTP downgrades. If you inject a custom `urlopen`
+callable, that callable must enforce its own redirect policy. Redirect targets
+are rejected before parsing `Location`, so malformed target URLs also preserve
+the original response status and headers.
+
+The default transport creates its own opener. It does **not** inherit handlers
+registered through `urllib.request.install_opener`, including custom
+`HTTPSHandler` TLS contexts and explicit `ProxyHandler` configurations.
+Environment proxy settings still apply through urllib's default proxy handler.
+If your application previously configured private CA trust or an explicit proxy
+via a global opener, migrate those handlers into your own
+`urllib.request.build_opener(...)` and inject its `open` method with
+`UrllibRequestTransport(urlopen=opener.open)`. Include a redirect-rejecting
+handler in that opener: override the 301, 302, 303, 307, and 308 HTTP error
+handlers to raise `HTTPError` with the original request URL, status, headers,
+and response stream before inspecting `Location`. Merely returning `None`
+from `redirect_request` blocks forwarding, but urllib can parse a malformed
+`Location` before that callback and lose the response metadata.
+
 The shared transport is responsible for:
 
 - building the outbound request from the `RequestQueryPlan`

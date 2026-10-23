@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.86.5 (2026-10-23)
+
+### Bug Fixes
+
+- Block automatic redirects in urllib transport
+  ([`7aefd95`](https://github.com/TimKleindick/general_manager/commit/7aefd95e8d8e22fb5c74be6f189e885e5dc512e6))
+
+- Preserve malformed redirect response metadata
+  ([`4664161`](https://github.com/TimKleindick/general_manager/commit/4664161de49aa2edebabfdd3dae155311e7e033b))
+
+### Documentation
+
+- Clarify delegated permission failure and fallback semantics
+  ([`548c842`](https://github.com/TimKleindick/general_manager/commit/548c842823c7886f8ecb6cd70727b7f1e5330fcf))
+
+- Document recent public API changes
+  ([`3b4c475`](https://github.com/TimKleindick/general_manager/commit/3b4c475649e218a29e02481747053df8a0b99d0b))
+
+
 ## v0.86.4 (2026-10-22)
 
 ### Bug Fixes
