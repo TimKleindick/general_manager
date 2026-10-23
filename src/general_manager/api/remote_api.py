@@ -16,6 +16,7 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.urls import URLPattern, path
 
 from general_manager.logging import get_logger
+from general_manager.api.mutation_controls import MUTATION_CONTROL_KEYS
 from general_manager.bucket._ordering import normalize_ordering
 from general_manager.bucket.request_bucket import RequestBucket
 
@@ -25,9 +26,6 @@ if TYPE_CHECKING:
 logger = get_logger("api.remote")
 
 _SEGMENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-_MUTATION_CONTROL_KEYS = frozenset(
-    {"ignore_permission", "creator_id", "history_comment"}
-)
 _MUTATION_METADATA_KEY = "__metadata__"
 _MUTATION_METADATA_FIELDS = frozenset({"history_comment"})
 RemoteAPIView = Callable[[HttpRequest], HttpResponse]
@@ -432,7 +430,7 @@ def _parse_json_body(request: HttpRequest) -> RemoteJSONPayload:
 def _parse_mutation_body(request: HttpRequest) -> tuple[RemoteJSONPayload, str | None]:
     """Separate schema values from supported remote mutation metadata."""
     payload = _parse_json_body(request)
-    for control_key in _MUTATION_CONTROL_KEYS:
+    for control_key in MUTATION_CONTROL_KEYS:
         if control_key in payload:
             raise RemoteAPIRequestError.reserved_mutation_control(control_key)
 
