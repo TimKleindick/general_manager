@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.86.9 (2026-10-23)
+
+### Bug Fixes
+
+- Preserve calculation parent filters for iterable domains
+  ([`542f305`](https://github.com/TimKleindick/general_manager/commit/542f3057dd4252d5ee0f7faf66b688d074e0d5cb))
+
+
 ## v0.86.8 (2026-10-23)
 
 ### Bug Fixes
