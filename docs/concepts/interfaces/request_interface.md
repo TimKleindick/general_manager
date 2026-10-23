@@ -689,3 +689,25 @@ For most integrations, this pattern works well:
 7. Keep `transport.send()` thin and move shared HTTP/auth/error logic into a reusable transport helper.
 
 That keeps the GeneralManager API clean without hiding the real constraints of the remote service.
+
+
+### Bounded built-in response bodies
+
+`UrllibRequestTransport(max_response_bytes=8 * 1024 * 1024,
+body_read_timeout=10.0)` limits each success or HTTP-error body to 8 MiB of
+actual bytes and a ten-second body-read deadline by default. These are finite,
+positive server-owned transport settings. Content-Length is not trusted as a
+substitute for counting bytes. At most one extra byte is read to detect excess.
+Oversized successful bodies raise `RequestSchemaError`; oversized, malformed or
+timed-out HTTP-error bodies are discarded while status and headers remain
+available for normal status mapping. Every response is closed.
+
+For native urllib HTTP(S) responses the deadline interrupts the socket,
+including slow chunk framing/trailers inside a blocking read. This body timer
+starts after the opener returns headers; it is not a whole-operation deadline
+for DNS, connection setup, response headers, retries or JSON decoding. Those
+continue to use the configured socket timeout/retry policy. Custom injected
+response objects must implement sized `read(size)` and `close()`; without the
+native socket shape their blocking reads must enforce their own timeout (the
+transport checks elapsed time between calls). Bounded bytes also bound the
+input size sent to the JSON decoder; decoded object overhead is additional.
