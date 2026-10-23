@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 import base64
 from dataclasses import dataclass, field
 from email.message import Message
+from http.client import HTTPException
 import json
 import math
 import socket
@@ -2011,9 +2012,9 @@ class UrllibRequestTransport(SharedRequestTransport):
                 error_payload = self._decode_payload(
                     self._read_response_body(cast(UrlopenResponse, error))
                 )
-            except (RequestSchemaError, TimeoutError):
+            except (RequestSchemaError, TimeoutError, HTTPException):
                 # HTTP status and transport metadata remain authoritative when
-                # an upstream proxy returns HTML or another non-JSON body.
+                # an upstream body is malformed, oversized, or incomplete.
                 error_payload = None
             error_headers = error.headers
             raise RequestTransportStatusError(

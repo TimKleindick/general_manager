@@ -4,7 +4,7 @@ import io
 import socket
 import threading
 import time
-from http.client import HTTPResponse
+from http.client import HTTPException, HTTPResponse
 from typing import ClassVar
 from urllib.error import HTTPError
 
@@ -148,3 +148,40 @@ def test_body_deadline_interrupts_native_slow_drip_reads(chunked, http_error):
 def test_response_bounds_require_positive_finite_configuration(kwargs):
     with pytest.raises(ValueError):
         UrllibRequestTransport(**kwargs)
+
+
+@pytest.mark.parametrize("body", [b"NOTHEX\r\n", b"5\r\nab"])
+@pytest.mark.parametrize("http_error", [False, True])
+def test_native_framing_failure_preserves_only_known_http_error_metadata(
+    body, http_error
+):
+    reader, writer = socket.socketpair()
+    reader.settimeout(1)
+    writer.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + body)
+    writer.shutdown(socket.SHUT_WR)
+    response = HTTPResponse(reader)
+    response.begin()
+
+    def opener(*_args, **_kwargs):
+        if http_error:
+            raise HTTPError(
+                "https://example.test/",
+                503,
+                "Unavailable",
+                {"X-Test": "framing"},
+                response,
+            )
+        return response
+
+    try:
+        expected = RequestTransportStatusError if http_error else HTTPException
+        with pytest.raises(expected) as raised:
+            send(UrllibRequestTransport(urlopen=opener))
+        if http_error:
+            assert raised.value.status_code == 503
+            assert raised.value.headers["X-Test"] == "framing"
+            assert raised.value.payload is None
+        assert response.closed
+    finally:
+        reader.close()
+        writer.close()
