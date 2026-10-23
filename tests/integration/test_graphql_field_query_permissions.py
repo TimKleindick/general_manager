@@ -75,6 +75,8 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
         )
         assert direct.data["confidentialEntryList"]["items"][0]["secret"] is None
         assert present.errors and absent.errors
+        assert "Permission denied to use query field" in str(present.errors)
+        assert "Permission denied to use query field" in str(absent.errors)
 
     def test_allowed_field_filter_preserves_membership_and_count(self):
         user = get_user_model().objects.create_user(username="allowed")
@@ -235,3 +237,38 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
         assert result.errors
         assert set(checked) == {"match", "nonmatch"}
         backend.search.assert_not_called()
+
+    def test_relation_isnull_lookup_does_not_authorize_nonexistent_related_field(self):
+        user = get_user_model().objects.create_superuser(
+            username="relation-lookup", password="test"
+        )
+        entry = self.Entry.create(name="entry", secret="hidden", creator_id=user.id)
+        link = self.Link.create(name="link", entry_id=entry.id, creator_id=user.id)
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        authorize_query_fields([link], info, ["entry__isnull"])
+        # Real related fields whose names are lookup words still need field rights.
+        with patch(
+            "general_manager.api.graphql_resolvers.check_read_permission",
+            side_effect=lambda _instance, _info, field: field != "contains",
+        ):
+            with self.assertRaisesMessage(
+                GraphQLError, "Permission denied to use query field"
+            ):
+                authorize_query_fields([link], info, ["entry__contains"])
+
+    def test_aggregate_gate_does_not_reuse_django_permission_cache(self):
+        from django.contrib.auth.models import Permission
+        from general_manager.api.graphql_resolvers import can_read_class_for_user
+
+        user = get_user_model().objects.create_user(username="aggregate-revocation")
+        permission = Permission.objects.get(
+            content_type__app_label="auth", codename="view_user"
+        )
+        user.user_permissions.add(permission)
+        self.assertTrue(user.has_perm("auth.view_user"))
+        with patch.object(
+            self.Entry.Permission, "__read__", ["hasPermission:auth.view_user"]
+        ):
+            self.assertTrue(can_read_class_for_user(self.Entry, user))
+            user.user_permissions.remove(permission)
+            self.assertFalse(can_read_class_for_user(self.Entry, user))

@@ -263,6 +263,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
         employee = self.Employee.create(name="Visible", creator_id=self.user.id)
         schema = self._build_schema()
         self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
 
         async def fake_listener(_layer, _channel, queue):
             for _ in range(2):
@@ -288,6 +289,7 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
                 try:
                     first = await asyncio.wait_for(stream.__anext__(), timeout=1)
                     self.user.is_staff = False
+                    await asyncio.to_thread(self.user.save, update_fields=["is_staff"])
                     second = await asyncio.wait_for(stream.__anext__(), timeout=1)
                     return first, second
                 finally:
