@@ -68,6 +68,9 @@ from general_manager.utils.type_checks import safe_issubclass
 
 if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
+    from general_manager.api.graphql_errors import (
+        GraphQLResolveInfo as ReadPermissionInfo,
+    )
     from general_manager.permission.base_permission import (
         BasePermission,
         ReadPermissionPlan,
@@ -487,7 +490,7 @@ def apply_permission_filters(
 def apply_read_authorization(
     queryset: Bucket[GeneralManagerT],
     general_manager_class: type[GeneralManagerT],
-    info: GraphQLResolveInfo,
+    info: ReadPermissionInfo,
     *,
     source: str,
 ) -> ReadAuthorizationResult[GeneralManagerT]:
@@ -517,7 +520,7 @@ def apply_read_authorization(
 def finalize_read_authorization(
     preparation: ReadAuthorizationPreparation[GeneralManagerT],
     general_manager_class: type[GeneralManagerT],
-    info: GraphQLResolveInfo,
+    info: ReadPermissionInfo,
     *,
     source: str,
 ) -> ReadAuthorizationResult[GeneralManagerT]:
@@ -565,7 +568,7 @@ def finalize_read_authorization(
 def prepare_read_authorization(
     queryset: Bucket[GeneralManagerT],
     general_manager_class: type[GeneralManagerT],
-    info: GraphQLResolveInfo,
+    info: ReadPermissionInfo,
     *,
     permission_plan: ReadPermissionPlan | None = None,
 ) -> ReadAuthorizationPreparation[GeneralManagerT]:
@@ -639,7 +642,7 @@ def prepare_read_authorization(
 def filter_queryset_by_read_permission(
     queryset: Bucket[GeneralManagerT],
     general_manager_class: type[GeneralManagerT],
-    info: GraphQLResolveInfo,
+    info: ReadPermissionInfo,
     *,
     requires_instance_check: bool = True,
     instance_check_reasons: tuple[str, ...] = (),

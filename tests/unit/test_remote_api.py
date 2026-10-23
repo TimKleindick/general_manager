@@ -35,6 +35,8 @@ from general_manager.interface.requests import (
 )
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
+from general_manager.permission import OverrideManagerPermission
+from general_manager.permission.base_permission import ReadPermissionPlan
 
 
 class RemoteAPIRegistryTests(SimpleTestCase):
@@ -148,6 +150,177 @@ class RemoteAPIRegistryTests(SimpleTestCase):
 
 
 class RemoteManagerInterfaceValidationTests(SimpleTestCase):
+    def test_partial_permission_alternatives_reject_default_pagination(self) -> None:
+        class PartialAlternativeRemotePage(GeneralManager):
+            class Interface(RemoteManagerInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    base_url = "https://remote.example.test"
+                    remote_manager = "partial-alternative-pages"
+
+                @classmethod
+                def execute_request_plan(
+                    cls, plan: RequestQueryPlan
+                ) -> RequestQueryResult:
+                    name = plan.body["filters"]["name"]
+                    return RequestQueryResult(
+                        items=({"id": 1 if name == "First" else 2, "name": name},),
+                        total_count=100,
+                        page=1,
+                        page_size=1,
+                    )
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
+                def get_read_permission_plan(self) -> ReadPermissionPlan:
+                    return ReadPermissionPlan(
+                        filters=[
+                            {"filter": {"name": "First"}},
+                            {"filter": {"name": "Second"}},
+                        ],
+                        requires_instance_check=True,
+                    )
+
+                def can_read_instance(self) -> bool:
+                    return self.instance.name in ("First", "Second")
+
+            class RemoteAPI:
+                enabled = True
+                resource_name = "partial-alternative-pages"
+                allow_filter = True
+
+        config = get_remote_api_config(PartialAlternativeRemotePage)
+        assert config is not None
+        response = _build_query_view(config)(
+            RequestFactory().post(
+                "/gm/partial-alternative-pages/query",
+                data={},
+                content_type="application/json",
+            )
+        )
+        payload = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(payload["error_code"], "unsupported_global_operation")
+
+    def test_partial_request_row_checks_hide_upstream_total(self) -> None:
+        plans: list[RequestQueryPlan] = []
+
+        class AuthorizedRemotePage(GeneralManager):
+            class Interface(RemoteManagerInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    base_url = "https://remote.example.test"
+                    remote_manager = "authorized-pages"
+
+                @classmethod
+                def execute_request_plan(
+                    cls, plan: RequestQueryPlan
+                ) -> RequestQueryResult:
+                    plans.append(plan)
+                    return RequestQueryResult(
+                        items=(
+                            {"id": 3, "name": "Hidden"},
+                            {"id": 4, "name": "Visible"},
+                        ),
+                        total_count=100,
+                        page=2,
+                        page_size=2,
+                    )
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
+                def get_read_permission_plan(self) -> ReadPermissionPlan:
+                    return ReadPermissionPlan(
+                        filters=[{"filter": {"name__in": ["Hidden", "Visible"]}}],
+                        requires_instance_check=True,
+                    )
+
+                def can_read_instance(self) -> bool:
+                    return self.instance.name == "Visible"
+
+            class RemoteAPI:
+                enabled = True
+                resource_name = "authorized-pages"
+                allow_filter = True
+
+        config = get_remote_api_config(AuthorizedRemotePage)
+        assert config is not None
+        response = _build_query_view(config)(
+            RequestFactory().post(
+                "/gm/authorized-pages/query",
+                data={"page": 2, "page_size": 2},
+                content_type="application/json",
+            )
+        )
+        payload = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["items"], [{"id": 4, "name": "Visible"}])
+        self.assertNotIn("total_count", payload)
+        self.assertEqual(payload["metadata"]["page"], 2)
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0].body["filters"], {"name__in": ["Hidden", "Visible"]})
+        self.assertEqual(plans[0].body["page"], 2)
+
+    def test_request_permission_alternatives_reject_global_controls_before_fetch(
+        self,
+    ) -> None:
+        plans: list[RequestQueryPlan] = []
+
+        class AlternativeRemotePage(GeneralManager):
+            class Interface(RemoteManagerInterface):
+                id = Input(type=int)
+                name = RequestField(str)
+
+                class Meta:
+                    base_url = "https://remote.example.test"
+                    remote_manager = "alternative-pages"
+
+                @classmethod
+                def execute_request_plan(
+                    cls, plan: RequestQueryPlan
+                ) -> RequestQueryResult:
+                    plans.append(plan)
+                    return RequestQueryResult(items=({"id": 1, "name": "Visible"},))
+
+            class Permission(OverrideManagerPermission):
+                def get_read_permission_plan(self) -> ReadPermissionPlan:
+                    return ReadPermissionPlan(
+                        filters=[
+                            {"filter": {"name": "Visible"}},
+                            {"filter": {"name": "Other"}},
+                        ],
+                        requires_instance_check=False,
+                    )
+
+            class RemoteAPI:
+                enabled = True
+                resource_name = "alternative-pages"
+                allow_filter = True
+
+        config = get_remote_api_config(AlternativeRemotePage)
+        assert config is not None
+        response = _build_query_view(config)(
+            RequestFactory().post(
+                "/gm/alternative-pages/query",
+                data={"page": 1, "page_size": 1},
+                content_type="application/json",
+            )
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            json.loads(response.content)["error_code"], "unsupported_global_operation"
+        )
+        self.assertEqual(plans, [])
+
     def test_request_backed_query_view_preserves_matching_upstream_page(self) -> None:
         class PageProject(GeneralManager):
             class Interface(RequestInterface):

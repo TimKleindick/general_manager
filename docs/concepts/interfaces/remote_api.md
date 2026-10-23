@@ -1,5 +1,51 @@
 # RemoteAPI Websocket Invalidation
 
+## REST read authorization
+
+Generated RemoteAPI query, detail, create, and update responses apply the
+manager's read policy for `request.user`. A missing request user is treated as
+anonymous. Install Django authentication middleware or your application's
+authentication integration to supply the intended principal; the protocol
+version header selects the wire format and does not authenticate callers.
+
+Query responses apply permission filters and required instance checks before
+local sorting, counting, and pagination. Only readable rows contribute to local
+`total_count`. For an incomplete upstream response requiring local instance
+checks, `total_count` is omitted because the authorized global count is unknown.
+Request-backed managers with multiple permission alternatives reject global
+pagination or ordering controls before fetching data. This includes the default
+page: the branches cannot safely supply a global page.
+
+Response serialization checks each field before evaluating its value. Denied
+fields are omitted, including computed properties. A detail read denied by the
+row policy returns HTTP 403 with `error_code: "permission_denied"`. Create and
+update still enforce their write permissions independently; a successful write
+whose resulting row is unreadable retains its success status and returns
+`items: []`. Managers without a permission class retain the framework's default
+public read behavior.
+
+## Finite query pages
+
+Every query defaults to page 1 with 10 items. Set
+`GENERAL_MANAGER["REMOTE_API_DEFAULT_PAGE_SIZE"]` and
+`GENERAL_MANAGER["REMOTE_API_MAX_PAGE_SIZE"]` to positive integers to change the
+server default and maximum (100 by default); the default cannot exceed the
+maximum. Explicit oversized, non-integer, or non-positive page sizes fail with
+HTTP 400 (`invalid_request`) before executing the query. Clients that previously
+omitted pagination must now request subsequent pages to read more than the
+default page. Response metadata always reports the effective page and size.
+
+RemoteManager forwards the effective page controls upstream. Incomplete upstream
+pages must match those controls; otherwise the server returns
+`unsupported_global_operation` rather than presenting a partial dataset as a
+complete page. Even an upstream response that claims matching coordinates cannot
+expand the serialized output beyond the effective page size. Read authorization
+and authorized counts retain the semantics above. This is an output limit;
+counting and per-instance authorization may still examine more rows, and generic
+request interfaces may still fetch a complete upstream response.
+
+## Websocket invalidation
+
 RemoteAPI websocket invalidation is a commit-safe hint that a REST resource
 changed. A manager opts in with `RemoteAPI.enabled = True` and
 `RemoteAPI.websocket_invalidation = True`. Clients use the websocket event to
