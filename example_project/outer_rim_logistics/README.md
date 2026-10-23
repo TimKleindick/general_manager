@@ -25,6 +25,9 @@ centralized log collection.
 ```bash
 cp .env.example .env
 # create secrets (see docker/secrets/README.md)
+# create monitoring credentials interactively (requires Apache htpasswd)
+mkdir -p docker/htpasswd
+htpasswd -cB docker/htpasswd/observability orl_admin
 # TLS certs are auto-generated for localhost if missing
 docker compose up --build
 ```
@@ -54,14 +57,24 @@ Services (all via Nginx):
 - App: `https://localhost:${ORL_HTTPS_PORT}/graphql/`
 - Metrics: `https://localhost:${ORL_HTTPS_PORT}/metrics/`
 - Prometheus: `https://localhost:${ORL_HTTPS_PORT}/prometheus/` (protected by Nginx basic auth)
-- Grafana: `https://localhost:${ORL_HTTPS_PORT}/grafana/` (Grafana login; default login: `admin` / `admin`)
+- Grafana: `https://localhost:${ORL_HTTPS_PORT}/grafana/` (Grafana login: `admin`, password from the configured `grafana_admin_password` secret)
 - Grafana dashboards are provisioned from `docker/grafana/provisioning/dashboards`.
 - Prometheus scrapes app metrics, Meilisearch, Postgres exporter, Redis exporter, Nginx exporter, and Celery exporter.
+- Loki: `https://localhost:${ORL_HTTPS_PORT}/loki/` (protected by Nginx basic auth)
 
-Nginx basic auth uses `docker/htpasswd/observability`. A template exists at
-`docker/htpasswd/observability.example` (default user: `orl_admin`, password:
-`changeme`).
-- Loki: `https://localhost:${ORL_HTTPS_PORT}/loki/`
+Nginx requires the local `docker/htpasswd/observability` password file for both
+Prometheus and Loki in every HTTPS virtual host. Choose a unique password with
+the interactive command above; no default monitoring credential is shipped.
+The file is ignored by Git and mounted read-only. Compose fails if it is absent,
+rather than creating an empty directory. Do not use `htpasswd -c` when adding
+users to an existing file: it replaces the file. Ensure the Nginx worker can read
+the mounted file. Monitoring credentials are not forwarded to the backends.
+
+Prometheus and Loki have no published host ports; Grafana and collectors access
+them directly on the Compose backend network. This network is a trusted service
+boundary, not an authentication boundary between containers. The example HTTPS
+port remains published on all host interfaces, so only expose it to intended
+clients. These repository defaults do not modify existing deployments.
 
 Logs are written to `example_project/outer_rim_logistics/logs/`.
 
