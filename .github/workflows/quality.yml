@@ -9,6 +9,20 @@ permissions:
   contents: read
 
 jobs:
+  monitoring-runtime:
+    name: Example monitoring authentication
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require Docker
+        run: docker info
+      - name: Verify Nginx HTTPS authentication
+        run: python3 tests/packaging/smoke_example_monitoring.py -v
+
   test:
     name: 🧪 Run Tests
     runs-on: ubuntu-latest
