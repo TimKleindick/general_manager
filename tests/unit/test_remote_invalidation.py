@@ -12,7 +12,7 @@ import weakref
 
 from asgiref.sync import async_to_sync
 from channels.auth import AuthMiddlewareStack  # type: ignore[import-untyped]
-from channels.routing import ProtocolTypeRouter, URLRouter  # type: ignore[import-untyped]
+from channels.routing import URLRouter  # type: ignore[import-untyped]
 from django.db import transaction
 from django.test import SimpleTestCase
 from django.test import TransactionTestCase
@@ -91,7 +91,7 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
         self.assertIs(testing_asgi.websocket_urlpatterns[0], graphql_route)
         self.assertEqual(len(router.routes), 1)
 
-    def test_clear_remote_invalidation_routes_rebuilds_protocol_router_for_plain_app(
+    def test_clear_remote_invalidation_routes_preserves_plain_app(
         self,
     ) -> None:
         if testing_asgi.websocket_urlpatterns:
@@ -113,19 +113,17 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
 
             clear_remote_invalidation_routes()
 
-            self.assertIsInstance(testing_asgi.application, ProtocolTypeRouter)
-            router = _unwrap_websocket_router()
+            self.assertIs(testing_asgi.application, http_app)
             self.assertEqual(len(testing_asgi.websocket_urlpatterns), 1)
-            self.assertEqual(len(router.routes), 1)
             self.assertIs(testing_asgi.websocket_urlpatterns[0], graphql_route)
         finally:
             testing_asgi.application = original_application
 
     @override_settings(ASGI_APPLICATION="tests.testing_asgi.custom_application")
-    def test_ensure_remote_invalidation_route_wraps_configured_asgi_attribute(
+    def test_ensure_remote_invalidation_route_preserves_opaque_configured_attribute(
         self,
     ) -> None:
-        """Wrap the configured ASGI application attribute, not a hard-coded name."""
+        """An opaque callable cannot be assumed to be HTTP-only."""
 
         class Project:
             class RemoteAPI:
@@ -144,9 +142,8 @@ class RemoteInvalidationRouteTests(SimpleTestCase):
         try:
             ensure_remote_invalidation_route([Project])
 
-            self.assertIsInstance(testing_asgi.custom_application, ProtocolTypeRouter)
-            self.assertIsNot(testing_asgi.custom_application, custom_application)
-            self.assertEqual(len(testing_asgi.websocket_urlpatterns), 1)
+            self.assertIs(testing_asgi.custom_application, custom_application)
+            self.assertEqual(testing_asgi.websocket_urlpatterns, [])
         finally:
             if original_application is None:
                 delattr(testing_asgi, "custom_application")

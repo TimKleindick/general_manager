@@ -140,6 +140,9 @@ class ChatTransportIntegrationTests(TransactionTestCase):
     def setUp(self) -> None:
         self._original_patterns = list(testing_asgi.websocket_urlpatterns)
         self._original_application = testing_asgi.application
+        self._original_application_mapping = dict(
+            testing_asgi.application.application_mapping
+        )
         GraphQL.reset_registry()
 
         class Query(graphene.ObjectType):
@@ -153,6 +156,10 @@ class ChatTransportIntegrationTests(TransactionTestCase):
     def tearDown(self) -> None:
         testing_asgi.websocket_urlpatterns[:] = self._original_patterns
         testing_asgi.application = self._original_application
+        testing_asgi.application.application_mapping.clear()
+        testing_asgi.application.application_mapping.update(
+            self._original_application_mapping
+        )
         GraphQL.reset_registry()
         super().tearDown()
 

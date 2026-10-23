@@ -39,6 +39,9 @@ class ChatBootstrapTests(SimpleTestCase):
     def setUp(self) -> None:
         GraphQL.reset_registry()
         self._original_asgi_application = testing_asgi.application
+        self._original_application_mapping = dict(
+            testing_asgi.application.application_mapping
+        )
         self._original_websocket_patterns = list(testing_asgi.websocket_urlpatterns)
         test_urls.urlpatterns[:] = []
         testing_asgi.websocket_urlpatterns[:] = []
@@ -47,6 +50,10 @@ class ChatBootstrapTests(SimpleTestCase):
     def tearDown(self) -> None:
         test_urls.urlpatterns[:] = []
         testing_asgi.application = self._original_asgi_application
+        testing_asgi.application.application_mapping.clear()
+        testing_asgi.application.application_mapping.update(
+            self._original_application_mapping
+        )
         testing_asgi.websocket_urlpatterns[:] = self._original_websocket_patterns
         GraphQL.reset_registry()
         super().tearDown()
