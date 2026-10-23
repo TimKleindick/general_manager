@@ -48,6 +48,7 @@ SENSITIVE = (
     ".git/config",
     ".venv/lib/local.py",
     f"{EXAMPLE}/.env",
+    f"{EXAMPLE}/.env.production",
     *(
         f"{EXAMPLE}/docker/secrets/{name}.txt"
         for name in (
