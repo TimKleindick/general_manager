@@ -30,13 +30,18 @@ class DenyMiddleware:
         await send({"type": "websocket.close", "code": 4403})
 
 
-def test_registration_and_clear_preserve_security_wrappers(monkeypatch, settings):
+@pytest.mark.parametrize("declared_patterns", [True, False])
+def test_registration_and_clear_preserve_security_wrappers(
+    monkeypatch, settings, declared_patterns
+):
     existing = re_path(r"^existing/$", lambda *_: None)
     router = URLRouter([existing])
     guard = DenyMiddleware(router)
     protocol = ProtocolTypeRouter({"websocket": guard})
     outer = DenyMiddleware(protocol)
-    module = SimpleNamespace(application=outer, websocket_urlpatterns=[existing])
+    module = SimpleNamespace(application=outer)
+    if declared_patterns:
+        module.websocket_urlpatterns = [existing]
     settings.ASGI_APPLICATION = "tests.fake.application"
     monkeypatch.setattr(remote, "import_module", lambda _: module)
 
