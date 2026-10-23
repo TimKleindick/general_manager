@@ -137,12 +137,45 @@ class ProjectDocument(GeneralManager):
 
 When a user fails a delegated check, the action is denied immediately. Filters returned from `Project.Permission.get_permission_filter()` are namespaced as `{"filter": {"project__...": ...}}`, keeping queryset logic consistent.
 
+Mutation payloads may provide either the related manager or the normalized
+foreign-key value. This makes the same permission class work for direct Python
+calls and generated GraphQL mutations:
+
+```python
+document = ProjectDocument.create(
+    project=project,
+    creator_id=user.id,
+)
+document = ProjectDocument.create(
+    project_id=str(project.id),
+    creator_id=user.id,
+)
+
+# The proposed project is checked before the update is written.
+document = document.update(
+    project_id=str(other_project.id),
+    creator_id=user.id,
+)
+```
+
+GraphQL normalizes `project` to `project_id` before the permission check. If a
+Python payload contains both aliases, preserve the order that the ORM will
+persist: the last of `project` or `project_id` wins. A `to_field` relation uses
+that field's value to resolve the actual related manager, rather than assuming
+the value is its primary key. Invalid identifiers fail the permission check;
+they do not fall back to default permissions.
+
 If you need a field-specific rule to replace the class-level CRUD rule instead of adding an extra gate, switch to `OverrideManagerPermission`. `__based_on__` still stays an outer gate in that mode.
 
 If `project` is `None` at runtime, implicit CRUD rules on the current
 permission fall back to `GENERAL_MANAGER["DEFAULT_PERMISSIONS"]` (or to
 `public` for reads and `isAuthenticated` for writes when that setting is not
 configured). Explicitly declared CRUD lists still win.
+
+For an instance-level check, a missing configured relation raises
+`InvalidBasedOnConfigurationError`; a relation that resolves to something
+other than a `GeneralManager` raises `InvalidBasedOnTypeError`. A missing or
+null relation is different: it uses the configured defaults described above.
 
 ## 4. Validate at runtime
 
