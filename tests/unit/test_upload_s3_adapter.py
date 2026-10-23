@@ -2339,3 +2339,100 @@ def test_public_proxy_retains_public_optin_and_endpoint_validation(
     adapter = S3ProxyUploadAdapter(storage)
     with pytest.raises(PublicUploadUrlUnsupportedError):
         adapter.public_download_url("files/report.txt", version=_stage(client))
+
+
+@pytest.mark.parametrize("subclass", [False, True])
+def test_explicit_direct_class_without_versioning_resolves_proxy(
+    subclass: bool,
+) -> None:
+    class LegacyAdapter(S3UploadAdapter):
+        pass
+
+    storage = FakeS3Storage(FakeS3Client(versioning=False))
+    storage.versioning_enabled = False
+    registry = UploadAdapterRegistry()
+    registry.register(FakeS3Storage, LegacyAdapter if subclass else S3UploadAdapter)
+    assert isinstance(registry.resolve(storage), S3ProxyUploadAdapter)
+    assert isinstance(
+        registry.resolve_by_id("s3-proxy", 1, storage), S3ProxyUploadAdapter
+    )
+
+
+def test_custom_factory_validation_error_is_not_hidden() -> None:
+    def factory(storage: object) -> S3UploadAdapter:
+        error = UploadBackendUnsupportedError("custom factory error")
+        raise error
+
+    registry = UploadAdapterRegistry()
+    registry.register(FakeS3Storage, factory)
+    with pytest.raises(UploadBackendUnsupportedError, match="custom factory error"):
+        registry.resolve(FakeS3Storage(FakeS3Client()))
+
+
+def test_s3_proxy_rejects_declared_oversize_before_spooling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import general_manager.uploads.s3 as s3
+
+    def unexpected_spool(*args: object, **kwargs: object) -> None:
+        pytest.fail("must reject before opening spool")
+
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(FakeS3Client()))
+    monkeypatch.setattr(s3, "SpooledTemporaryFile", unexpected_spool)
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.save_stage("stage", [], content_type=None, size=5 * 1024**3 + 1)
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.create_upload_instructions(
+            stage_key="stage",
+            upload_url="/upload",
+            content_type="text/plain",
+            size=5 * 1024**3 + 1,
+            checksum_sha256="a" * 64,
+        )
+    # The exact upper bound remains admissible without allocating its body.
+    adapter.create_upload_instructions(
+        stage_key="stage",
+        upload_url="/upload",
+        content_type="text/plain",
+        size=5 * 1024**3,
+        checksum_sha256="a" * 64,
+    )
+
+
+def test_s3_proxy_bounds_unknown_size_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    import general_manager.uploads.s3 as s3
+
+    monkeypatch.setattr(s3, "_MAX_SINGLE_PUT_BYTES", 3)
+    client = FakeS3Client()
+    adapter = S3ProxyUploadAdapter(FakeS3Storage(client))
+    with pytest.raises(UploadBackendUnsupportedError):
+        adapter.save_stage("oversize", [b"abc", b"d"], content_type=None)
+    assert client.put_calls == []
+    assert adapter.save_stage("exact", [b"abc"], content_type=None).size == 3
+
+
+@pytest.mark.parametrize("storage_class", ["GLACIER", "DEEP_ARCHIVE"])
+def test_proxy_materialize_preserves_final_acl_and_storage_class(
+    storage_class: str,
+) -> None:
+    client = FakeS3Client()
+    storage = FakeS3Storage(
+        client,
+        default_acl="public-read",
+        object_parameters={"StorageClass": storage_class},
+    )
+    storage.upload_staging_prefix_private = True
+    proxy = S3ProxyUploadAdapter(storage)
+    version = proxy.save_stage(
+        "gm-staging/proxy.bin", [b"payload"], content_type="text/plain"
+    )
+    proxy.materialize(
+        "gm-staging/proxy.bin",
+        version,
+        "files/proxy.bin",
+        intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+    )
+    assert "ACL" not in client.put_calls[0]
+    assert "StorageClass" not in client.put_calls[0]
+    assert client.put_calls[-1]["ACL"] == "public-read"
+    assert client.put_calls[-1]["StorageClass"] == storage_class

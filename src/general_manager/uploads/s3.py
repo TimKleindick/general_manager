@@ -35,6 +35,15 @@ from general_manager.uploads.types import ObjectVersion, UploadTransport
 _ExceptionT = TypeVar("_ExceptionT", bound=Exception)
 _ResultT = TypeVar("_ResultT")
 _MAX_SIGV4_EXPIRY_SECONDS = 604_800
+# AWS single-PUT ceiling; multipart uploads are not implemented here.
+_MAX_SINGLE_PUT_BYTES = 5 * 1024**3
+
+
+def _validate_single_put_size(size: int) -> None:
+    if size > _MAX_SINGLE_PUT_BYTES:
+        raise _exception(
+            UploadBackendUnsupportedError, "S3 proxy uploads cannot exceed 5 GiB."
+        )
 
 
 def _exception(
@@ -131,7 +140,8 @@ class S3ProxyUploadAdapter:
         headers: Mapping[str, str] | None = None,
         expires_in: int = 900,
     ) -> UploadInstructions:
-        del stage_key, content_type, size, checksum_sha256, expires_in
+        del stage_key, content_type, checksum_sha256, expires_in
+        _validate_single_put_size(size)
         if upload_url is None:
             raise _exception(ValueError, "upload_url is required for proxy uploads.")
         return UploadInstructions(
@@ -150,6 +160,8 @@ class S3ProxyUploadAdapter:
         checksum_sha256: str | None = None,
         size: int | None = None,
     ) -> ObjectVersion:
+        if size is not None:
+            _validate_single_put_size(size)
         with SpooledTemporaryFile(
             max_size=self._spool_memory_limit,
             mode="w+b",
@@ -157,9 +169,10 @@ class S3ProxyUploadAdapter:
             digest = hashlib.sha256()
             byte_count = 0
             for chunk in chunks:
+                byte_count += len(chunk)
+                _validate_single_put_size(byte_count)
                 digest.update(chunk)
                 body.write(chunk)
-                byte_count += len(chunk)
             actual_checksum = digest.hexdigest()
             if checksum_sha256 is not None and checksum_sha256 != actual_checksum:
                 from general_manager.uploads.errors import UploadChecksumMismatchError
