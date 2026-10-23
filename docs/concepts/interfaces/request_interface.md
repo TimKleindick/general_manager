@@ -105,6 +105,15 @@ Then the default `execute_request_plan()` implementation delegates to that trans
 
 For most HTTP integrations, start with the built-in `UrllibRequestTransport`. Keep a custom `SharedRequestTransport` subclass only when the upstream service needs special request signing, non-JSON wire behavior, or custom response parsing.
 
+The built-in transport does not follow HTTP redirects, including redirects to
+the same origin. Redirect responses raise `RequestTransportError` through
+`execute()` (`RequestTransportStatusError` through `send()`), preserving the
+upstream status code and response headers. Configure the final upstream URL
+directly. This prevents response-controlled destinations from receiving
+credentials or request bodies and blocks redirect-based access to internal
+services, including HTTPS-to-HTTP downgrades. If you inject a custom `urlopen`
+callable, that callable must enforce its own redirect policy.
+
 The shared transport is responsible for:
 
 - building the outbound request from the `RequestQueryPlan`
