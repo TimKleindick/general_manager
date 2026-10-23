@@ -42,7 +42,7 @@ class DummyInterface:
     transport_config = RequestTransportConfig(base_url="https://service.example.test")
 
 
-class FakeUrlopenResponse:
+class FakeUrlopenResponse(BytesIO):
     def __init__(
         self,
         *,
@@ -51,11 +51,8 @@ class FakeUrlopenResponse:
         headers: dict[str, str] | None = None,
     ) -> None:
         self.status = status
-        self._payload = payload
+        super().__init__(json.dumps(payload).encode("utf-8"))
         self.headers = headers or {}
-
-    def read(self) -> bytes:
-        return json.dumps(self._payload).encode("utf-8")
 
 
 class RecordingMetricsBackend:

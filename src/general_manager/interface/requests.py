@@ -7,6 +7,9 @@ import base64
 from dataclasses import dataclass, field
 from email.message import Message
 import json
+import math
+import socket
+import threading
 import random
 from types import MappingProxyType
 import time
@@ -77,8 +80,12 @@ class UrlopenResponse(Protocol):
     status: int
     headers: RequestHeaders
 
-    def read(self) -> bytes:
-        """Return the response body bytes."""
+    def read(self, size: int = -1) -> bytes:
+        """Return at most size response body bytes."""
+        ...
+
+    def close(self) -> None:
+        """Release the response stream."""
         ...
 
 
@@ -130,6 +137,10 @@ _RETRY_POLICY_EXCEPTIONS_ERROR = (
 _RETRY_POLICY_HEADER_ERROR = (
     "RequestRetryPolicy.idempotency_key_header must be a non-empty string."
 )
+_RESPONSE_BYTES_CONFIG_ERROR = "max_response_bytes must be a positive integer"
+_RESPONSE_TIMEOUT_CONFIG_ERROR = "body_read_timeout must be positive and finite"
+_RESPONSE_DEADLINE_ERROR = "HTTP response body read deadline exceeded"
+_RESPONSE_SIZE_ERROR = "HTTP response byte limit exceeded"
 _RESOLVE_REQUEST_EMPTY_PATH_ERROR = "resolve_request_value path must not be empty."
 _RESOLVE_REQUEST_PATH_TYPE_ERROR = (
     "resolve_request_value path must contain only strings."
@@ -1939,7 +1950,23 @@ class UrllibRequestTransport(SharedRequestTransport):
         *,
         urlopen: UrlopenCallable | None = None,
         json_dumps: Callable[[object], str] | None = None,
+        max_response_bytes: int = 8 * 1024 * 1024,
+        body_read_timeout: float = 10.0,
     ) -> None:
+        if (
+            isinstance(max_response_bytes, bool)
+            or not isinstance(max_response_bytes, int)
+            or max_response_bytes <= 0
+        ):
+            raise ValueError(_RESPONSE_BYTES_CONFIG_ERROR)
+        if (
+            isinstance(body_read_timeout, bool)
+            or not math.isfinite(body_read_timeout)
+            or body_read_timeout <= 0
+        ):
+            raise ValueError(_RESPONSE_TIMEOUT_CONFIG_ERROR)
+        self._max_response_bytes = max_response_bytes
+        self._body_read_timeout = body_read_timeout
         self._urlopen = urlopen or cast(
             UrlopenCallable, build_opener(_NoRedirectHandler()).open
         )
@@ -1972,7 +1999,7 @@ class UrllibRequestTransport(SharedRequestTransport):
         )
         try:
             raw_response = self._urlopen(raw_request, timeout=request.timeout)
-            payload = self._decode_payload(raw_response.read())
+            payload = self._decode_payload(self._read_response_body(raw_response))
             return RequestTransportResponse(
                 payload=payload,
                 status_code=int(getattr(raw_response, "status", 200)),
@@ -1981,8 +2008,10 @@ class UrllibRequestTransport(SharedRequestTransport):
         except HTTPError as error:
             error_payload: RequestResponse | None = None
             try:
-                error_payload = self._decode_payload(error.read())
-            except RequestSchemaError:
+                error_payload = self._decode_payload(
+                    self._read_response_body(cast(UrlopenResponse, error))
+                )
+            except (RequestSchemaError, TimeoutError):
                 # HTTP status and transport metadata remain authoritative when
                 # an upstream proxy returns HTML or another non-JSON body.
                 error_payload = None
@@ -1997,6 +2026,62 @@ class UrllibRequestTransport(SharedRequestTransport):
             ) from error
         except URLError as error:
             raise OSError(str(error.reason)) from error
+
+    def _read_response_body(self, response: UrlopenResponse) -> bytes:
+        """Bound bytes and interrupt native socket reads at the body deadline.
+
+        urllib buffers chunk headers/trailers internally, so checking a clock
+        only between read calls would not stop a slow drip inside those calls.
+        A timer shuts down the native socket; cancellation and join precede
+        close so it cannot race a reused connection. Custom response readers
+        must honor their own blocking timeout and the sized-read contract.
+        """
+        deadline = time.monotonic() + self._body_read_timeout
+        expired = threading.Event()
+        native_response = response.fp if isinstance(response, HTTPError) else response
+        buffered = getattr(native_response, "fp", None)
+        raw = getattr(buffered, "raw", None)
+        native_socket = getattr(raw, "_sock", None)
+        timer: threading.Timer | None = None
+
+        def expire() -> None:
+            expired.set()
+            if isinstance(native_socket, socket.socket):
+                try:
+                    native_socket.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        if isinstance(native_socket, socket.socket):
+            timer = threading.Timer(self._body_read_timeout, expire)
+            timer.daemon = True
+            timer.start()
+        payload = bytearray()
+        read = getattr(response, "read1", response.read)
+        try:
+            while True:
+                if expired.is_set() or time.monotonic() >= deadline:
+                    raise TimeoutError(_RESPONSE_DEADLINE_ERROR)
+                try:
+                    chunk = read(
+                        min(65536, self._max_response_bytes - len(payload) + 1)
+                    )
+                except Exception as error:
+                    if expired.is_set() or time.monotonic() >= deadline:
+                        raise TimeoutError(_RESPONSE_DEADLINE_ERROR) from error
+                    raise
+                if expired.is_set() or time.monotonic() >= deadline:
+                    raise TimeoutError(_RESPONSE_DEADLINE_ERROR)
+                if len(chunk) > self._max_response_bytes - len(payload):
+                    raise RequestSchemaError(_RESPONSE_SIZE_ERROR)
+                if not chunk:
+                    return bytes(payload)
+                payload.extend(chunk)
+        finally:
+            if timer is not None:
+                timer.cancel()
+                timer.join()
+            response.close()
 
     @staticmethod
     def _build_url(request: RequestTransportRequest) -> str:

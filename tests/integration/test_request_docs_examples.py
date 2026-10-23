@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from io import BytesIO
+import json
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -28,13 +30,14 @@ class FakeExampleResponse:
         self, *, status: int, payload: Any, headers: dict[str, str] | None = None
     ) -> None:
         self.status = status
-        self._payload = payload
+        self._body = BytesIO(json.dumps(payload).encode("utf-8"))
         self.headers = headers or {}
 
-    def read(self) -> bytes:
-        import json
+    def read(self, size: int = -1) -> bytes:
+        return self._body.read(size)
 
-        return json.dumps(self._payload).encode("utf-8")
+    def close(self) -> None:
+        self._body.close()
 
 
 class RequestDocsExampleTests(SimpleTestCase):
