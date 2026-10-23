@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.86.7 (2026-10-23)
+
+### Bug Fixes
+
+- Preserve ASGI middleware and authorize invalidation events
+  ([`c434e18`](https://github.com/TimKleindick/general_manager/commit/c434e1884aa96232c9b68352ba8ab830666202bd))
+
+### Testing
+
+- Isolate deleted principal fixture from global cascades
+  ([`e375e08`](https://github.com/TimKleindick/general_manager/commit/e375e082aa08cec8f3438a763c9f251718264c53))
+
+- Verify deleted accounts stop receiving websocket events
+  ([`a3f75d0`](https://github.com/TimKleindick/general_manager/commit/a3f75d0d283502b5250a10c81b170b2621e2246f))
+
+- Verify remote event authorization edge cases
+  ([`a63bd97`](https://github.com/TimKleindick/general_manager/commit/a63bd9756090bcf7fc49ce4000c2c6628f0b587b))
+
+
 ## v0.86.6 (2026-10-23)
 
 ### Bug Fixes
