@@ -83,6 +83,12 @@ services:
     entrypoint: ["/bin/sh", "/etc/nginx/nginx-entrypoint.sh"]
     volumes:
       - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - type: bind
+        source: ./docker/htpasswd/observability
+        target: /etc/nginx/htpasswd/observability
+        read_only: true
+        bind:
+          create_host_path: false
       - orl-static:/static:ro
       - ./docker/certs:/etc/nginx/certs:ro
       - ./docker/nginx-entrypoint.sh:/etc/nginx/nginx-entrypoint.sh:ro
