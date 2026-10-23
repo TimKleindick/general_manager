@@ -408,6 +408,13 @@ selections, filters, limits, and offsets are validated against the indexed
 schema before execution. Mutations require an authenticated user and an exact
 name in `allowed_mutations`.
 
+The query tool caps each page at the smaller of positive `CHAT.max_results`
+and `GRAPHQL_MAX_PAGE_SIZE`, including when `limit` is omitted. Invalid GraphQL
+pagination configuration is rejected before execution. Offsets retain native
+paging semantics: the requested window is assembled from at most two bounded
+pages; the offset never increases `pageSize`. This bounds fetched rows, not
+backend work required to locate a deep page or compute a count.
+
 Read-only tool calls may be batched in one provider completion. A completion
 that includes `mutate` and any other tool call is rejected before any tool runs;
 request each mutation by itself so the client-confirmation protocol can retain

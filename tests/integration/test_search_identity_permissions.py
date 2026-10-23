@@ -175,7 +175,8 @@ class _AuthenticatedPrecisionTests(GeneralManagerTransactionTestCase):
                         [{"key": str(A), "customerId": str(A), "businessNumber": 17}],
                     )
                     self.assertEqual(
-                        self.Record.Permission.checked, [(self.user.pk, A)]
+                        self.Record.Permission.checked,
+                        [(self.user.pk, A), (self.user.pk, B), (self.user.pk, A)],
                     )
 
     def test_native_permission_constraints_conflicts_or_and_counts(self):
@@ -192,7 +193,10 @@ class _AuthenticatedPrecisionTests(GeneralManagerTransactionTestCase):
         self.assertEqual(self.search({"customer_id": str(B)})["total"], 0)
         self.Record.Permission.checked = []
         self.assertEqual(self.search({"business_number": 17})["total"], 1)
-        self.assertEqual(self.Record.Permission.checked, [(self.user.pk, A)])
+        # Native constraints restrict preflight to A; the hit gate checks A again.
+        self.assertEqual(
+            self.Record.Permission.checked, [(self.user.pk, A), (self.user.pk, A)]
+        )
 
     def test_final_native_exclusions_and_anonymous_denial(self):
         self.Record.Permission.constraints = [

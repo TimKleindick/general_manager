@@ -189,7 +189,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
             },
         )
 
-    def test_input_filter_is_applied_before_authorization(self) -> None:
+    def test_input_filter_is_applied_after_candidate_authorization(self) -> None:
         response = self.query(
             """
             query($subjectId: ID!) {
@@ -210,12 +210,14 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         assert response.json()["data"]["reportCalculationList"]["pageInfo"] == {
             "totalCount": 3
         }
-        assert self.Calculation.authorization_checks == [
-            (self.subject.id, date(2026, 1, 31)),
-            (self.subject.id, date(2026, 2, 28)),
-            (self.subject.id, date(2026, 3, 31)),
-            (self.subject.id, date(2026, 4, 30)),
-        ]
+        self.assertEqual(
+            Counter(self.Calculation.authorization_checks),
+            Counter(
+                (subject.id, date(2026, month, day))
+                for subject in [self.subject, self.other_subject]
+                for month, day in [(1, 31), (2, 28), (3, 31), (4, 30)]
+            ),
+        )
 
     def test_computed_property_filter_is_applied_after_authorization(self) -> None:
         response = self.query(
@@ -252,16 +254,15 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
             ],
         )
         self.assertEqual(
-            self.Calculation.authorization_checks,
-            [
-                (self.subject.id, date(2026, 1, 31)),
-                (self.subject.id, date(2026, 2, 28)),
-                (self.subject.id, date(2026, 3, 31)),
-                (self.subject.id, date(2026, 4, 30)),
-            ],
+            Counter(self.Calculation.authorization_checks),
+            Counter(
+                (subject.id, date(2026, month, day))
+                for subject in [self.subject, self.other_subject]
+                for month, day in [(1, 31), (2, 28), (3, 31), (4, 30)]
+            ),
         )
 
-    def test_input_exclude_is_applied_before_authorization(self) -> None:
+    def test_input_exclude_is_applied_after_candidate_authorization(self) -> None:
         response = self.query(
             """
             query {
@@ -295,14 +296,9 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         self.assertEqual(
             Counter(self.Calculation.authorization_checks),
             Counter(
-                [
-                    (self.subject.id, date(2026, 2, 28)),
-                    (self.subject.id, date(2026, 3, 31)),
-                    (self.subject.id, date(2026, 4, 30)),
-                    (self.other_subject.id, date(2026, 2, 28)),
-                    (self.other_subject.id, date(2026, 3, 31)),
-                    (self.other_subject.id, date(2026, 4, 30)),
-                ]
+                (subject.id, date(2026, month, day))
+                for subject in [self.subject, self.other_subject]
+                for month, day in [(1, 31), (2, 28), (3, 31), (4, 30)]
             ),
         )
 
@@ -332,7 +328,14 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
             response.json()["data"]["reportCalculationList"],
             {"items": [], "pageInfo": {"totalCount": 0}},
         )
-        self.assertEqual(self.Calculation.authorization_checks, [])
+        self.assertEqual(
+            Counter(self.Calculation.authorization_checks),
+            Counter(
+                (subject.id, date(2026, month, day))
+                for subject in [self.subject, self.other_subject]
+                for month, day in [(2, 28)]
+            ),
+        )
 
     def test_permission_exclude_cannot_replace_same_key_user_exclude(self) -> None:
         self.Calculation.permission_constraints = [
@@ -371,16 +374,13 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         self.assertEqual(
             Counter(self.Calculation.authorization_checks),
             Counter(
-                [
-                    (self.subject.id, date(2026, 3, 31)),
-                    (self.subject.id, date(2026, 4, 30)),
-                    (self.other_subject.id, date(2026, 3, 31)),
-                    (self.other_subject.id, date(2026, 4, 30)),
-                ]
+                (subject.id, date(2026, month, day))
+                for subject in [self.subject, self.other_subject]
+                for month, day in [(1, 31), (3, 31), (4, 30)]
             ),
         )
 
-    def test_manager_id_aliases_narrow_authorization_candidates(self) -> None:
+    def test_manager_id_aliases_do_not_narrow_authorization_candidates(self) -> None:
         resolver = create_list_resolver(
             lambda _parent, _include_inactive: self.Calculation.all(),
             self.Calculation,
@@ -402,11 +402,10 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
 
                 self.assertEqual(result["pageInfo"]["total_count"], 3)
                 self.assertEqual(
-                    self.Calculation.authorization_checks,
-                    [
-                        (self.subject.id, date(2026, 1, 31)),
-                        (self.subject.id, date(2026, 2, 28)),
-                        (self.subject.id, date(2026, 3, 31)),
-                        (self.subject.id, date(2026, 4, 30)),
-                    ],
+                    Counter(self.Calculation.authorization_checks),
+                    Counter(
+                        (subject.id, date(2026, month, day))
+                        for subject in [self.subject, self.other_subject]
+                        for month, day in [(1, 31), (2, 28), (3, 31), (4, 30)]
+                    ),
                 )

@@ -109,15 +109,37 @@ Pagination is page-based. Responses include a `pageInfo` object with:
 - `page_size`
 
 `total_count` is computed after permission filtering, user filters, excludes,
-grouping, and sorting, but before pagination. If only one pagination argument
-is supplied, the other defaults to `page=1` or `page_size=10`. Explicit `page`
-and `pageSize` values must be positive; zero and negative values surface as
-GraphQL `BAD_USER_INPUT` errors before slicing. `pageInfo` always reports the
-effective page and page size. Empty known result sets report `totalPages: 0`,
-and an out-of-range positive page returns an empty page. Unpaginated nonempty
-lists report `currentPage: 1`, `pageSize: null`, and `totalPages: 1`.
-Request-backed lists only know the upstream total when their provider returns
-one, so fetched row count must not be presented as a global total.
+grouping, and sorting, but before pagination. Generated root and nested `…List`
+and `…Groups` fields always paginate, including when both arguments are omitted.
+The effective defaults are page 1 and size 10, with a maximum page size of 100.
+Operators can configure these sizes in Django settings:
+
+```python
+GENERAL_MANAGER = {
+    "GRAPHQL_DEFAULT_PAGE_SIZE": 10,
+    "GRAPHQL_MAX_PAGE_SIZE": 100,
+}
+```
+
+Both settings must be positive integers (not booleans), and the default must not
+exceed the maximum. Explicit `page` and `pageSize` values must be positive;
+`pageSize` above the configured maximum is rejected rather than clamped.
+Invalid pagination is rejected before loading the list source. `pageInfo`
+always reports the effective page and size. Empty known result sets report
+`totalPages: 0`; an out-of-range positive page returns an empty page while
+retaining the known total.
+
+Request-backed lists forward effective pagination when a remote request plan is
+available. An incomplete upstream page must match those effective coordinates;
+it cannot choose a different page or size when the caller omits pagination.
+Returned items are capped even if the upstream provider overdelivers. Upstream
+row counts are not presented as global totals unless authorization can establish
+their validity; unknown totals remain null.
+
+These bounds limit items returned by generated paged fields. Permission checks,
+exact counts, grouping, and Python-side sorting may still traverse or materialize
+the source before pagination. Plain list-valued properties without a generated
+`items` / `pageInfo` contract are not covered by these settings.
 
 ## Grouping
 

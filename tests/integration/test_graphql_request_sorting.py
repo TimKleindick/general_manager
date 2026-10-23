@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, ClassVar
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from graphql import GraphQLError
 
@@ -637,7 +638,81 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(self.transport.execution_count, 0)
 
-    def test_remote_request_forwards_order_and_page_once(self) -> None:
+    def test_remote_request_forwards_finite_default_page(self) -> None:
+        response = self.query(
+            "{ remoteRequestSortItemList { items { id } pageInfo { pageSize currentPage } } }"
+        )
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["remoteRequestSortItemList"]
+        self.assertEqual(payload["pageInfo"], {"pageSize": 10, "currentPage": 1})
+        self.assertEqual(self.remote_transport.requests[0].body["page"], 1)
+        self.assertEqual(self.remote_transport.requests[0].body["page_size"], 10)
+
+    def test_upstream_page_metadata_cannot_bypass_output_page_size(self) -> None:
+        self.transport.result_page = 1
+        self.transport.result_page_size = 2
+        self.transport.result_total_count = 10
+        # The fake provider deliberately overdelivers three rows for a two-row page.
+        response = self.query(
+            "{ requestSortItemList(pageSize: 2) { items { id } pageInfo { totalCount pageSize currentPage totalPages } } }"
+        )
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["requestSortItemList"]
+        self.assertEqual(len(payload["items"]), 2)
+        self.assertEqual(
+            payload["pageInfo"],
+            {"totalCount": 10, "pageSize": 2, "currentPage": 1, "totalPages": 5},
+        )
+
+    def test_incomplete_upstream_page_must_match_default_coordinates(self) -> None:
+        self.transport.result_page = 2
+        self.transport.result_page_size = 3
+        self.transport.result_total_count = 10
+        response = self.query("{ requestSortItemList { items { id } } }")
+        self.assertResponseHasErrors(response)
+        self.assertIn("global pagination", response.json()["errors"][0]["message"])
+
+    def test_denied_request_operands_never_fetch_upstream(self) -> None:
+        for total_count in [2, 10]:
+            with self.subTest(total_count=total_count):
+                self.transport.result_page = 1
+                self.transport.result_page_size = 2
+                self.transport.result_total_count = total_count
+                with patch.object(
+                    self.request_sort_item.Permission,
+                    "get_read_permission_plan",
+                    return_value=ReadPermissionPlan(
+                        filters=[], requires_instance_check=False, decision="deny_all"
+                    ),
+                ):
+                    response = self.query(
+                        '{ requestSortItemList(filter: {rootKey: "Alpha"}) '
+                        "{ items { id } pageInfo { totalCount } } }"
+                    )
+                self.assertEqual(self.transport.execution_count, 0)
+                self.assertResponseNoErrors(response)
+                self.assertEqual(
+                    response.json()["data"]["requestSortItemList"],
+                    {"items": [], "pageInfo": {"totalCount": 0}},
+                )
+
+    def test_operand_provenance_fetch_keeps_permission_filter(self) -> None:
+        response = self.query(
+            '{ filteredRemoteRequestSortItemList(filter: {rootKey: "Beta"}) '
+            "{ items { rootKey } pageInfo { totalCount } } }"
+        )
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["filteredRemoteRequestSortItemList"],
+            {"items": [{"rootKey": "Beta"}], "pageInfo": {"totalCount": 1}},
+        )
+        self.assertEqual(len(self.remote_transport.requests), 2)
+        for request in self.remote_transport.requests:
+            self.assertEqual(request.body["filters"], {"root_key": "Beta"})
+
+    def test_remote_request_authorizes_full_scope_before_forwarding_order_and_page(
+        self,
+    ) -> None:
         response = self.query(
             """
             query {
@@ -660,8 +735,9 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
             payload["pageInfo"],
             {"totalCount": 3, "pageSize": 1, "currentPage": 2, "totalPages": 3},
         )
-        self.assertEqual(len(self.remote_transport.requests), 1)
-        body = self.remote_transport.requests[0].body
+        self.assertEqual(len(self.remote_transport.requests), 2)
+        self.assertFalse(self.remote_transport.requests[0].body.get("ordering"))
+        body = self.remote_transport.requests[1].body
         self.assertEqual(body["page"], 2)
         self.assertEqual(body["page_size"], 1)
         self.assertEqual(body["ordering"], ["-root_key"])

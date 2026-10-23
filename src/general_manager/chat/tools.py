@@ -15,6 +15,7 @@ from django.db import connection, transaction
 from general_manager.api.graphql import GraphQL
 from general_manager.api.graphql_resolvers import (
     UnsupportedExcludeNoneRelationFilterError,
+    _pagination_sizes,
 )
 from general_manager.chat.rate_limits import get_query_timeout_ms
 from general_manager.chat.mutation_inputs import mutation_document
@@ -480,9 +481,14 @@ def query(
         raise ChatSchemaNotInitializedError()
 
     max_results = get_chat_settings().get("max_results")
-    effective_limit = limit
-    if isinstance(max_results, int) and max_results > 0:
-        effective_limit = max_results if limit is None else min(limit, max_results)
+    _, max_page_size = _pagination_sizes()
+    if (
+        isinstance(max_results, int)
+        and not isinstance(max_results, bool)
+        and max_results > 0
+    ):
+        max_page_size = min(max_results, max_page_size)
+    effective_limit = max_page_size if limit is None else min(limit, max_page_size)
 
     native_schema = runtime_schema()
     summary = build_schema_index().get(manager)

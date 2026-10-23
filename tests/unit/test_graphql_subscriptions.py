@@ -159,6 +159,176 @@ class TestGraphQLDatabaseSubscriptions(GeneralManagerTransactionTestCase):
             schema_kwargs["subscription"] = GraphQL._subscription_class
         return graphene.Schema(**schema_kwargs)
 
+    def test_detail_typename_requires_instance_read_permission(self) -> None:
+        hidden = self.Employee.create(name="Hidden", creator_id=self.user.id)
+        visible = self.Employee.create(name="Visible", creator_id=self.user.id)
+        schema = self._build_schema()
+        for employee, readable in ((hidden, False), (visible, True)):
+            result = schema.execute(
+                "query($id: ID!) { employee(id: $id) { __typename } }",
+                variable_values={"id": employee.id},
+                context_value=SimpleNamespace(user=self.user),
+            )
+            self.assertIsNone(result.errors)
+            self.assertEqual(result.data["employee"] is not None, readable)
+
+    def test_detail_typename_missing_and_denied_have_same_response(self) -> None:
+        hidden = self.Employee.create(name="Hidden", creator_id=self.user.id)
+        schema = self._build_schema()
+        results = [
+            schema.execute(
+                "query($id: ID!) { employee(id: $id) { __typename } }",
+                variable_values={"id": identifier},
+                context_value=SimpleNamespace(user=self.user),
+            ).formatted
+            for identifier in (hidden.id, hidden.id + 100000)
+        ]
+        self.assertEqual(results[0], {"data": {"employee": None}})
+        self.assertEqual(results[0], results[1])
+
+    def test_detail_permission_backend_error_fails_closed(self) -> None:
+        employee = self.Employee.create(name="Visible", creator_id=self.user.id)
+        with patch.object(
+            self.Employee.Permission,
+            "can_read_instance",
+            side_effect=RuntimeError("permission backend unavailable"),
+        ):
+            result = self._build_schema().execute(
+                "query($id: ID!) { employee(id: $id) { __typename } }",
+                variable_values={"id": employee.id},
+                context_value=SimpleNamespace(user=self.user),
+            )
+        self.assertIsNone(result.data["employee"])
+        self.assertIsNotNone(result.errors)
+
+    def test_detail_typename_checks_historical_instance(self) -> None:
+        from django.utils import timezone
+        from general_manager.as_of import as_of
+
+        employee = self.Employee.create(name="Hidden", creator_id=self.user.id)
+        employee_id = employee.id
+        historical_date = timezone.now()
+        employee.update(name="Visible", creator_id=self.user.id)
+        with (
+            patch.object(
+                self.Employee.Interface, "historical_lookup_buffer_seconds", 0
+            ),
+            as_of(historical_date),
+        ):
+            self.assertEqual(self.Employee(id=employee_id).name, "Hidden")
+            result = self._build_schema().execute(
+                "query($id: ID!) { employee(id: $id) { __typename } }",
+                variable_values={"id": employee_id},
+                context_value=SimpleNamespace(user=self.user),
+            )
+        self.assertIsNone(result.errors)
+        self.assertIsNone(result.data["employee"])
+
+    def test_aggregate_refresh_requires_class_read_permission(self) -> None:
+        employee = self.Employee.create(name="Visible", creator_id=self.user.id)
+        schema = self._build_schema()
+
+        async def fake_listener(_layer, _channel, queue):
+            await queue.put({"manager": "Employee", "action": "refresh"})
+            await queue.put(
+                {
+                    "manager": "Employee",
+                    "action": "update",
+                    "identification": employee.identification,
+                }
+            )
+            await asyncio.Event().wait()
+
+        async def run_subscription():
+            with (
+                patch.object(GraphQL, "_channel_message_listener", new=fake_listener),
+                patch.object(self.Employee.Permission, "__read__", ["isAdmin"]),
+            ):
+                stream = await schema.subscribe(
+                    "subscription { onEmployeeClassChange { action item { id } } }",
+                    context_value=SimpleNamespace(user=self.user),
+                )
+                try:
+                    return await asyncio.wait_for(stream.__anext__(), timeout=1)
+                finally:
+                    await stream.aclose()
+
+        with patch.dict(os.environ):
+            os.environ.pop("DJANGO_ALLOW_ASYNC_UNSAFE", None)
+            event = asyncio.run(run_subscription())
+        self.assertIsNone(event.errors)
+        self.assertEqual(event.data["onEmployeeClassChange"]["action"], "update")
+
+    def test_aggregate_refresh_rechecks_revoked_class_read_permission(self) -> None:
+        employee = self.Employee.create(name="Visible", creator_id=self.user.id)
+        schema = self._build_schema()
+        self.user.is_staff = True
+
+        async def fake_listener(_layer, _channel, queue):
+            for _ in range(2):
+                await queue.put({"manager": "Employee", "action": "refresh"})
+            await queue.put(
+                {
+                    "manager": "Employee",
+                    "action": "update",
+                    "identification": employee.identification,
+                }
+            )
+            await asyncio.Event().wait()
+
+        async def run_subscription():
+            with (
+                patch.object(GraphQL, "_channel_message_listener", new=fake_listener),
+                patch.object(self.Employee.Permission, "__read__", ["isAdmin"]),
+            ):
+                stream = await schema.subscribe(
+                    "subscription { onEmployeeClassChange { action item { id } } }",
+                    context_value=SimpleNamespace(user=self.user),
+                )
+                try:
+                    first = await asyncio.wait_for(stream.__anext__(), timeout=1)
+                    self.user.is_staff = False
+                    second = await asyncio.wait_for(stream.__anext__(), timeout=1)
+                    return first, second
+                finally:
+                    await stream.aclose()
+
+        first, second = asyncio.run(run_subscription())
+        self.assertIsNone(first.errors)
+        self.assertIsNone(second.errors)
+        self.assertEqual(first.data["onEmployeeClassChange"]["action"], "refresh")
+        self.assertEqual(second.data["onEmployeeClassChange"]["action"], "update")
+
+    def test_aggregate_refresh_permission_error_cleans_up_stream(self) -> None:
+        subscribe = GraphQL._subscription_fields["subscribe_on_employee_class_change"]
+        layer = GraphQL._get_channel_layer(strict=True)
+        info = SimpleNamespace(context=SimpleNamespace(user=self.user))
+
+        async def fake_listener(_layer, _channel, queue):
+            await queue.put({"manager": "Employee", "action": "refresh"})
+            await asyncio.Event().wait()
+
+        async def run_subscription():
+            with (
+                patch.object(GraphQL, "_channel_message_listener", new=fake_listener),
+                patch.object(
+                    self.Employee.Permission,
+                    "check_operation_permission",
+                    side_effect=RuntimeError("permission backend unavailable"),
+                ),
+            ):
+                stream = await subscribe(None, info)
+                try:
+                    with self.assertRaisesRegex(
+                        RuntimeError, "permission backend unavailable"
+                    ):
+                        await asyncio.wait_for(stream.__anext__(), timeout=1)
+                finally:
+                    await stream.aclose()
+            self.assertFalse(layer.groups)
+
+        asyncio.run(run_subscription())
+
     def test_database_subscription_emits_updates(self) -> None:
         """
         Verifies that a GraphQL subscription for an Employee emits an initial snapshot and then an update when the underlying model changes.
