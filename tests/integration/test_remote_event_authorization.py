@@ -203,12 +203,38 @@ class RemoteEventAuthorizationTests(GeneralManagerTransactionTestCase):
         )
         assert _can_receive_remote_event(self.config, deleted_user, event)
         deleted_account = get_user_model().objects.filter(pk=deleted_user.pk)
+
         # This account has no related fixtures. Delete only its persisted row:
         # other test modules register reverse relations before creating tables,
         # so the global cascade collector is unrelated to this missing-user gate.
-        assert deleted_account._raw_delete(using=deleted_account.db) == 1
-        assert not deleted_account.exists()
-        assert deleted_user.is_authenticated
+        async def run():
+            peer = self.peer(deleted_user)
+            await peer.send_input({"type": "websocket.connect"})
+            assert (await peer.receive_output())["type"] == "websocket.accept"
+            try:
+                await self.publish({"id": self.visible.id})
+                payload = json.loads((await peer.receive_output())["text"])
+                assert payload["identification"] == {"id": self.visible.id}
+                assert (
+                    await sync_to_async(deleted_account._raw_delete)(
+                        using=deleted_account.db
+                    )
+                    == 1
+                )
+                assert not await sync_to_async(deleted_account.exists)()
+                assert deleted_user.is_authenticated
+                await self.publish({"id": self.visible.id})
+                assert await peer.receive_nothing(timeout=0.1)
+            finally:
+                await peer.send_input({"type": "websocket.disconnect"})
+                await peer.wait()
+            assert not self.layer.groups
+
+        with patch(
+            "general_manager.api.remote_invalidation._get_channel_layer_safe",
+            return_value=self.layer,
+        ):
+            asyncio.run(run())
         assert not _can_receive_remote_event(self.config, deleted_user, event)
 
     def test_memory_exhaustion_is_not_swallowed_as_permission_denial(self):
