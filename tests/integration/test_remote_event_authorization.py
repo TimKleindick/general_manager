@@ -19,6 +19,7 @@ from general_manager.api.remote_invalidation import (
     RemoteInvalidationConsumer,
     remote_invalidation_group_name,
     _can_receive_remote_event,
+    _fresh_remote_principal,
 )
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
@@ -168,6 +169,9 @@ class RemoteEventAuthorizationTests(GeneralManagerTransactionTestCase):
                 ({"id": self.visible.id}, "delete"),
                 ({"id": -1}, "update"),
                 (None, "refresh"),
+                (None, "update"),
+                ({}, "update"),
+                ([], "update"),
             ]:
                 await self.publish(identity, action)
                 assert await peer.receive_nothing(timeout=0.1)
@@ -179,6 +183,40 @@ class RemoteEventAuthorizationTests(GeneralManagerTransactionTestCase):
             return_value=self.layer,
         ):
             asyncio.run(run())
+
+    def test_unpersisted_inactive_and_deleted_accounts_cannot_receive(self):
+        event = {
+            "action": "update",
+            "base_path": self.config.base_path,
+            "resource_name": self.config.resource_name,
+            "protocol_version": self.config.protocol_version,
+            "identification": {"id": self.visible.id},
+        }
+        assert _fresh_remote_principal(get_user_model()()) is None
+        assert _can_receive_remote_event(self.config, self.user, event)
+        # Keep the original active scope object to prove a fresh database lookup.
+        get_user_model().objects.filter(pk=self.user.pk).update(is_active=False)
+        assert self.user.is_active
+        assert not _can_receive_remote_event(self.config, self.user, event)
+        get_user_model().objects.filter(pk=self.user.pk).delete()
+        assert not _can_receive_remote_event(self.config, self.user, event)
+
+    def test_memory_exhaustion_is_not_swallowed_as_permission_denial(self):
+        event = {
+            "action": "update",
+            "base_path": self.config.base_path,
+            "resource_name": self.config.resource_name,
+            "protocol_version": self.config.protocol_version,
+            "identification": {"id": self.visible.id},
+        }
+        with (
+            patch(
+                "general_manager.api.remote_invalidation._fresh_remote_principal",
+                side_effect=MemoryError,
+            ),
+            self.assertRaises(MemoryError),
+        ):
+            _can_receive_remote_event(self.config, self.user, event)
 
     def test_delegated_native_permission_reloads_parent(self):
         child = self.Child.create(ignore_permission=True, parent=self.visible)
