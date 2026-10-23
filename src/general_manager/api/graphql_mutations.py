@@ -21,6 +21,7 @@ from django.db import models
 from django.core.exceptions import FieldDoesNotExist
 
 from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
+from general_manager.api.mutation_controls import MUTATION_CONTROL_KEYS
 from general_manager.api.graphql_relations import (
     get_graphql_manager_registry,
     resolve_general_manager_type,
@@ -53,6 +54,33 @@ class _UnsetHistoryComment:
 
 
 _HISTORY_COMMENT_UNSET = _UnsetHistoryComment()
+
+
+class ReservedMutationControlFieldError(ValueError):
+    """Raised when an editable field collides with manager execution metadata."""
+
+    def __init__(self, field_name: str) -> None:
+        super().__init__(
+            f"Editable GraphQL field {field_name!r} collides with a reserved "
+            "manager mutation control. Rename the field or make it read-only."
+        )
+
+
+class ReservedMutationControlInputError(GraphQLError):
+    """Report client input attempting to override trusted authorization metadata."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(
+            f"Mutation input cannot include reserved key {key!r}.",
+            extensions={"code": "BAD_USER_INPUT"},
+        )
+
+
+def _reject_mutation_authorization_controls(kwargs: MutationPayload) -> None:
+    """Allow audit comments but reject client-controlled authorization metadata."""
+    for key in sorted(MUTATION_CONTROL_KEYS - {"history_comment"}):
+        if key in kwargs:
+            raise ReservedMutationControlInputError(key)
 
 
 class _EditableGrapheneField(Protocol):
@@ -168,8 +196,10 @@ def _normalize_mutation_kwargs_for_manager(
     ORM mutation capabilities expect ``field_id``/``field_id_list`` for manager
     relations. Structured references pass through their manager constructor so
     all declared inputs are validated. Scalar reference values stay unchanged.
-    Unknown keys and already-normalized keys are preserved.
+    Unknown keys and already-normalized keys are preserved, except reserved
+    authorization controls, which are rejected before and after normalization.
     """
+    _reject_mutation_authorization_controls(kwargs)
     interface_cls = getattr(general_manager_class, "Interface", None)
     if interface_cls is None:
         return dict(kwargs)
@@ -233,6 +263,7 @@ def _normalize_mutation_kwargs_for_manager(
                     )
                 normalized.pop(key, None)
 
+    _reject_mutation_authorization_controls(normalized)
     return normalized
 
 
@@ -351,6 +382,10 @@ def create_write_fields(
         Mapping from attribute name to a Graphene input field instance. Returned
         fields carry a dynamic maintainer-facing ``editable`` flag used by the
         generated mutation class builders.
+
+    Raises:
+        ReservedMutationControlFieldError: An editable field or its normalized
+            relation alias collides with reserved manager mutation metadata.
     """
     fields: GrapheneFieldMap = {}
     attribute_types = interface_cls.get_attribute_types()
@@ -360,6 +395,8 @@ def create_write_fields(
             continue
         if info["is_derived"]:
             continue
+        if info["is_editable"] and name in MUTATION_CONTROL_KEYS:
+            raise ReservedMutationControlFieldError(name)
         if _is_direct_relation_raw_id_alias(
             name,
             attribute_types,
@@ -375,6 +412,13 @@ def create_write_fields(
         if default is NOT_PROVIDED or callable(default):
             default = Undefined
         manager_type = resolve_general_manager_type(typ, manager_registry)
+        if (
+            info["is_editable"]
+            and manager_type is not None
+            and not name.endswith(("_id", "_list"))
+            and f"{name}_id" in MUTATION_CONTROL_KEYS
+        ):
+            raise ReservedMutationControlFieldError(name)
 
         fld: object
         if info.get("orm_field_kind") in {"file", "image"}:
@@ -488,12 +532,14 @@ def generate_create_mutation_class(
             kwargs = _normalize_mutation_kwargs_for_manager(generalManagerClass, kwargs)
             history_comment = _pop_history_comment(kwargs)
             create = cast(_ManagerCreateMethod, generalManagerClass.create)
-            create_kwargs = {"creator_id": info.context.user.id, **kwargs}
             if isinstance(history_comment, _UnsetHistoryComment):
-                instance = create(**create_kwargs)
+                instance = create(creator_id=info.context.user.id, **kwargs)
             else:
-                create_kwargs["history_comment"] = history_comment
-                instance = create(**create_kwargs)
+                instance = create(
+                    creator_id=info.context.user.id,
+                    history_comment=history_comment,
+                    **kwargs,
+                )
         except GraphQLError:
             raise
         except Exception as error:
@@ -600,12 +646,14 @@ def generate_update_mutation_class(
             update = cast(
                 _ManagerUpdateMethod, generalManagerClass(**identification).update
             )
-            update_kwargs = {"creator_id": info.context.user.id, **kwargs}
             if isinstance(history_comment, _UnsetHistoryComment):
-                instance = update(**update_kwargs)
+                instance = update(creator_id=info.context.user.id, **kwargs)
             else:
-                update_kwargs["history_comment"] = history_comment
-                instance = update(**update_kwargs)
+                instance = update(
+                    creator_id=info.context.user.id,
+                    history_comment=history_comment,
+                    **kwargs,
+                )
         except GraphQLError:
             raise
         except Exception as error:
