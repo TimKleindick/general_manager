@@ -114,15 +114,27 @@ GeneralManager installs these routes during app startup through
 preserves existing websocket routes, skips duplicate RemoteAPI routes for the
 same `(base_path, resource_name)`, and returns without changes when Channels or
 ASGI settings are unavailable. `clear_remote_invalidation_routes()` removes only
-generated RemoteAPI websocket routes and rebuilds the websocket router.
+generated RemoteAPI websocket routes from the live URLRouter in place.
+Installation and removal preserve existing middleware wrappers, including
+origin validators and custom authentication, by following their `inner` links
+and the known Channels `OriginValidator.application` link.
+If an existing websocket application has no accessible Channels URLRouter,
+automatic installation logs a warning and leaves it untouched; configure its
+routes explicitly instead. Only an unwrapped Django `ASGIHandler` is recognized
+as HTTP-only and automatically given a new protocol router. Unknown root
+callables, including custom HTTP wrappers, `.app` wrappers, and closures, are
+left unchanged because they may also enforce websocket security. Applications
+using those shapes must explicitly install the invalidation route inside their
+existing security stack. No enabled invalidation manager means no ASGI changes.
 Generated routes use `<base_path>/ws/<resource_name>/?` with an optional trailing
 slash. Clearing detects only routes marked by GeneralManager's route metadata,
 so GraphQL and user-defined websocket routes keep their relative order.
 Repeated route installation is idempotent for the resolved `(base_path,
 resource_name)` pair; if a later configuration changes the same pair, the
 existing route is preserved. Missing or non-mutable `websocket_urlpatterns` are
-replaced with a new list during installation, while clearing returns without
-changes unless the patterns are mutable.
+replaced with a new list during installation. Clearing filters both the mutable
+module patterns and the accessible live URLRouter; it never creates a websocket
+application around a plain HTTP application.
 
 ## Client
 
@@ -464,3 +476,36 @@ print(project.name)
   "identification": {"id": 42}
 }
 ```
+
+### Invalidation authorization
+
+Remote invalidation sockets require an authenticated, active Django user supplied
+by the existing ASGI authentication middleware. Configure the client connection
+factory with the appropriate authenticated session; the default URL-only factory
+does not automatically copy HTTP credentials. Anonymous connections close before
+channel/group registration.
+
+Each identified create/update notification reloads the user and current manager
+instance, then calls the manager's native `Permission.can_read_instance()` check.
+Conditional and delegated read rules apply. Native deny-all plans and
+filter/exclude constraints are enforced on the current candidate using the
+shared authorization helpers; ORM candidates retain native lookup semantics.
+An allow-all plan never replaces the instance check. No row values are included. Deleted, missing, unreadable or
+unverifiable instances, and identity-free batched refreshes, are not forwarded.
+
+This deliberately does not evict data that a client could read previously but
+can no longer read. Existing rendered values or cached queries may remain until
+the application reloads or otherwise invalidates them. There is no periodic
+refresh, prior-recipient tracking or bounded-staleness guarantee. Native HTTP
+read authorization and application cache isolation remain separate boundaries.
+A fresh user lookup reflects changed account flags and permissions; it does not
+revalidate arbitrary external authentication tokens or remotely retract an
+already established session.
+
+The built-in database-interface checks load a new current database instance per
+event. Request-backed instances explicitly load their detail before the permission
+check, including user-only rules; unavailable or failed detail reads are suppressed.
+Request/calculation interfaces and custom sources remain subject to their
+own freshness contracts: a new manager constructor cannot bypass caching or
+stale data inside a custom transport, source or permission checker. The event
+payload itself is never used as a snapshot of permission-relevant row values.

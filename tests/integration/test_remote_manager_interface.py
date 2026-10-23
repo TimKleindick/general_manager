@@ -110,7 +110,7 @@ class DjangoClientTransport(SharedRequestTransport):
 
 
 class ASGIWebSocketConnection:
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, user: object = None) -> None:
         parsed = urlsplit(url)
         query_string = parsed.query.encode("utf-8")
         self.communicator = ApplicationCommunicator(
@@ -118,6 +118,7 @@ class ASGIWebSocketConnection:
             {
                 "type": "websocket",
                 "path": parsed.path,
+                "user": user,
                 "query_string": query_string,
                 "headers": [],
                 "subprotocols": [],
@@ -291,6 +292,7 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.transport.client = self.client
+        self.websocket_user = get_user_model().objects.create_user(username="ws-reader")
         self.project = self.Project.create(
             ignore_permission=True,
             name="Alpha",
@@ -640,6 +642,7 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
                 {
                     "type": "websocket",
                     "path": "/internal/gm/ws/projects",
+                    "user": self.websocket_user,
                     "query_string": b"version=v1",
                     "headers": [],
                     "subprotocols": [],
@@ -680,6 +683,7 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
                 {
                     "type": "websocket",
                     "path": "/internal/gm/ws/projects",
+                    "user": self.websocket_user,
                     "query_string": b"foo=bar&version=v1",
                     "headers": [],
                     "subprotocols": [],
@@ -710,7 +714,9 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
         async def run_test() -> None:
             client = RemoteInvalidationClient(
                 [self.RemoteProject],
-                connection_factory=ASGIWebSocketConnection,
+                connection_factory=lambda url: ASGIWebSocketConnection(
+                    url, self.websocket_user
+                ),
             )
             await client.connect()
             await sync_to_async(self.Project.create)(
