@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.86.10 (2026-10-23)
+
+### Bug Fixes
+
+- Enforce RemoteAPI read permissions and finite pagination
+  ([`2b860bd`](https://github.com/TimKleindick/general_manager/commit/2b860bdd63b4f9cf9d5c4762c40387843c928832))
+
+
 ## v0.86.9 (2026-10-23)
 
 ### Bug Fixes
