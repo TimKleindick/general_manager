@@ -281,8 +281,8 @@ By default, GraphQL search returns exact post-permission totals. Exact totals
 preserve existing behavior, but permission-filtered searches may need to scan
 additional backend pages after the current result page is already filled.
 
-To cap those scans per manager, enable bounded totals and choose a positive scan
-limit:
+Choose a positive server-owned scan limit. Both exact and bounded modes obey it;
+bounded mode permits a partial result instead of an error at the limit:
 
 ```python
 GENERAL_MANAGER = {
@@ -292,11 +292,17 @@ GENERAL_MANAGER = {
 }
 ```
 
-Bounded mode caps backend hit scans per manager. The effective cap is at least
-the requested page end (`page` / `pageSize`) so the current page can still be
-filled where possible. In bounded mode, `total` is the authorized count found
-before the cap and `totalIsExact` is `false` if the resolver hit the cap before
-observing an empty or partial backend page.
+The limit is shared across all selected manager types per search resolver call.
+It counts backend candidates before permission checks. Large `page` or `pageSize`
+values do not enlarge it. In bounded mode, `total` is the authorized count found
+within the budget, and `totalIsExact` is `false` unless all selected sources were
+exhausted. Inexact results have null `pageInfo.totalCount` and
+`pageInfo.totalPages`; deep pages may be incomplete or empty.
+
+Exact mode raises `SEARCH_SCAN_LIMIT_EXCEEDED` if it cannot establish the full
+authorized total within the budget, including a full page exactly at the scan
+boundary. It does not return a partial result labelled exact. Narrow the query
+or use bounded mode when this occurs.
 
 Clients can override the setting per request:
 
@@ -318,9 +324,9 @@ query {
 }
 ```
 
-Use `totalMode: "exact"` when a specific request needs the previous exact
-total behavior even if the deployment default is bounded. Invalid `totalMode`
-values are returned as GraphQL user-input errors.
+Use `totalMode: "exact"` when a request requires an exact count or an explicit
+limit error even if the deployment default is bounded. It cannot disable the
+server scan limit. Invalid `totalMode` values are GraphQL user-input errors.
 
 ## Step 5: Async indexing (optional)
 

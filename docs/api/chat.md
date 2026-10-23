@@ -38,7 +38,7 @@ GENERAL_MANAGER = {
 | `allowed_mutations` | `[]` | Exact generated GraphQL mutation names the `mutate` tool may execute. |
 | `confirm_mutations` | `[]` | Allowed mutation names that require client confirmation. Every name must also be in `allowed_mutations`. |
 | `confirm_timeout_seconds` | `30` | Lifetime of a pending mutation confirmation. |
-| `max_results` | `200` | Maximum query page size accepted by the chat query tool. |
+| `max_results` | `200` | Maximum fetched query window, including rows skipped by `offset`. |
 | `query_timeout_seconds` | `None` | Optional database query timeout in seconds. It is converted to milliseconds for supported database execution. |
 | `max_retries_per_message` | `3` | Maximum non-mutation tool-loop retries in one user turn. |
 | `max_mutations_per_message` | `8` | Maximum mutation tool executions in one user turn, including a mutation resumed after confirmation. Set `0` to disallow writes for a turn. |
@@ -348,6 +348,20 @@ Only managers with `chat_exposed = True` are accepted. Query fields, nested
 selections, filters, limits, and offsets are validated against the indexed
 schema before execution. Mutations require an authenticated user and an exact
 name in `allowed_mutations`.
+
+The query tool uses the smaller of positive `CHAT.max_results` and
+`GRAPHQL_MAX_PAGE_SIZE` as its effective fetched window. With the defaults
+(`max_results=200`, GraphQL maximum `100`), that window is `100`. If the chat
+setting does not provide a positive limit, the GraphQL maximum still applies.
+The tool caps an explicit `limit` at the effective window and defaults an
+omitted `limit` to it. The complete fetched prefix, `offset + effective_limit`,
+must also fit within that window; otherwise the tool raises `ValueError` before
+executing GraphQL. For example, with the defaults, `offset=50, limit=50` is
+accepted, while `offset=50, limit=100` is rejected. A positive offset with an
+omitted limit also exceeds the window. Supply a smaller limit or narrow the
+filters instead of using a larger offset. This applies to discovery and direct
+query tools. Invalid GraphQL pagination configuration is rejected consistently
+with ordinary GraphQL queries.
 
 Read-only tool calls may be batched in one provider completion. A completion
 that includes `mutate` and any other tool call is rejected before any tool runs;

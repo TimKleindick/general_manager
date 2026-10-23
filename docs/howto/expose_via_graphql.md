@@ -468,7 +468,12 @@ including `filter`, `exclude`, `orderBy`, `page`, and
 and decoded JSON values that are not objects are treated as empty filters.
 Relation `none` filters are supported under `filter`, but not under `exclude`.
 Top-level list queries and generated relation-list fields always include
-nullable `page` and `pageSize`. They include nullable
+nullable `page` and `pageSize`. Omitting them returns page 1 with 10 items by
+default; explicit sizes above the default maximum of 100 are rejected. Configure
+`GENERAL_MANAGER["GRAPHQL_DEFAULT_PAGE_SIZE"]` and
+`GENERAL_MANAGER["GRAPHQL_MAX_PAGE_SIZE"]` with positive integers to change these
+server limits (default must not exceed maximum). The same contract applies to
+generated groups. They include nullable
 `filter` and `exclude` only when a filter input type can be generated for the
 manager, and nullable typed `orderBy` only when sortable fields exist.
 Soft-delete managers also expose nullable `includeInactive`

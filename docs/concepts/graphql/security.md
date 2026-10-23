@@ -4,11 +4,12 @@ Security in the GraphQL layer relies on permission checks and robust error handl
 
 ## Permission enforcement
 
-- Every query obtains read filters from the manager's `Permission` class via `get_read_permission_filter()`. Managers without a `Permission` class receive no GraphQL read prefilter and no per-object read gate from this helper.
+- List and search queries obtain read filters from the manager's `Permission` class via `get_read_permission_filter()`. Managers without a `Permission` class receive no GraphQL read prefilter and no per-object read gate from this helper.
 - Permission classes can return a full `ReadPermissionPlan` from the zero-argument permission instance method `get_read_permission_plan()`. `ReadPermissionPlan` is an internal adapter with `filters`, `requires_instance_check`, `instance_check_reasons`, and `decision`; it is used by generated resolvers, not intended as a stable user import. `decision` is compatibility-defaulted to `"conditional"`: older plan-shaped values that lack it retain legacy behavior. `"allow_all"` and `"deny_all"` are definitive static outcomes; `"conditional"` uses row constraints and/or a final instance gate. If `get_read_permission_plan()` is absent or does not return that adapter, GraphQL falls back to the zero-argument legacy permission instance method `get_permission_filter()` and runs per-object read checks after the prefilter.
 - The helper reads `Permission` from the manager class with normal Python attribute lookup and calls it positionally as `Permission(manager_class, info.context.user)`. The later row gate calls the same permission class as `Permission(instance, info.context.user).can_read_instance()`.
 - Legacy permission filter entries may contain optional `filter` and `exclude` mappings. Missing keys are treated as empty mappings by resolvers. Malformed entries are not validated by the helper and fail later when applied to the bucket or search backend. If the fallback `get_permission_filter()` method is missing, the resulting `AttributeError` propagates. The legacy fallback plan uses `requires_instance_check=True` and `instance_check_reasons=("no_prefilter_backend",)`.
 - For lists, `"deny_all"` returns an empty bucket without a per-row check and `"allow_all"` returns the candidate bucket without a prefilter or per-row check. Conditional plans apply each `filter` then `exclude` constraint group as an OR alternative; a row-level `can_read_instance()` call happens only when the plan requires it. A single aggregate structured authorization log is emitted only for a conditional list/search path that ran that final gate, not for static fast paths.
+- Generated detail queries call `Permission(instance, request_user).can_read_instance()` before returning the object, including selections containing only `__typename`. Denied objects and missing ORM or request-backed targets resolve to `null` without a not-found error. Expected request not-found errors from lazy hydration are also normalized; unexpected construction and permission-backend errors still propagate. Historical queries check the instance hydrated in the active historical context. Managers without a permission class retain default-allow behavior.
 - Mutations invoke `check_create_permission`, `check_update_permission`, or `check_delete_permission` before executing. A `PermissionError` returns the fixed public message `Permission denied.` rather than its original text.
 - Attribute-level restrictions hide protected fields even when the user can access the object.
 - Optional GraphQL permission capabilities expose advisory boolean hints for clients. They do not replace read or mutation permission checks.
@@ -178,3 +179,47 @@ paths, or other internal details.
 - Combine permissions with `filter` arguments so users cannot guess identifiers of objects they do not own.
 - Log denied permissions with the manager name and user ID to monitor suspicious behaviour.
 - Avoid exposing `ignore_permission=True` paths in public APIs; reserve them for internal management commands.
+
+### Query operands and search projections
+
+Filtering, exclusions, ordering and full-text matching can expose values without
+selecting their output fields. GraphQL therefore checks their field permissions
+against the entire row-authorized candidate set **before** applying these
+operations. Conditional field permissions use the same instance permission
+checks as output fields. If any candidate denies an operand, the query fails;
+it does not silently remove that candidate or check only matching results.
+Relation paths require permission on the relation and on the related row and
+field. Relation-ID aliases also check the canonical relation permission.
+
+This adds work proportional to candidates × distinct operand paths, plus related
+rows visited. Duplicate lookup paths are consolidated. A request fails explicitly
+after 1,000 field/path authorization decisions. This is a permission-work limit,
+not a bound on database bucket materialization or the preceding row authorization.
+No permission cache is shared across requests or users. Calculation queries now
+check the full row-authorized input domain before client input predicates; their
+row/field check counts can therefore increase even for a narrow input filter.
+
+Search checks the configured searchable document fields (including searchable
+attributes shared by other types in the index), plus requested filters and sorts,
+before calling the search backend. Custom `SearchConfig.to_document` projections
+are rejected by GraphQL search: arbitrary remapping has no trustworthy mapping
+back to native field permissions. Use the standard attribute projection for
+GraphQL search. Output masking alone does not authorize custom projections.
+All query operands on incomplete remote candidate sets fail explicitly, including
+public permissions. Statically denied managers return no rows before source
+inspection and skip operand checks;
+a partial upstream page cannot establish permission across all possible matches.
+Search over calculation managers requires an enumerable `possible_values` domain;
+indexing isolated instances alone does not establish the authorization scope.
+
+Search additionally caps source authorization at 1,000 candidates across all
+selected manager types, counting denied rows before their native permission
+checks. Exhaustion raises an explicit error. This source-work budget is separate
+from backend hit scanning and field/path decisions; it does not bound SQL bucket
+materialization that occurs before iteration.
+
+Search hits are matched to canonical identities in the field-authorized source
+domain and reuse those source instances. Individually indexing a calculation
+outside its enumerable `possible_values` domain does not make it visible to
+GraphQL search. Stale or out-of-domain index entries are ignored for results and
+counts independently of their field values.

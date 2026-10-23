@@ -409,7 +409,9 @@ GraphQL class-wide ordinary events hydrate the changed object and apply
 `can_read_instance()` in an async-safe worker using the user captured when the
 subscription starts. Unreadable or missing objects are suppressed, while an
 unexpected permission exception propagates; aggregate `refresh` events have no
-row identification and yield `item = null` without object-level hydration.
+row identification and yield `item = null` without object-level hydration only
+after the class-level `check_operation_permission("read")` gate succeeds. The
+gate is evaluated afresh in an async-safe worker for every aggregate event.
 
 RemoteAPI delivery is best-effort after commit: a missing channel layer emits
 no message, and ordinary channel-layer failures are logged while other queued
@@ -821,10 +823,17 @@ filters, excludes, and sorting, but before page slicing when the
 source is complete. Request-backed pages whose authorization cannot prove a
 global total return `totalCount: null` and `totalPages: null`. Ordinary lists
 sort records; grouped endpoints sort eligible aggregate scalars after grouping
-and before pagination, and `totalCount` counts groups. Ordinary lists remain unpaginated
-when both `page` and `pageSize` are omitted. Supplying either uses effective
-defaults of page 1 and size 10, which are also reported in `pageInfo`. Explicit
-zero or negative values are rejected. Empty known result sets report
+and before pagination, and `totalCount` counts groups. Generated root and nested
+lists and groups always paginate, defaulting to page 1 and size 10. Set
+`GENERAL_MANAGER["GRAPHQL_DEFAULT_PAGE_SIZE"]` and
+`GENERAL_MANAGER["GRAPHQL_MAX_PAGE_SIZE"]` to configure the default and maximum
+(default maximum: 100). Both settings must be positive integers and the default
+must not exceed the maximum. Explicit zero, negative, or oversized page sizes
+are rejected before source loading; oversized sizes are not silently clamped.
+`pageInfo` reports the effective coordinates. This bounds returned items, while
+permission evaluation, exact totals, grouping, and local sorting can still
+process the full source. Plain list-valued properties are outside this paged
+contract. Empty known result sets report
 `totalPages: 0`; an out-of-range positive page returns an empty item list while
 retaining known metadata. An already-empty grouped result with pagination returns
 an empty `items` list and its normal page metadata; it does not raise the

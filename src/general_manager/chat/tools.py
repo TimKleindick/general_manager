@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from django.db import connection, transaction
 
 from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql_resolvers import _pagination_sizes
 from general_manager.chat.rate_limits import get_query_timeout_ms
 from general_manager.chat.schema_index import (
     build_schema_index,
@@ -23,6 +24,9 @@ from general_manager.chat.tool_metadata import TOOL_DESCRIPTIONS, TOOL_INPUT_SCH
 _GRAPHQL_IDENTIFIER_RE = re.compile(r"^[_A-Za-z][_0-9A-Za-z]*$")
 _LIMIT_ERROR = "limit must be a positive integer"
 _OFFSET_ERROR = "offset must be a non-negative integer"
+_QUERY_WINDOW_ERROR = (
+    "offset plus effective limit must not exceed the effective query window"
+)
 
 
 class ChatToolContext(Protocol):
@@ -585,11 +589,18 @@ def query(
         raise ChatSchemaNotInitializedError()
 
     max_results = get_chat_settings().get("max_results")
-    effective_limit = limit
-    if isinstance(max_results, int) and max_results > 0:
-        effective_limit = max_results if limit is None else min(limit, max_results)
+    _, max_window = _pagination_sizes()
+    if (
+        isinstance(max_results, int)
+        and not isinstance(max_results, bool)
+        and max_results > 0
+    ):
+        max_window = min(max_results, max_window)
+    effective_limit = max_window if limit is None else min(limit, max_window)
+    if offset + effective_limit > max_window:
+        raise ValueError(_QUERY_WINDOW_ERROR)
 
-    page_size = (offset + effective_limit) if effective_limit is not None else None
+    page_size = offset + effective_limit
     list_field_name = _list_query_field_name(manager)
     arguments: list[str] = []
     if filters:

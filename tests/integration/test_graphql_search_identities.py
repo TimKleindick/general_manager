@@ -191,8 +191,9 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
 
         class SearchComposite(GeneralManager):
             class Interface(CalculationInterface):
-                id = Input(int)
-                account = Input(str)
+                # Field authorization needs the full enumerable candidate domain.
+                id = Input(int, possible_values=[7])
+                account = Input(str, possible_values=["007"])
 
             Permission = SearchIdentityPermission
             SearchConfig = search_config("account", "external_id", "record_key")

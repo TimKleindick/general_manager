@@ -41,9 +41,11 @@ from general_manager.measurement.measurement import Measurement
 from general_manager.utils.type_checks import safe_issubclass
 from general_manager.search.backend_registry import get_search_backend
 from general_manager.search.backend import SearchHit
+from general_manager.search.utils import normalize_identification
 from general_manager.search.identity import SearchFilters, build_search_filters
 from general_manager.search.registry import (
     get_search_config,
+    collect_index_settings,
     get_type_label,
     validate_filter_keys,
 )
@@ -92,9 +94,20 @@ _BAD_USER_INPUT_CODE = "BAD_USER_INPUT"
 _PAGE_MUST_BE_POSITIVE = "page must be a positive integer."
 _PAGE_SIZE_MUST_BE_POSITIVE = "pageSize must be a positive integer."
 DEFAULT_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT = 1000
+SEARCH_SOURCE_AUTHORIZATION_LIMIT_ERROR = (
+    "Search source authorization candidate limit exceeded."
+)
 SEARCH_TOTAL_MODE_ERROR = "must be one of: exact, bounded."
 SEARCH_TOTAL_SCAN_LIMIT_ERROR = (
     "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT must be a positive integer."
+)
+
+_SEARCH_SCAN_LIMIT_EXCEEDED = (
+    "Exact search total cannot be established within the server scan limit; "
+    "narrow the query or use totalMode: bounded."
+)
+_SEARCH_BACKEND_SCAN_LIMIT_EXCEEDED = (
+    "Search backend exceeded the requested scan limit."
 )
 
 
@@ -179,7 +192,7 @@ def normalize_search_total_mode(total_mode: str | None = None) -> SearchTotalMod
 
 
 def get_graphql_search_total_scan_limit() -> int:
-    """Return the configured positive scan limit for bounded total counts."""
+    """Return the server-owned candidate budget shared by all searched types."""
     raw_limit = get_setting(
         "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT",
         DEFAULT_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT,
@@ -1190,9 +1203,10 @@ def register_search_query(
         Execute a cross-manager full-text search with permission filtering.
 
         The resolver parses user filters, validates configured filter keys,
-        searches each selected manager type, instantiates manager objects from
-        hit identification, applies read permission filters/instance checks, and
-        returns paginated authorized manager instances. Omitted ``page`` and
+        searches each selected manager type, matches hit identification to its
+        field-authorized source snapshot, applies native instance checks, and
+        returns paginated source instances. Individually indexed instances outside
+        the enumerable native domain cannot contribute results or totals. Omitted ``page`` and
         ``page_size`` values default to ``1`` and ``10`` respectively. Supplied
         non-positive values raise a ``GraphQLError``.
         """
@@ -1238,12 +1252,26 @@ def register_search_query(
         requested_count = offset + limit
         fetch_limit = max(requested_count, limit)
         resolved_total_mode = normalize_search_total_mode(total_mode)
-        total_scan_limit = (
-            max(get_graphql_search_total_scan_limit(), requested_count)
-            if resolved_total_mode == "bounded"
-            else None
-        )
+        total_scan_limit = get_graphql_search_total_scan_limit()
+        scanned_hits = 0
         total_is_exact = True
+
+        from general_manager.api.graphql_query_permissions import (
+            MAX_QUERY_PERMISSION_CANDIDATES,
+        )
+
+        source_candidate_count = 0
+
+        def authorized_source_candidates(
+            source: Iterable[GeneralManager], plan: ReadPermissionPlan
+        ) -> Generator[GeneralManager, None, None]:
+            nonlocal source_candidate_count
+            for candidate in source:
+                if source_candidate_count >= MAX_QUERY_PERMISSION_CANDIDATES:
+                    raise GraphQLError(SEARCH_SOURCE_AUTHORIZATION_LIMIT_ERROR)
+                source_candidate_count += 1
+                if passes_permission_filters(candidate, info, permission_plan=plan):
+                    yield candidate
 
         for manager_class in manager_classes:
             type_label = get_type_label(manager_class)
@@ -1251,6 +1279,55 @@ def register_search_query(
             decision = getattr(permission_plan, "decision", "conditional")
             if decision == "deny_all":
                 continue
+            from general_manager.api.graphql_query_permissions import (
+                authorize_query_fields,
+                CUSTOM_PROJECTION_ERROR,
+                INCOMPLETE_ERROR,
+            )
+            from general_manager.bucket.request_bucket import RequestBucket
+
+            authorized_instances: dict[str, GeneralManager] = {}
+            search_config = get_search_config(manager_class)
+            if search_config is not None:
+                if search_config.to_document is not None:
+                    raise GraphQLError(CUSTOM_PROJECTION_ERROR)
+                operand_paths = set(parsed_filters)
+                operand_paths.update(term.field for term in ordering_terms)
+                for index_config in search_config.indexes:
+                    if index_config.name == index_name:
+                        document_fields = {
+                            field.name for field in index_config.iter_fields()
+                        }
+                        document_fields.update(index_config.filters)
+                        document_fields.update(index_config.sorts)
+                        # Searchable attributes are shared across all types in
+                        # an index, including fields only used as filters here.
+                        operand_paths.update(
+                            document_fields.intersection(
+                                collect_index_settings(index_name).searchable_fields
+                            )
+                        )
+                source_candidates = manager_class.all()
+                # Search permission constraints use native instance predicates,
+                # including properties that are not public bucket filters.
+                # Reuse that exact gate before evaluating client operands.
+                candidates = list(
+                    authorized_source_candidates(source_candidates, permission_plan)
+                )
+                authorize_query_fields(candidates, info, operand_paths)
+                # Search indexes may contain explicitly indexed calculations or
+                # newly inserted rows outside this authorized native domain.
+                # Retain its instances, not just IDs, so hits cannot replace the
+                # objects whose operand permissions were checked.
+                authorized_instances = {
+                    normalize_identification(candidate.identification): candidate
+                    for candidate in candidates
+                }
+                if (
+                    isinstance(source_candidates, RequestBucket)
+                    and not source_candidates.response_is_complete
+                ):
+                    raise GraphQLError(INCOMPLETE_ERROR)
             # Shared indexes may give the same field different native types.
             # Keep parsed user filters and permission constraints untouched.
             manager_filters = {
@@ -1276,16 +1353,13 @@ def register_search_query(
             total_hits_for_manager = 0
             candidate_hits_for_manager = 0
             offset_cursor = 0
-            scanned_hits_for_manager = 0
             manager_total_is_exact = True
             while True:
-                query_limit = fetch_limit
-                if total_scan_limit is not None:
-                    remaining_scan_budget = total_scan_limit - scanned_hits_for_manager
-                    if remaining_scan_budget <= 0:
-                        manager_total_is_exact = False
-                        break
-                    query_limit = min(fetch_limit, remaining_scan_budget)
+                remaining_scan_budget = total_scan_limit - scanned_hits
+                if remaining_scan_budget <= 0:
+                    manager_total_is_exact = False
+                    break
+                query_limit = min(fetch_limit, remaining_scan_budget)
                 result = backend.search(
                     index_name,
                     query,
@@ -1304,7 +1378,12 @@ def register_search_query(
                 )
                 if not result.hits:
                     break
-                scanned_hits_for_manager += len(result.hits)
+                if len(result.hits) > query_limit:
+                    raise GraphQLError(
+                        _SEARCH_BACKEND_SCAN_LIMIT_EXCEEDED,
+                        extensions={"code": "SEARCH_SCAN_LIMIT_EXCEEDED"},
+                    )
+                scanned_hits += len(result.hits)
                 offset_cursor += len(result.hits)
                 for hit in result.hits:
                     if hit.type != type_label:
@@ -1317,15 +1396,26 @@ def register_search_query(
                         )
                         continue
                     try:
-                        instance = manager_class(**hit.identification)
+                        instance = authorized_instances.get(
+                            normalize_identification(hit.identification)
+                        )
                     except (TypeError, ValueError, KeyError) as exc:
                         logger.debug(
-                            "failed to instantiate search result",
+                            "invalid search result identification",
                             context={
                                 "manager": hit.type,
                                 "identification": hit.identification,
                             },
                             exc_info=exc,
+                        )
+                        continue
+                    if instance is None:
+                        logger.debug(
+                            "discarded search hit outside authorized source domain",
+                            context={
+                                "manager": hit.type,
+                                "identification": hit.identification,
+                            },
                         )
                         continue
                     candidate_hits_for_manager += 1
@@ -1344,14 +1434,18 @@ def register_search_query(
                 )
                 if len(result.hits) < query_limit:
                     break
-                if (
-                    total_scan_limit is not None
-                    and scanned_hits_for_manager >= total_scan_limit
-                ):
+                if scanned_hits >= total_scan_limit:
                     manager_total_is_exact = False
                     break
             total += total_hits_for_manager
             if not manager_total_is_exact:
+                if resolved_total_mode == "exact":
+                    # Backend totals may be estimates; without observing exhaustion,
+                    # a full budget cannot establish an exact authorized count.
+                    raise GraphQLError(
+                        _SEARCH_SCAN_LIMIT_EXCEEDED,
+                        extensions={"code": "SEARCH_SCAN_LIMIT_EXCEEDED"},
+                    )
                 total_is_exact = False
             if decision == "conditional" and permission_plan.requires_instance_check:
                 logger.info(
