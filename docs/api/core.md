@@ -763,7 +763,11 @@ text. `all()` returns an independent copy. `filter(**kwargs)` and
 use `field` or `field__lookup`; Python-level lookup operators are `exact`, `lt`,
 `lte`, `gt`, `gte`, `contains`, `startswith`, `endswith`, and `in`. Manager-typed
 inputs can be filtered by the manager object, by `<input>_id`, or by nested
-manager lookups such as `project__name__startswith`. Derived GraphQL properties
+manager lookups such as `project__name__startswith`. These filters and exclusions
+apply whether `possible_values` returns a bucket or an iterable of managers
+(such as a list). Generated reverse calculation relations retain their parent
+filter in both cases, including when the relation is paginated in GraphQL.
+Derived GraphQL properties
 can be filtered with the same Python lookup operators and do not use the
 database-bucket filterable marker. Unknown filter or exclude fields raise
 `UnknownInputFieldError` from `general_manager.utils.filter_parser`.

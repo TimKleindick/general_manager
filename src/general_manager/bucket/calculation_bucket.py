@@ -1283,11 +1283,27 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                     **exclude_kwargs
                 )
             else:
-                filter_funcs = field_filters.get("filter_funcs", [])
+                filter_funcs = [
+                    *field_filters.get("filter_funcs", []),
+                    *(
+                        create_filter_function(lookup, expected)
+                        for lookup, expected in field_filters.get(
+                            "filter_kwargs", {}
+                        ).items()
+                    ),
+                ]
                 for filter_func in filter_funcs:
                     possible_values = filter(filter_func, possible_values)
 
-                exclude_funcs = field_excludes.get("filter_funcs", [])
+                exclude_funcs = [
+                    *field_excludes.get("filter_funcs", []),
+                    *(
+                        create_filter_function(lookup, expected)
+                        for lookup, expected in field_excludes.get(
+                            "filter_kwargs", {}
+                        ).items()
+                    ),
+                ]
                 for exclude_func in exclude_funcs:
                     possible_values = filter(
                         _build_exclude_filter(exclude_func), possible_values
