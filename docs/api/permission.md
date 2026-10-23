@@ -51,6 +51,60 @@ boolean indicating whether the permission was representable as a prefilter;
 
 ::: general_manager.permission.manager_based_permission.ManagerBasedPermission
 
+### Delegated manager configuration
+
+`AdditiveManagerPermission` and `OverrideManagerPermission` expose the class
+configuration attribute:
+
+```python
+__based_on__: ClassVar[str | None] = None
+```
+
+Set it to the name of a related manager field to make the related manager's
+permission the outer CRUD gate. Create, update, and delete delegate the same
+operation to the related manager. Read filters are prefixed with
+`<field>__` and combined with the local read plan. `ManagerBasedPermission` is
+the deprecated compatibility alias for `AdditiveManagerPermission`; it keeps
+the same `__based_on__` behavior.
+
+The public CRUD entry points retain these signatures and return `None` on
+success:
+
+```python
+BasePermission.check_create_permission(
+    data: dict[str, object],
+    manager: type[GeneralManager],
+    request_user: UserLike | object,
+) -> None
+
+BasePermission.check_update_permission(
+    data: dict[str, object],
+    old_manager_instance: GeneralManager,
+    request_user: UserLike | object,
+) -> None
+
+BasePermission.check_delete_permission(
+    manager_instance: GeneralManager,
+    request_user: UserLike | object,
+) -> None
+```
+
+`data` may contain either a related manager object (`project`) or the
+normalized foreign-key value (`project_id`). Update checks use the proposed
+post-update relation. When both aliases are present, `PermissionDataManager`
+preserves input order so the last alias wins, matching ORM normalization. A
+foreign key with `to_field` resolves the normalized value through its target
+field before constructing the delegated manager.
+
+Instance-level delegation raises `PermissionCheckError` when the related
+manager denies the operation, `InvalidBasedOnConfigurationError` when the
+configured relation is missing, and `InvalidBasedOnTypeError` when it resolves
+to a non-`GeneralManager` value. Missing or null relation values use the
+configured default CRUD permissions; invalid identifiers fail rather than
+falling back to those defaults. The class-level permission context cannot
+resolve a concrete relation and therefore defers the delegated read check to
+the row-level path.
+
 ::: general_manager.permission.mutation_permission.MutationPermission
 
 `MutationPermission` protects custom GraphQL mutations registered with
@@ -116,6 +170,12 @@ merged final state; keep the original manager instance separately when a rule
 needs an explicit before/after comparison. Unsupported payload types raise
 `InvalidPermissionDataError` with the stable message
 `permission_data must be either a dict or an instance of GeneralManager.`
+
+Its exact signature is
+`for_update(base_data: GeneralManagerData, update_data: dict[str, object]) -> PermissionDataManager[GeneralManagerData]`.
+Values from `update_data` replace matching base keys, and relation aliases are
+kept in input order so the delegated permission sees the same final relation
+that the ORM will persist.
 
 ## Registry and reusable checks
 

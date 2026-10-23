@@ -28,14 +28,49 @@ class InvoicePermission(AdditiveManagerPermission):
 ## Delegating through `__based_on__`
 
 ```python
+from general_manager.manager import GeneralManager
+from general_manager.permission.manager_based_permission import (
+    OverrideManagerPermission,
+)
+
+
 class InvoiceAttachmentPermission(OverrideManagerPermission):
     __based_on__ = "invoice"
     __read__ = ["isAuthenticated"]
     __create__ = ["inGroup:finance"]
     file = {"update": ["inGroup:finance"], "delete": ["inGroup:finance"]}
+
+
+class InvoiceAttachment(GeneralManager):
+    invoice: Invoice
+
+    class Permission(InvoiceAttachmentPermission):
+        pass
+
+
+attachment = InvoiceAttachment.create(
+    invoice=invoice,
+    creator_id=user.id,
+)
+attachment = InvoiceAttachment.create(
+    invoice_id=str(invoice.id),
+    creator_id=user.id,
+)
+attachment = attachment.update(
+    invoice_id=str(replacement_invoice.id),
+    creator_id=user.id,
+)
 ```
 
 Attachments inherit the invoice's permission outcome. If the linked invoice denies access, the attachment is denied as well. Filters from the invoice permission are automatically prefixed with `invoice__` when applied to queries.
+
+The two create calls are equivalent: GraphQL sends the second form after
+normalizing the relation input. Create delegates the invoice's **create**
+permission, update checks the proposed replacement invoice with **update**, and
+delete delegates **delete**. If both `invoice` and `invoice_id` are present in a
+Python payload, the last alias wins. For foreign keys that use `to_field`, the
+normalized value is resolved through that target field before the delegated
+permission is evaluated.
 
 ## Combining custom checks with filters
 
