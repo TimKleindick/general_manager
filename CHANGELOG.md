@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.86.12 (2026-10-23)
+
+### Bug Fixes
+
+- Exclude runtime secrets from example Docker images
+  ([`02a6d50`](https://github.com/TimKleindick/general_manager/commit/02a6d50a29d46451567495d175b6aef9fbde532e))
+
+### Testing
+
+- Cover example production environment in Docker contexts
+  ([`9bbdfd8`](https://github.com/TimKleindick/general_manager/commit/9bbdfd8cba13a2dc013af4d9b211defb52302f4b))
+
+
 ## v0.86.11 (2026-10-23)
 
 ### Bug Fixes
