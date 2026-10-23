@@ -590,7 +590,11 @@ def query(
 
     max_results = get_chat_settings().get("max_results")
     _, max_window = _pagination_sizes()
-    if isinstance(max_results, int) and max_results > 0:
+    if (
+        isinstance(max_results, int)
+        and not isinstance(max_results, bool)
+        and max_results > 0
+    ):
         max_window = min(max_results, max_window)
     effective_limit = max_window if limit is None else min(limit, max_window)
     if offset + effective_limit > max_window:

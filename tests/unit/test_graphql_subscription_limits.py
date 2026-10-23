@@ -1,6 +1,9 @@
 """Resource limits apply before GraphQL subscription setup acquires resources."""
 
 import asyncio
+import json
+import pytest
+from asgiref.testing import ApplicationCommunicator
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import AsyncMock, patch
@@ -230,6 +233,70 @@ class SubscriptionLimitTests(TestCase):
                 self.assertTrue(source.closed)
                 self.assertEqual(consumer.active_subscriptions, {})
                 self.assertTrue(old.cancelled())
+
+        asyncio.run(scenario())
+
+    @pytest.mark.django_db(transaction=True)
+    def test_asgi_setup_timeout_cancels_and_disconnect_cleans_resources(self):
+        async def scenario():
+            cancelled = asyncio.Event()
+
+            async def setup(*_args):
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
+
+            consumer = GraphQLSubscriptionConsumer()
+            communicator = ApplicationCommunicator(
+                consumer,
+                {
+                    "type": "websocket",
+                    "path": "/graphql/",
+                    "headers": [],
+                    "subprotocols": ["graphql-transport-ws"],
+                },
+            )
+            with (
+                patch.object(
+                    GraphQLSubscriptionConsumer, "subscription_setup_timeout", 0.01
+                ),
+                patch(
+                    "general_manager.api.graphql_subscription_consumer.GraphQL.get_schema",
+                    return_value=self.schema(setup),
+                ),
+            ):
+                try:
+                    await communicator.send_input({"type": "websocket.connect"})
+                    self.assertEqual(
+                        (await communicator.receive_output())["type"],
+                        "websocket.accept",
+                    )
+                    for message in (
+                        {"type": "connection_init"},
+                        {"type": "subscribe", **self.message("pending")},
+                    ):
+                        await communicator.send_input(
+                            {"type": "websocket.receive", "text": json.dumps(message)}
+                        )
+                        output = json.loads(
+                            (await communicator.receive_output())["text"]
+                        )
+                        self.assertEqual(
+                            output["type"],
+                            "connection_ack"
+                            if message["type"] == "connection_init"
+                            else "error",
+                        )
+                    self.assertTrue(cancelled.is_set())
+                    self.assertEqual(consumer._subscription_setups, {})
+                finally:
+                    await communicator.send_input(
+                        {"type": "websocket.disconnect", "code": 1000}
+                    )
+                    await communicator.wait()
+                self.assertEqual(consumer.active_subscriptions, {})
+                self.assertEqual(consumer._subscription_setups, {})
 
         asyncio.run(scenario())
 

@@ -689,6 +689,8 @@ class ChatQueryToolTests(SimpleTestCase):
             (400, 150, 150),
             (200, 75, 75),
             (None, 100, 100),
+            (True, 100, 100),
+            (False, 100, 100),
         ]:
             with (
                 self.subTest(chat_max=chat_max, graphql_max=graphql_max),

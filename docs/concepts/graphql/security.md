@@ -206,7 +206,8 @@ are rejected by GraphQL search: arbitrary remapping has no trustworthy mapping
 back to native field permissions. Use the standard attribute projection for
 GraphQL search. Output masking alone does not authorize custom projections.
 All query operands on incomplete remote candidate sets fail explicitly, including
-public/static permissions;
+public permissions. Statically denied managers return no rows before source
+inspection and skip operand checks;
 a partial upstream page cannot establish permission across all possible matches.
 Search over calculation managers requires an enumerable `possible_values` domain;
 indexing isolated instances alone does not establish the authorization scope.
@@ -216,3 +217,9 @@ selected manager types, counting denied rows before their native permission
 checks. Exhaustion raises an explicit error. This source-work budget is separate
 from backend hit scanning and field/path decisions; it does not bound SQL bucket
 materialization that occurs before iteration.
+
+Search hits are matched to canonical identities in the field-authorized source
+domain and reuse those source instances. Individually indexing a calculation
+outside its enumerable `possible_values` domain does not make it visible to
+GraphQL search. Stale or out-of-domain index entries are ignored for results and
+counts independently of their field values.

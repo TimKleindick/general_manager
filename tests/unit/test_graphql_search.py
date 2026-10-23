@@ -958,6 +958,20 @@ class GraphQLSearchTests(SimpleTestCase):
         info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
         for mode in ("exact", "bounded"):
             preflight_count = []
+            constructed_after_backend = []
+            native_init = Project.__init__
+
+            def track_construction(
+                instance,
+                *args,
+                counts=preflight_count,
+                constructed=constructed_after_backend,
+                initialize=native_init,
+                **kwargs,
+            ):
+                if counts:
+                    constructed.append(kwargs)
+                initialize(instance, *args, **kwargs)
 
             def overdeliver(*args, counts=preflight_count, **kwargs):
                 counts.append(gate.call_count)
@@ -966,6 +980,7 @@ class GraphQLSearchTests(SimpleTestCase):
             with (
                 self.subTest(mode=mode),
                 patch.object(backend, "search", side_effect=overdeliver),
+                patch.object(Project, "__init__", track_construction),
                 patch.object(
                     graphql_search_module, "passes_permission_filters"
                 ) as gate,
@@ -982,6 +997,30 @@ class GraphQLSearchTests(SimpleTestCase):
             # Permit source authorization before search, but no returned hit
             # may reach the native gate after the backend exceeds its budget.
             self.assertEqual(gate.call_count, preflight_count[0])
+            self.assertEqual(constructed_after_backend, [])
+
+    def test_search_returns_authorized_source_instances_without_reconstruction(
+        self,
+    ) -> None:
+        self._configure_counting_backend_with_public_rows(public_count=2)
+        candidate = Project(id=1)
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        with (
+            patch.object(
+                Project, "all", return_value=SimpleBucket(Project, [candidate])
+            ),
+            patch.object(
+                Project,
+                "__init__",
+                side_effect=AssertionError("unexpected reconstruction"),
+            ),
+        ):
+            result = GraphQL._query_fields["search"].resolver(
+                None, info, query="", types=["Project"]
+            )
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(len(result["results"]), 1)
+        self.assertIs(result["results"][0], candidate)
 
     def test_graphql_search_rejects_invalid_total_mode(self) -> None:
         field = GraphQL._query_fields["search"]
@@ -2203,7 +2242,7 @@ class GraphQLSearchHelperCoverageTests(SimpleTestCase):
                     filters={"status": "public"},
                 )
 
-    def test_resolver_logs_instantiation_failures(self) -> None:
+    def test_resolver_discards_identity_outside_source_domain(self) -> None:
         query_fields = {}
         graphql_search_module.register_search_query(
             query_fields,
