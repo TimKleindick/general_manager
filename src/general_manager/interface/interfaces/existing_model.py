@@ -41,8 +41,8 @@ class ExistingModelInterface(OrmInterfaceBase[ExistingModelT]):
     Construction and row loading are inherited from ``OrmInterfaceBase``: the
     default public input is the wrapped row ``id`` parsed by ``Input(int)`` plus
     optional ``search_date: datetime | None``. Naive search dates are made aware
-    with Django's current timezone, and historical lookups follow
-    ``OrmInterfaceBase.historical_lookup_buffer_seconds``. Missing rows
+    with Django's current timezone, and every supplied search date selects
+    history without a recency buffer. Missing rows
     propagate the wrapped model's ``DoesNotExist`` exception. Invalid or missing
     model declarations raise the existing-model configuration errors from the
     resolution capability. Creation, update, delete, query, history, and

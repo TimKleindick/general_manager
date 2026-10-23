@@ -41,9 +41,9 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
     lifecycle capability. Subclasses that override :attr:`input_fields` must keep
     an ``"id"`` field unless they also override initialization and row loading.
 
-    ``historical_lookup_buffer_seconds`` is consumed by ORM query support: a
-    ``search_date`` must be at least this many seconds before ``timezone.now()``
-    before history tables are queried instead of the current row.
+    Every non-null ``search_date`` reads the exact historical snapshot, including
+    recent timestamps. ``historical_lookup_buffer_seconds`` is retained only for
+    source compatibility and no longer permits a fallback to current rows.
     """
 
     _interface_type: ClassVar[str] = "database"

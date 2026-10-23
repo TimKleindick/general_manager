@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from django.db import models
 from django.core.exceptions import ValidationError, FieldDoesNotExist
 from django.apps import apps
+from django.utils import timezone
 
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
@@ -930,6 +931,11 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
             return_value=self.person,
         ) as mock_hist:
             DummyManager(self.person.pk, search_date=current_time)
+            mock_hist.assert_called_once_with(
+                DummyManager.Interface, self.person, timezone.make_aware(current_time)
+            )
+            mock_hist.reset_mock()
+            self.assertEqual(DummyManager(self.person.pk).name, self.person.name)
             mock_hist.assert_not_called()
 
         # Test with very old date
@@ -1086,19 +1092,30 @@ class OrmInterfaceBaseTestCase(TransactionTestCase):
         Tests that get_data handles timezone-aware datetime correctly.
         """
         aware_date = datetime.now(UTC)
-        mgr = DummyManager(self.person.pk, search_date=aware_date)
-        instance = mgr._interface.get_data()
-        self.assertEqual(instance.pk, self.person.pk)
+        with patch(
+            "general_manager.interface.capabilities.orm.OrmHistoryCapability.get_historical_record",
+            return_value=None,
+        ) as mock_hist:
+            with self.assertRaises(PersonModel.DoesNotExist):
+                DummyManager(self.person.pk, search_date=aware_date)
+            mock_hist.assert_called_once_with(
+                DummyManager.Interface, self.person, aware_date
+            )
 
     def test_get_data_with_timezone_naive_datetime(self):
         """
         Tests that get_data converts naive datetime to aware.
         """
         naive_date = datetime.now()
-        mgr = DummyManager(self.person.pk, search_date=naive_date)
-        # Should not raise an error
-        instance = mgr._interface.get_data()
-        self.assertEqual(instance.pk, self.person.pk)
+        with patch(
+            "general_manager.interface.capabilities.orm.OrmHistoryCapability.get_historical_record",
+            return_value=None,
+        ) as mock_hist:
+            with self.assertRaises(PersonModel.DoesNotExist):
+                DummyManager(self.person.pk, search_date=naive_date)
+            mock_hist.assert_called_once_with(
+                DummyManager.Interface, self.person, timezone.make_aware(naive_date)
+            )
 
     def test_get_data_without_search_date(self):
         """

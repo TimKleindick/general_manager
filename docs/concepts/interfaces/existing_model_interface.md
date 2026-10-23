@@ -73,8 +73,9 @@ below.
 The inherited constructor accepts the wrapped row `id` through the default
 `Input(int)` field and optional `search_date: datetime | None`. Naive search
 dates are made timezone-aware with Django's current timezone, and historical
-lookup uses `OrmInterfaceBase.historical_lookup_buffer_seconds` to decide when
-to read from history tables instead of the current row.
+lookup always reads history for a supplied timestamp, even immediately after a
+change. The legacy `historical_lookup_buffer_seconds` attribute is retained for
+source compatibility but no longer changes lookup behavior.
 
 `ExistingModelInterface.get_field_type("field_name")` is available when you
 need the type GeneralManager exposes for a legacy field or generated helper.
