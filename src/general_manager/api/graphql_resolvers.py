@@ -1313,6 +1313,17 @@ def can_read_class_for_user(
     Construct fresh permissions for every event so revocations take effect.
     Callers in async code must offload this potentially database-backed check.
     """
+    from django.contrib.auth import get_user_model
+
+    user_model = get_user_model()
+    if isinstance(user, user_model):
+        if user.pk is None:
+            return False
+        user = (
+            user_model._default_manager.using(user._state.db).filter(pk=user.pk).first()
+        )
+        if user is None or not getattr(user, "is_active", True):
+            return False
     permission_class: type[BasePermission] | None = getattr(
         manager_class, "Permission", None
     )
@@ -1672,6 +1683,38 @@ def create_list_resolver(
         remote_ordering_forwarded = False
         request_provenance: RequestPaginationProvenance | None = None
         authorization_result: ReadAuthorizationResult[GeneralManager]
+        complete_disjunction: ReadAuthorizationPreparation[GeneralManager] | None = None
+        if is_request_source and not operand_paths:
+            request_permission_plan = get_read_permission_filter(manager_class, info)
+            if (
+                request_permission_plan.decision != "deny_all"
+                and len(request_permission_plan.filters) > 1
+            ):
+                # Check completeness before RequestBucket union loses provenance.
+                # No client predicates are evaluated on this local union.
+                combined = MaterializedBucket(manager_class, [])
+                for permission_filter in request_permission_plan.filters:
+                    branch = base_queryset.filter(
+                        **permission_filter.get("filter", {})
+                    ).exclude(**permission_filter.get("exclude", {}))
+                    if (
+                        isinstance(branch, RequestBucket)
+                        and not branch.response_is_complete
+                    ):
+                        operation = _requested_request_global_operation(
+                            effective_pagination, group_by, order_by
+                        )
+                        raise _request_global_operation_error(operation or "pagination")
+                    combined = combined | MaterializedBucket(manager_class, branch)
+                shape = get_backend_shape(manager_class)
+                complete_disjunction = ReadAuthorizationPreparation(
+                    queryset=combined,
+                    permission_plan=request_permission_plan,
+                    backend_shape=shape,
+                    instance_check_reasons=resolve_instance_check_reasons(
+                        request_permission_plan, backend_shape=shape
+                    ),
+                )
         if operand_paths and is_request_source:
             operand_preparation = prepare_read_authorization(
                 base_queryset, manager_class, info
@@ -1734,6 +1777,11 @@ def create_list_resolver(
             )
             qs = apply_query_parameter_plan(qs, input_plan, None)
             qs = apply_query_parameter_plan(qs, deferred_plan, None)
+        elif complete_disjunction is not None:
+            authorization_result = finalize_read_authorization(
+                complete_disjunction, manager_class, info, source="list"
+            )
+            qs = authorization_result.queryset
         elif is_request_source:
             permission_plan = get_read_permission_filter(manager_class, info)
             if permission_plan.decision == "deny_all":

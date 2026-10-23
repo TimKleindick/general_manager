@@ -137,6 +137,15 @@ def authorize_query_fields(
             )
         ):
             return
+        related_type = resolve_general_manager_type(
+            field_metadata.get("type"), get_graphql_manager_registry()
+        )
+        if len(rest) == 1 and rest[0] in _LOOKUPS and related_type is not None:
+            related_fields = set(related_type.Interface.get_attribute_types())
+            related_fields.update(related_type.Interface.get_attributes())
+            related_fields.update(related_type.Interface.get_graph_ql_properties())
+            if rest[0] not in related_fields:
+                return
         value = getattr(instance, aliases[0] if aliases else field)
         if value is None:
             return

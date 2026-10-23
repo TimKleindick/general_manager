@@ -737,6 +737,8 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(len(self.remote_transport.requests), 2)
         self.assertFalse(self.remote_transport.requests[0].body.get("ordering"))
+        self.assertNotIn("page", self.remote_transport.requests[0].body)
+        self.assertNotIn("page_size", self.remote_transport.requests[0].body)
         body = self.remote_transport.requests[1].body
         self.assertEqual(body["page"], 2)
         self.assertEqual(body["page_size"], 1)
@@ -769,7 +771,7 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
         self.assertEqual(body["page"], 1)
         self.assertEqual(body["page_size"], 1)
 
-    def test_disjunctive_permission_request_rejects_global_pagination(
+    def test_complete_disjunctive_permission_request_allows_local_pagination(
         self,
     ) -> None:
         response = self.query(
@@ -782,9 +784,14 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
             """
         )
 
-        self.assertResponseHasErrors(response)
-        self.assertIn("global pagination", response.json()["errors"][0]["message"])
-        self.assertEqual(self.remote_transport.requests, [])
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            len(
+                response.json()["data"]["disjunctiveRemoteRequestSortItemList"]["items"]
+            ),
+            1,
+        )
+        self.assertEqual(len(self.remote_transport.requests), 2)
 
     def test_generated_request_list_applies_independent_order_directions(
         self,
@@ -860,3 +867,39 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(len(self.transport.requests), 1)
         self.assertEqual(self.transport.requests[0].operation_name, "list")
+
+    def test_partial_disjunctive_request_still_rejects_pagination(self):
+        original_send = self.remote_transport.send
+
+        def partial(*args, **kwargs):
+            response = original_send(*args, **kwargs)
+            response.payload["total_count"] = 100
+            return response
+
+        with patch.object(self.remote_transport, "send", side_effect=partial):
+            response = self.query(
+                "{ disjunctiveRemoteRequestSortItemList { items { id } } }"
+            )
+        self.assertResponseHasErrors(response)
+        self.assertIn("global pagination", response.json()["errors"][0]["message"])
+
+    def test_complete_permission_union_does_not_reapply_remote_predicates_locally(self):
+        from general_manager.bucket._materialized_bucket import MaterializedBucket
+
+        with patch.object(
+            MaterializedBucket,
+            "filter",
+            side_effect=AssertionError(
+                "remote predicates must not be reinterpreted locally"
+            ),
+        ):
+            response = self.query(
+                "{ disjunctiveRemoteRequestSortItemList { items { id } pageInfo { totalCount } } }"
+            )
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["disjunctiveRemoteRequestSortItemList"]["pageInfo"][
+                "totalCount"
+            ],
+            2,
+        )

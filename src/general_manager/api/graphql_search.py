@@ -42,6 +42,7 @@ from general_manager.measurement.measurement import Measurement
 from general_manager.utils.type_checks import safe_issubclass
 from general_manager.search.backend_registry import get_search_backend
 from general_manager.search.backend import SearchHit
+from general_manager.search.utils import normalize_identification
 from general_manager.search.identity import SearchFilters, build_search_filters
 from general_manager.search.registry import (
     get_search_config,
@@ -1363,9 +1364,10 @@ def register_search_query(
         Execute a cross-manager full-text search with permission filtering.
 
         The resolver parses user filters, validates configured filter keys,
-        searches each selected manager type, instantiates manager objects from
-        hit identification, applies read permission filters/instance checks, and
-        returns paginated authorized manager instances. Omitted ``page`` and
+        searches each selected manager type, matches hit identification to its
+        field-authorized source snapshot, applies native instance checks, and
+        returns paginated source instances. Individually indexed instances outside
+        the enumerable native domain cannot contribute results or totals. Omitted ``page`` and
         ``page_size`` values default to ``1`` and ``10`` respectively. Supplied
         non-positive values raise a ``GraphQLError``.
         """
@@ -1445,6 +1447,7 @@ def register_search_query(
             )
             from general_manager.bucket.request_bucket import RequestBucket
 
+            authorized_instances: dict[str, GeneralManager] = {}
             search_config = get_search_config(manager_class)
             if search_config is not None:
                 if search_config.to_document is not None:
@@ -1469,10 +1472,18 @@ def register_search_query(
                 # Search permission constraints use native instance predicates,
                 # including properties that are not public bucket filters.
                 # Reuse that exact gate before evaluating client operands.
-                candidates = authorized_source_candidates(
-                    source_candidates, permission_plan
+                candidates = list(
+                    authorized_source_candidates(source_candidates, permission_plan)
                 )
                 authorize_query_fields(candidates, info, operand_paths)
+                # Search indexes may contain explicitly indexed calculations or
+                # newly inserted rows outside this authorized native domain.
+                # Retain its instances, not just IDs, so hits cannot replace the
+                # objects whose operand permissions were checked.
+                authorized_instances = {
+                    normalize_identification(candidate.identification): candidate
+                    for candidate in candidates
+                }
                 if (
                     isinstance(source_candidates, RequestBucket)
                     and not source_candidates.response_is_complete
@@ -1546,15 +1557,26 @@ def register_search_query(
                         )
                         continue
                     try:
-                        instance = manager_class(**hit.identification)
+                        instance = authorized_instances.get(
+                            normalize_identification(hit.identification)
+                        )
                     except (TypeError, ValueError, KeyError) as exc:
                         logger.debug(
-                            "failed to instantiate search result",
+                            "invalid search result identification",
                             context={
                                 "manager": hit.type,
                                 "identification": hit.identification,
                             },
                             exc_info=exc,
+                        )
+                        continue
+                    if instance is None:
+                        logger.debug(
+                            "discarded search hit outside authorized source domain",
+                            context={
+                                "manager": hit.type,
+                                "identification": hit.identification,
+                            },
                         )
                         continue
                     candidate_hits_for_manager += 1
