@@ -180,7 +180,9 @@ input-token, and output-token budgets per user, session, or client address. A
 local-memory cache only coordinates one process; multi-process deployments need
 a shared cache.
 
-`max_results` caps query rows, `query_timeout_seconds` applies a database query
+The smaller of positive chat `max_results` and `GRAPHQL_MAX_PAGE_SIZE` caps the
+fetched query window, including rows skipped by `offset`; requests whose offset
+plus effective limit exceeds it are rejected before GraphQL execution. `query_timeout_seconds` applies a database query
 timeout where supported, and provider-specific timeout settings bound model
 requests. Public failures use stable error events instead of returning internal
 exception details.

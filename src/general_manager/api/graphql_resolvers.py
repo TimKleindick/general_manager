@@ -35,6 +35,7 @@ from graphql import GraphQLError, OperationType
 from graphql.language.ast import FieldNode, FragmentSpreadNode, InlineFragmentNode
 
 from general_manager.logging import get_logger
+from general_manager.conf import get_setting
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket._materialized_bucket import MaterializedBucket
 from general_manager.bucket.group_bucket import GroupBucket
@@ -793,6 +794,38 @@ class InvalidPaginationValueError(ValueError):
         super().__init__(f"{field_name} must be a positive integer")
 
 
+class PaginationLimitExceededError(ValueError):
+    """Raised when an explicit page exceeds the server maximum."""
+
+    def __init__(self, maximum: int) -> None:
+        super().__init__(f"pageSize must not exceed {maximum}")
+
+
+class InvalidPaginationConfigurationError(ValueError):
+    """Raised when configured pagination cannot provide finite valid pages."""
+
+    def __init__(self, setting: str) -> None:
+        super().__init__(
+            f"{setting} must be a positive integer, with default <= maximum"
+        )
+
+
+def _pagination_sizes() -> tuple[int, int]:
+    default = get_setting("GRAPHQL_DEFAULT_PAGE_SIZE", 10)
+    maximum = get_setting("GRAPHQL_MAX_PAGE_SIZE", 100)
+    for name, value in (
+        ("GRAPHQL_DEFAULT_PAGE_SIZE", default),
+        ("GRAPHQL_MAX_PAGE_SIZE", maximum),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise InvalidPaginationConfigurationError(name)
+    default = cast(int, default)
+    maximum = cast(int, maximum)
+    if default > maximum:
+        raise InvalidPaginationConfigurationError("GRAPHQL_DEFAULT_PAGE_SIZE")
+    return default, maximum
+
+
 @dataclass(frozen=True, slots=True)
 class EffectivePagination:
     """Normalized public pagination arguments and their observable defaults."""
@@ -820,19 +853,19 @@ def normalize_pagination(
     page: int | None,
     page_size: int | None,
 ) -> EffectivePagination:
-    """Normalize list pagination once, preserving the unpaginated no-arg mode."""
-    requested = page is not None or page_size is not None
+    """Resolve finite server defaults and reject oversized explicit pages."""
+    default, maximum = _pagination_sizes()
     for field_name, value in (("page", page), ("pageSize", page_size)):
         if value is not None and (
             not isinstance(value, int) or isinstance(value, bool) or value <= 0
         ):
             raise InvalidPaginationValueError(field_name)
-    if not requested:
-        return EffectivePagination(requested=False, page=1, page_size=None)
+    if page_size is not None and page_size > maximum:
+        raise PaginationLimitExceededError(maximum)
     return EffectivePagination(
         requested=True,
         page=1 if page is None else page,
-        page_size=10 if page_size is None else page_size,
+        page_size=default if page_size is None else page_size,
     )
 
 
@@ -893,6 +926,9 @@ def _forward_remote_request_controls(
         terms = order_by_to_sort_terms(order_by)
     except GraphQLOrderingInputError as exc:
         raise GraphQLError(str(exc)) from exc
+    if not isinstance(queryset, RequestBucket) or queryset.request_plan is None:
+        # Concrete snapshots must be paginated locally, never filtered by controls.
+        return queryset, False
     controls: dict[str, object] = {}
     if pagination.requested:
         controls["page"] = pagination.page
@@ -914,8 +950,8 @@ def apply_pagination(
     """
     Return a paginated slice of *queryset*.
 
-    Returns the full queryset when neither ``page`` nor ``page_size`` is
-    given. Defaults to page 1 / size 10 when only one parameter is provided.
+    Omitted controls use page 1 and the configured finite default size (10).
+    Explicit sizes above the configured maximum (100) are rejected.
     Zero, negative, boolean, and non-integer controls raise ``ValueError``
     before slicing.
     Already-empty grouped buckets are returned unchanged when pagination is
@@ -1239,6 +1275,23 @@ def _is_supported_grouped_annotation(
     )
 
 
+def can_read_class_for_user(
+    manager_class: type[GeneralManager],
+    user: object,
+) -> bool:
+    """Authorize an identity-less notification through the class read gate.
+
+    Construct fresh permissions for every event so revocations take effect.
+    Callers in async code must offload this potentially database-backed check.
+    """
+    permission_class: type[BasePermission] | None = getattr(
+        manager_class, "Permission", None
+    )
+    if permission_class is not None:
+        return permission_class(manager_class, user).check_operation_permission("read")
+    return True
+
+
 def can_read_instance_for_user(
     instance: GeneralManager,
     user: object,
@@ -1443,9 +1496,8 @@ def create_list_resolver(
         ``pageInfo`` contains ``total_count``, ``page_size``,
         ``current_page``, and ``total_pages`` using the Python-side field names;
         Graphene exposes them as camelCase in the GraphQL schema. ``current_page``
-        reports effective pagination values: supplied single controls default
-        the missing coordinate to page 1 / size 10, while ordinary no-argument
-        lists remain unpaginated with ``page_size=None``. ``total_pages`` is
+        reports effective pagination values: omitted controls default to page 1
+        and the server-configured finite page size (10 by default). ``total_pages`` is
         zero for an exact empty result and ``None`` when the source total is
         incomplete. Invalid pagination values raise
         ``InvalidPaginationValueError`` before slicing.
@@ -1462,6 +1514,7 @@ def create_list_resolver(
         group_by: list[str] | None = None,
         include_inactive: bool = False,
     ) -> ListResolverPayload:
+        effective_pagination = normalize_pagination(page, page_size)
         _ensure_as_of_compatible(self)
         base_queryset = base_getter(self, include_inactive)
         if base_queryset is None:
@@ -1489,7 +1542,12 @@ def create_list_resolver(
             exclude,
             filter_normalizer=bound_filter_normalizer,
         )
-        effective_pagination = normalize_pagination(page, page_size)
+        from general_manager.api.graphql_query_permissions import authorize_query_fields
+
+        operand_paths = (
+            set(plan.filters) | set(plan.excludes) | set(plan.normalized_excludes)
+        )
+        operand_paths.update(term.field for term in order_by_to_sort_terms(order_by))
         from general_manager.interface import CalculationInterface
 
         interface = getattr(manager_class, "Interface", None)
@@ -1497,29 +1555,67 @@ def create_list_resolver(
         remote_ordering_forwarded = False
         request_provenance: RequestPaginationProvenance | None = None
         authorization_result: ReadAuthorizationResult[GeneralManager]
-        if isinstance(interface, type) and issubclass(interface, CalculationInterface):
-            input_plan, deferred_plan = partition_calculation_query_plan(
-                manager_class,
-                plan,
+        if operand_paths and is_request_source:
+            operand_preparation = prepare_read_authorization(
+                base_queryset, manager_class, info
             )
-            input_queryset = apply_query_parameter_plan(
-                base_queryset,
-                input_plan,
-                None,
-            )
+            # Inspect the permission-filtered source before a final instance
+            # gate can materialize it and discard upstream provenance. Never
+            # touch the original source when the plan denies all rows.
             if (
-                input_plan.filters
-                or input_plan.excludes
-                or input_plan.normalized_excludes
+                operand_preparation.permission_plan.decision != "deny_all"
+                and isinstance(operand_preparation.queryset, RequestBucket)
+                and not operand_preparation.queryset.response_is_complete
             ):
-                input_queryset = input_queryset.with_instances(input_queryset)
+                from general_manager.api.graphql_query_permissions import (
+                    INCOMPLETE_ERROR,
+                )
+
+                raise GraphQLError(INCOMPLETE_ERROR)
+            operand_candidates = finalize_read_authorization(
+                operand_preparation, manager_class, info, source="query_fields"
+            ).queryset
+            authorize_query_fields(operand_candidates, info, operand_paths)
+        if isinstance(interface, type) and issubclass(interface, CalculationInterface):
             authorization_result = apply_read_authorization(
-                input_queryset,
-                manager_class,
-                info,
-                source="list",
+                base_queryset, manager_class, info, source="list"
             )
             qs = authorization_result.queryset
+            authorize_query_fields(qs, info, operand_paths)
+            # Freeze row authorization before constructor-input filters can
+            # replace the calculation bucket's permission constraints.
+            if operand_paths:
+                qs = qs.with_instances(qs)
+            input_plan, deferred_plan = partition_calculation_query_plan(
+                manager_class, plan
+            )
+
+            def canonical_inputs(mapping: GraphQLFilterMapping) -> GraphQLFilterMapping:
+                normalized = {}
+                for lookup, value in mapping.items():
+                    root, separator, suffix = lookup.partition("__")
+                    alias = (
+                        interface.input_fields.get(root.removesuffix("_id"))
+                        if root.endswith("_id")
+                        else None
+                    )
+                    if alias is not None and safe_issubclass(
+                        alias.type, GeneralManager
+                    ):
+                        lookup = (
+                            root.removesuffix("_id")
+                            + "__id"
+                            + (separator + suffix if separator else "")
+                        )
+                    normalized[lookup] = value
+                return normalized
+
+            input_plan = QueryParameterPlan(
+                canonical_inputs(input_plan.filters),
+                canonical_inputs(input_plan.excludes),
+                canonical_inputs(input_plan.normalized_excludes),
+            )
+            qs = apply_query_parameter_plan(qs, input_plan, None)
             qs = apply_query_parameter_plan(qs, deferred_plan, None)
         elif is_request_source:
             permission_plan = get_read_permission_filter(manager_class, info)
@@ -1575,12 +1671,6 @@ def create_list_resolver(
                     )
                 assert request_provenance is not None
                 if request_provenance.is_partial:
-                    if effective_pagination.requested and (
-                        request_provenance.page != effective_pagination.page
-                        or request_provenance.page_size
-                        != effective_pagination.page_size
-                    ):
-                        raise _request_global_operation_error("pagination")
                     if group_by is not None:
                         raise _request_global_operation_error("grouping")
                     if order_by is not None and not remote_ordering_forwarded:
@@ -1590,6 +1680,12 @@ def create_list_resolver(
                             raise GraphQLError(str(exc)) from exc
                         if has_ordering:
                             raise _request_global_operation_error("ordering")
+                    if effective_pagination.requested and (
+                        request_provenance.page != effective_pagination.page
+                        or request_provenance.page_size
+                        != effective_pagination.page_size
+                    ):
+                        raise _request_global_operation_error("pagination")
                 authorization_result = finalize_read_authorization(
                     authorization_preparation,
                     manager_class,
@@ -1615,6 +1711,7 @@ def create_list_resolver(
                 source="list",
             )
             qs = authorization_result.queryset
+            authorize_query_fields(qs, info, operand_paths)
             qs = apply_query_parameter_plan(qs, plan, None)
         if grouping_validator is not None:
             grouping_validator(qs, group_by, order_by, info)
@@ -1634,16 +1731,6 @@ def create_list_resolver(
             total_count = request_provenance.total_count
 
         metadata_pagination = effective_pagination
-        if (
-            not effective_pagination.requested
-            and request_provenance is not None
-            and request_provenance.page is not None
-        ):
-            metadata_pagination = EffectivePagination(
-                requested=True,
-                page=request_provenance.page,
-                page_size=request_provenance.page_size,
-            )
 
         upstream_page_matches = (
             request_provenance is not None
@@ -1653,7 +1740,7 @@ def create_list_resolver(
             and group_by is None
         )
         qs_paginated = (
-            qs_sorted
+            qs_sorted[: cast(int, metadata_pagination.page_size)]
             if upstream_page_matches
             else apply_pagination(
                 qs_sorted,

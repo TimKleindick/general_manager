@@ -370,7 +370,8 @@ subscription ProjectChanges {
 
 Identified class-wide events are checked against the subscribing user's read
 permission in an async-safe worker after commit; unreadable objects are omitted.
-Aggregate `refresh` events have `item: null` and do not disclose a row ID.
+Aggregate `refresh` events require class-level read operation permission, have
+`item: null`, and do not disclose a row ID.
 
 ## Subscribe to fields with read permissions
 

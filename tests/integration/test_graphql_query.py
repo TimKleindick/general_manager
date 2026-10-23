@@ -3,6 +3,7 @@ from typing import ClassVar
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.test import override_settings
 from django.db.models import CharField, DateField, ForeignKey, CASCADE
 from django.utils.crypto import get_random_string
 from general_manager.api.property import graph_ql_property
@@ -97,6 +98,72 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
             commercials=alpha,
         )
         return alpha, zulu, (beta, zed, able)
+
+    @override_settings(
+        GENERAL_MANAGER={"GRAPHQL_DEFAULT_PAGE_SIZE": 2, "GRAPHQL_MAX_PAGE_SIZE": 3}
+    )
+    def test_default_root_page_is_finite_with_full_metadata(self):
+        response = self.query(
+            "{ commercialsList { items { id } pageInfo { totalCount pageSize currentPage totalPages } } }"
+        )
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["commercialsList"]
+        self.assertEqual(len(payload["items"]), 2)
+        self.assertEqual(
+            payload["pageInfo"],
+            {"totalCount": 10, "pageSize": 2, "currentPage": 1, "totalPages": 5},
+        )
+
+    @override_settings(
+        GENERAL_MANAGER={"GRAPHQL_DEFAULT_PAGE_SIZE": 2, "GRAPHQL_MAX_PAGE_SIZE": 3}
+    )
+    def test_default_nested_and_group_pages_are_finite(self):
+        parent = self.commercials.create(
+            name="Page Parent", capex="1 USD", opex="1 USD", creator_id=self.user.id
+        )
+        for n in range(5):
+            self.project.create(
+                name=str(n),
+                description=None,
+                commercials=parent,
+                creator_id=self.user.id,
+            )
+        response = self.query("""{
+            commercialsList(filter: {name: "Page Parent"}) { items {
+                projectList { items { id } pageInfo { totalCount pageSize totalPages } }
+                projectGroups(groupBy: ["name"]) { items { name } pageInfo { totalCount pageSize totalPages } }
+            } }
+            projectGroups(groupBy: ["name"]) { items { name } pageInfo { totalCount pageSize totalPages } }
+        }""")
+        self.assertResponseNoErrors(response)
+        data = response.json()["data"]
+        parent_data = data["commercialsList"]["items"][0]
+        for payload in (
+            parent_data["projectList"],
+            parent_data["projectGroups"],
+            data["projectGroups"],
+        ):
+            self.assertEqual(len(payload["items"]), 2)
+            self.assertEqual(
+                payload["pageInfo"], {"totalCount": 5, "pageSize": 2, "totalPages": 3}
+            )
+
+    @override_settings(
+        GENERAL_MANAGER={"GRAPHQL_DEFAULT_PAGE_SIZE": 2, "GRAPHQL_MAX_PAGE_SIZE": 3}
+    )
+    def test_explicit_oversized_root_and_nested_pages_are_rejected(self):
+        for query in (
+            "{ commercialsList(pageSize: 4) { items { id } } }",
+            "{ commercialsList { items { projectList(pageSize: 4) { items { id } } } } }",
+            '{ projectGroups(groupBy: ["name"], pageSize: 4) { items { name } } }',
+        ):
+            with self.subTest(query=query):
+                response = self.query(query)
+                self.assertIn("errors", response.json())
+                self.assertIn(
+                    "pageSize must not exceed 3",
+                    response.json()["errors"][0]["message"],
+                )
 
     def test_query_commercials(self):
         """

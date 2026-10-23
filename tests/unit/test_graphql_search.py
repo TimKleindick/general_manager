@@ -848,28 +848,140 @@ class GraphQLSearchTests(SimpleTestCase):
             "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 1,
         }
     )
-    def test_graphql_search_total_mode_exact_overrides_bounded_setting(self) -> None:
+    def test_graphql_search_exact_cannot_override_server_scan_limit(self) -> None:
         backend = self._configure_counting_backend_with_public_rows(public_count=5)
         field = GraphQL._query_fields["search"]
-        info = MagicMock()
-        info.context.user = AnonymousUser()
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        with self.assertRaisesRegex(GraphQLError, "scan limit") as caught:
+            field.resolver(None, info, query="", total_mode="exact", page_size=1)
+        assert caught.exception.extensions == {"code": "SEARCH_SCAN_LIMIT_EXCEEDED"}
+        assert len(backend.search_calls) == 1
+        assert backend.search_calls[0]["kwargs"]["limit"] == 1
 
-        response = field.resolver(
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 1})
+    def test_graphql_search_exact_limit_returns_error_without_partial_payload(
+        self,
+    ) -> None:
+        self._configure_counting_backend_with_public_rows(public_count=5)
+        query_type = type("Query", (graphene.ObjectType,), dict(GraphQL._query_fields))
+        result = graphene.Schema(query=query_type).execute(
+            '{ search(query: "", totalMode: "exact", pageSize: 1) { total totalIsExact } }',
+            context_value=SimpleNamespace(user=AnonymousUser()),
+        )
+        assert result.data == {"search": None}
+        assert result.errors is not None
+        assert result.errors[0].extensions == {"code": "SEARCH_SCAN_LIMIT_EXCEEDED"}
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 2})
+    def test_graphql_search_large_window_cannot_expand_scan_budget(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=5)
+        field = GraphQL._query_fields["search"]
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        for page, page_size in ((1, 1000000), (1000000, 1)):
+            with self.subTest(page=page, page_size=page_size):
+                backend.search_calls.clear()
+                response = field.resolver(
+                    None,
+                    info,
+                    query="",
+                    total_mode="bounded",
+                    page=page,
+                    page_size=page_size,
+                )
+                assert response["total"] == 2
+                assert response["total_is_exact"] is False
+                assert response["page_info"]["total_count"] is None
+                assert len(backend.search_calls) == 1
+                assert backend.search_calls[0]["kwargs"]["limit"] == 2
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 2})
+    def test_graphql_search_exact_fails_conservatively_at_full_scan_boundary(
+        self,
+    ) -> None:
+        backend = self._configure_counting_backend_with_public_rows(
+            public_count=2, backend=BestEffortTotalSearchBackend()
+        )
+        field = GraphQL._query_fields["search"]
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        with self.assertRaisesRegex(GraphQLError, "scan limit"):
+            field.resolver(None, info, query="", page_size=1000000)
+        assert len(backend.search_calls) == 1
+        assert backend.search_calls[0]["kwargs"]["limit"] == 2
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 3})
+    def test_graphql_search_exact_completes_below_budget(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=2)
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        response = GraphQL._query_fields["search"].resolver(
             None,
             info,
             query="",
-            index="global",
-            types=None,
-            filters=None,
-            total_mode="exact",
-            page=1,
-            page_size=1,
+            page_size=1000000,
         )
-
-        assert response["total"] == 5
+        assert response["total"] == 2
         assert response["total_is_exact"] is True
-        assert len(response["results"]) == 1
-        assert len(backend.search_calls) > 1
+        assert backend.search_calls[0]["kwargs"]["limit"] == 3
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 3})
+    def test_graphql_search_shares_scan_budget_across_manager_types(self) -> None:
+        GeneralManagerMeta.all_classes = [Project, AlternateProject]
+        GraphQL._query_fields = {}
+        GraphQL.graphql_type_registry = {}
+        GraphQL.manager_registry = {}
+        GraphQL._search_union = None
+        GraphQL._search_result_type = None
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [Project, AlternateProject], [Project, AlternateProject]
+        )
+        GraphQL.create_graphql_interface(Project)
+        GraphQL.create_graphql_interface(AlternateProject)
+        GraphQL.register_search_query()
+        backend = self._configure_counting_backend_with_public_rows(public_count=2)
+        SearchIndexer(backend).index_instance(AlternateProject(id=3))
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        response = GraphQL._query_fields["search"].resolver(
+            None,
+            info,
+            query="",
+            types=["Project", "AlternateProject"],
+            page_size=100,
+            total_mode="bounded",
+        )
+        assert response["total"] == 3
+        assert response["total_is_exact"] is False
+        assert [call["kwargs"]["limit"] for call in backend.search_calls] == [3, 1]
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 2})
+    def test_graphql_search_rejects_backend_overdelivery_before_hydration(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=5)
+        oversized = backend.search("global", "", limit=3, offset=0)
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        for mode in ("exact", "bounded"):
+            preflight_count = []
+
+            def overdeliver(*args, counts=preflight_count, **kwargs):
+                counts.append(gate.call_count)
+                return oversized
+
+            with (
+                self.subTest(mode=mode),
+                patch.object(backend, "search", side_effect=overdeliver),
+                patch.object(
+                    graphql_search_module, "passes_permission_filters"
+                ) as gate,
+                self.assertRaisesRegex(GraphQLError, "scan limit"),
+            ):
+                GraphQL._query_fields["search"].resolver(
+                    None,
+                    info,
+                    query="",
+                    page_size=100,
+                    total_mode=mode,
+                )
+            self.assertEqual(len(preflight_count), 1)
+            # Permit source authorization before search, but no returned hit
+            # may reach the native gate after the backend exceeds its budget.
+            self.assertEqual(gate.call_count, preflight_count[0])
 
     def test_graphql_search_rejects_invalid_total_mode(self) -> None:
         field = GraphQL._query_fields["search"]
@@ -1025,6 +1137,64 @@ class GraphQLSearchTests(SimpleTestCase):
         assert response["total"] == 0
         assert response["results"] == []
 
+    def test_search_source_authorization_limit_counts_denied_candidates(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=3)
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        with (
+            patch(
+                "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+                2,
+            ),
+            patch.object(
+                graphql_search_module, "passes_permission_filters", return_value=False
+            ) as gate,
+            self.assertRaisesRegex(
+                GraphQLError, "source authorization candidate limit"
+            ),
+        ):
+            GraphQL._query_fields["search"].resolver(
+                None, info, query="", types=["Project"]
+            )
+        self.assertEqual(gate.call_count, 2)
+        self.assertEqual(backend.search_calls, [])
+
+    def test_search_source_authorization_limit_is_shared_across_managers(self) -> None:
+        GeneralManagerMeta.all_classes = [Project, AlternateProject]
+        GraphQL._query_fields = {}
+        GraphQL.graphql_type_registry = {}
+        GraphQL.manager_registry = {}
+        GraphQL._search_union = None
+        GraphQL._search_result_type = None
+        GeneralmanagerConfig.initialize_general_manager_classes(
+            [Project, AlternateProject], [Project, AlternateProject]
+        )
+        GraphQL.create_graphql_interface(Project)
+        GraphQL.create_graphql_interface(AlternateProject)
+        GraphQL.register_search_query()
+        backend = self._configure_counting_backend_with_public_rows(public_count=2)
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        with (
+            patch(
+                "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+                2,
+            ),
+            patch.object(
+                graphql_search_module, "passes_permission_filters", return_value=False
+            ) as gate,
+            patch.object(
+                backend, "search", return_value=SearchResult(hits=[], total=0)
+            ) as search,
+            self.assertRaisesRegex(
+                GraphQLError, "source authorization candidate limit"
+            ),
+        ):
+            GraphQL._query_fields["search"].resolver(
+                None, info, query="", types=["Project", "AlternateProject"]
+            )
+        self.assertEqual(gate.call_count, 2)
+        self.assertEqual(search.call_count, 1)
+        self.assertEqual(search.call_args.kwargs["types"], ["Project"])
+
     def test_graphql_search_applies_user_filters_to_indexed_document_values(
         self,
     ) -> None:
@@ -1048,18 +1218,19 @@ class GraphQLSearchTests(SimpleTestCase):
             "get_read_permission_filter",
             return_value=allowed_plan,
         ):
-            response = field.resolver(
-                None,
-                info,
-                query="",
-                index="global",
-                types=["Project"],
-                filters={"status": "public"},
-                page=1,
-                page_size=10,
-            )
-
-        assert [item.identification for item in response["results"]] == [{"id": 1}]
+            with self.assertRaisesMessage(
+                GraphQLError, "custom search document projection"
+            ):
+                field.resolver(
+                    None,
+                    info,
+                    query="",
+                    index="global",
+                    types=["Project"],
+                    filters={"status": "public"},
+                    page=1,
+                    page_size=10,
+                )
 
     def test_graphql_search_collision_keeps_user_filters_and_checks_permission(
         self,
@@ -1084,21 +1255,19 @@ class GraphQLSearchTests(SimpleTestCase):
             "get_read_permission_filter",
             return_value=permission_plan,
         ):
-            response = field.resolver(
-                None,
-                info,
-                query="",
-                index="global",
-                types=["Project"],
-                filters={"status": "public", "status__in": ["public"]},
-                page=1,
-                page_size=10,
-            )
-
-        assert [item.identification for item in response["results"]] == [{"id": 2}]
-        assert backend.search_calls[0]["kwargs"]["filters"] == [
-            {"status": "public", "status__in": ["public"]}
-        ]
+            with self.assertRaisesMessage(
+                GraphQLError, "custom search document projection"
+            ):
+                field.resolver(
+                    None,
+                    info,
+                    query="",
+                    index="global",
+                    types=["Project"],
+                    filters={"status": "public", "status__in": ["public"]},
+                    page=1,
+                    page_size=10,
+                )
 
     def test_graphql_search_schema_rejects_raw_selection(self) -> None:
         query_type = type(

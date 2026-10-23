@@ -672,16 +672,119 @@ class ChatQueryToolTests(SimpleTestCase):
             filters={},
             fields=["name"],
             limit=5,
-            offset=1,
+            offset=0,
         )
 
         assert result == {
-            "data": [{"name": "Screw"}, {"name": "Nut"}],
+            "data": [{"name": "Bolt"}, {"name": "Screw"}],
             "total_count": 9,
             "has_more": True,
         }
         query_text = str(schema.calls[0]["query"])
-        assert "pageSize: 3" in query_text
+        assert "pageSize: 2" in query_text
+
+    def test_query_uses_configured_shared_window_without_hardcoded_cap(self) -> None:
+        for chat_max, graphql_max, expected in [
+            (200, 300, 200),
+            (400, 150, 150),
+            (200, 75, 75),
+            (None, 100, 100),
+        ]:
+            with (
+                self.subTest(chat_max=chat_max, graphql_max=graphql_max),
+                override_settings(
+                    GENERAL_MANAGER={
+                        "CHAT": {"max_results": chat_max},
+                        "GRAPHQL_MAX_PAGE_SIZE": graphql_max,
+                    }
+                ),
+            ):
+                schema = _RecordingSchema(_Result(data={}))
+                GraphQL._schema = schema  # type: ignore[assignment]
+                query(manager="PartManager", filters={}, fields=["name"])
+                assert f"pageSize: {expected}" in str(schema.calls[0]["query"])
+
+    def test_query_rejects_invalid_graphql_pagination_before_execute(self) -> None:
+        for maximum in (False, 0, "100"):
+            with (
+                self.subTest(maximum=maximum),
+                override_settings(GENERAL_MANAGER={"GRAPHQL_MAX_PAGE_SIZE": maximum}),
+            ):
+                schema = _RecordingSchema(_Result(data={}))
+                GraphQL._schema = schema  # type: ignore[assignment]
+                with pytest.raises(ValueError, match="GRAPHQL_MAX_PAGE_SIZE"):
+                    query(manager="PartManager", filters={}, fields=["name"])
+                assert schema.calls == []
+
+    @override_settings(GENERAL_MANAGER={"CHAT": {"max_results": 2}})
+    def test_query_rejects_windows_exceeding_max_results_before_execute(self) -> None:
+        for offset, limit in [(1, 2), (2, 1), (10**12, 1), (1, None), (1, 100)]:
+            with self.subTest(offset=offset, limit=limit):
+                schema = _RecordingSchema(_Result(data={}))
+                GraphQL._schema = schema  # type: ignore[assignment]
+                with pytest.raises(
+                    ValueError,
+                    match="offset plus effective limit must not exceed the effective query window",
+                ):
+                    query(
+                        manager="PartManager",
+                        filters={},
+                        fields=["name"],
+                        offset=offset,
+                        limit=limit,
+                    )
+                assert schema.calls == []
+
+    @override_settings(GENERAL_MANAGER={"CHAT": {"max_results": 2}})
+    def test_query_accepts_window_exactly_at_max_results(self) -> None:
+        schema = _RecordingSchema(
+            _Result(
+                data={
+                    "partmanagerList": {
+                        "items": [{"name": "Bolt"}, {"name": "Screw"}],
+                        "pageInfo": {"totalCount": 9},
+                    }
+                }
+            )
+        )
+        GraphQL._schema = schema  # type: ignore[assignment]
+        result = query(
+            manager="PartManager", filters={}, fields=["name"], offset=1, limit=1
+        )
+        assert result == {
+            "data": [{"name": "Screw"}],
+            "total_count": 9,
+            "has_more": True,
+        }
+        assert "pageSize: 2" in str(schema.calls[0]["query"])
+
+    @override_settings(GENERAL_MANAGER={"CHAT": {"max_results": 2}})
+    def test_query_tool_strategies_cannot_bypass_window_limit(self) -> None:
+        for tool_name in ("query", "query_partmanager"):
+            with self.subTest(tool_name=tool_name):
+                schema = _RecordingSchema(_Result(data={}))
+                GraphQL._schema = schema  # type: ignore[assignment]
+                with (
+                    patch(
+                        "general_manager.chat.tools.build_schema_index",
+                        return_value={"PartManager": {}},
+                    ),
+                    pytest.raises(
+                        ValueError,
+                        match="offset plus effective limit must not exceed the effective query window",
+                    ),
+                ):
+                    execute_chat_tool(
+                        tool_name,
+                        {
+                            "manager": "PartManager",
+                            "fields": ["name"],
+                            "limit": 1,
+                            "offset": 10**12,
+                        },
+                        context=None,
+                    )
+                assert schema.calls == []
 
     @override_settings(
         GENERAL_MANAGER={

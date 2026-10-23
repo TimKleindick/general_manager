@@ -35,6 +35,9 @@ import graphene
 from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer
 from django.core.exceptions import ObjectDoesNotExist
+
+from general_manager.interface.requests import RequestNotFoundError
+from general_manager.manager.meta import AttributeEvaluationError
 from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils.module_loading import import_string
 
@@ -119,6 +122,7 @@ from general_manager.api.graphql_resolvers import (
     check_read_permission as _check_read_permission_fn,
     check_read_permission_for_user as _check_read_permission_for_user_fn,
     can_read_instance_for_user as _can_read_instance_for_user_fn,
+    can_read_class_for_user as _can_read_class_for_user_fn,
     create_measurement_resolver as _create_measurement_resolver_fn,
     create_normal_resolver as _create_normal_resolver_fn,
     create_list_resolver as _create_list_resolver_fn,
@@ -2258,17 +2262,32 @@ class GraphQL:
 
         def resolver(
             self: GeneralManager, info: GraphQLResolveInfo, **identification: object
-        ) -> GeneralManager:
+        ) -> GeneralManager | None:
             """
-            Instantiate and return a GeneralManager for the provided identification arguments.
+            Instantiate and authorize a manager before exposing its existence.
 
             Parameters:
                 identification (dict): Mapping of identification argument names to values passed to the manager constructor.
 
             Returns:
-                GeneralManager: The manager instance identified by the provided arguments.
+                GeneralManager | None: The readable manager, or None for missing
+                or unreadable targets.
             """
-            return generalManagerClass(**identification)
+            try:
+                instance = generalManagerClass(**identification)
+            except (ObjectDoesNotExist, RequestNotFoundError):
+                # Missing and unreadable targets share the same public response.
+                return None
+            try:
+                readable = _can_read_instance_for_user_fn(instance, info.context.user)
+            except RequestNotFoundError:
+                return None
+            except AttributeEvaluationError as error:
+                # Request-backed fields hydrate lazily during the row gate.
+                if isinstance(error.__cause__, RequestNotFoundError):
+                    return None
+                raise
+            return instance if readable else None
 
         cls._query_fields[item_field_name] = item_field
         cls._query_fields[f"resolve_{item_field_name}"] = resolver
@@ -2656,6 +2675,12 @@ class GraphQL:
                             continue
                         identification = message.get("identification")
                         if action == "refresh" and identification is None:
+                            if not await asyncio.to_thread(
+                                _can_read_class_for_user_fn,
+                                generalManagerClass,
+                                subscription_user,
+                            ):
+                                continue
                             clear_capability_context(info)
                             yield SubscriptionEvent(item=None, action=action)
                             continue
