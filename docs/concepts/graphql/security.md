@@ -15,6 +15,15 @@ Security in the GraphQL layer relies on permission checks and robust error handl
 
 Always execute GraphQL resolvers through managers; do not reach directly for Django models, or you will bypass permission rules.
 
+Generated create and update mutations reserve `creator_id`, `ignore_permission`,
+and `history_comment` for manager execution metadata. Schema generation rejects
+editable interface fields with these names, including relation aliases such as
+`creator` that normalize to `creator_id`. Rename colliding fields or make them
+read-only. At runtime, payloads containing `creator_id` or `ignore_permission`
+are rejected with `BAD_USER_INPUT` before upload-token processing. A second
+check rejects collisions introduced by relation normalization. The actor always comes from the authenticated context. The
+optional `historyComment` argument remains available as audit metadata.
+
 ## Capability hints
 
 See [GraphQL permission capabilities](permission_capabilities.md) for the full
