@@ -5,18 +5,21 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import date, datetime
+from dataclasses import replace
 import json
 from importlib import import_module
 import re
 from time import perf_counter
 from uuid import UUID, uuid4
 from collections.abc import Callable, Coroutine, Mapping, MutableSequence, Sequence
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 from urllib.parse import parse_qs
 
 from asgiref.sync import async_to_sync
+from django.contrib.auth import get_user_model
 from django.conf import settings
+from django.core.handlers.asgi import ASGIHandler
 from django.db import DEFAULT_DB_ALIAS, transaction
 from django.urls import re_path
 
@@ -241,6 +244,85 @@ def emit_remote_invalidation(
 post_data_change.connect(emit_remote_invalidation, weak=False)
 
 
+def _fresh_remote_principal(principal: object) -> object | None:
+    """Reload the authenticated account, without reusing cached permission state."""
+    if not getattr(principal, "is_authenticated", False):
+        return None
+    identity = getattr(principal, "pk", None)
+    if identity is None:
+        return None
+    user = get_user_model()._default_manager.filter(pk=identity).first()
+    if user is None or not getattr(user, "is_active", True):
+        return None
+    return user
+
+
+def _can_receive_remote_event(
+    config: RemoteAPIConfig, principal: object, event: Mapping[str, object]
+) -> bool:
+    """Apply the native current-instance read gate; never disclose deleted IDs."""
+    if (
+        event.get("action") not in {"create", "update"}
+        or event.get("protocol_version") != config.protocol_version
+        or event.get("base_path") != config.base_path
+        or event.get("resource_name") != config.resource_name
+    ):
+        return False
+    identification = event.get("identification")
+    if not isinstance(identification, Mapping) or not identification:
+        return False
+    from general_manager.interface.interfaces.request import RequestInterface
+    from general_manager.api.graphql_errors import get_read_permission_filter
+    from general_manager.api.graphql_resolvers import (
+        prepare_read_authorization,
+        finalize_read_authorization,
+    )
+    from general_manager.bucket._materialized_bucket import MaterializedBucket
+    from general_manager.bucket.base_bucket import Bucket
+
+    try:
+        user = _fresh_remote_principal(principal)
+        if user is None:
+            return False
+        instance = config.manager_cls(**dict(identification))
+        if isinstance(instance._interface, RequestInterface):
+            # Request constructors are lazy. Even a user-only read rule must
+            # not authorize an ID whose current detail cannot be loaded.
+            instance._interface.set_request_payload_cache(None)
+            instance._interface.get_data()
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        plan = get_read_permission_filter(config.manager_cls, info)
+        source: Bucket[GeneralManager] = MaterializedBucket(
+            config.manager_cls, [instance]
+        )
+        if plan.decision == "conditional" and any(
+            constraint.get("filter") or constraint.get("exclude")
+            for constraint in plan.filters
+        ):
+            # Keep native ORM filter/exclude semantics for this one candidate.
+            source = config.manager_cls.all().with_instances([instance])
+        preparation = prepare_read_authorization(
+            source,
+            config.manager_cls,
+            info,
+            permission_plan=replace(plan, requires_instance_check=False),
+        )
+        authorized = finalize_read_authorization(
+            preparation, config.manager_cls, info, source="remote_invalidation"
+        ).queryset
+        # Run the native instance gate unconditionally, even for allow-all plans.
+        return any(
+            item.Permission(item, user).can_read_instance() for item in authorized
+        )
+    except MemoryError:
+        raise
+    except Exception:  # noqa: BLE001
+        # Missing instances and failed authorization lookups have the same
+        # externally silent result. Never send a fallback action or identity.
+        logger.warning("remote invalidation authorization failed")
+        return False
+
+
 class RemoteInvalidationConsumer:
     """Minimal ASGI websocket consumer for remote invalidation events."""
 
@@ -269,28 +351,15 @@ class RemoteInvalidationConsumer:
         receive: AsgiReceive,
         send: AsgiSend,
     ) -> None:
-        """
-        Accept a remote invalidation websocket and forward channel-layer events.
+        """Forward identified changes only under fresh native instance read rights.
 
-        The consumer closes with 4404 for unknown or disabled resources, 4406
-        for protocol-version mismatches, and 1011 when no channel layer is
-        available. It accepts matching connections, subscribes to the resource
-        group, sends JSON invalidation payloads, and discards the channel in a
-        `finally` block. The generated route supplies `scope["url_route"]
-        ["kwargs"]["base_path"]` and `["resource_name"]`; the optional
-        `version` query string parameter is compared with the resource protocol
-        version. A missing version is accepted, multiple values use the first
-        parsed value, and invalid UTF-8 query strings propagate decoding errors.
-        Non-disconnect inbound websocket messages are ignored while the consumer
-        keeps listening.
-
-        Outbound JSON messages include `protocol_version`, `base_path`,
-        `resource_name`, `action`, `identification`, and `event_id` in a
-        `websocket.send` frame with a JSON `text` payload. Extra channel-layer
-        event fields are ignored; missing required event fields raise `KeyError`.
-        Client disconnect exits the loop and cleans up without raising. Missing
-        route kwargs, channel-layer, receive, send, and JSON errors propagate.
+        Admission requires an active authenticated Django account (4401).
+        Unknown resources close with 4404, incompatible versions with 4406.
+        Deleted, unavailable and identity-free batch events are suppressed.
+        Existing client data is not evicted when access is lost.
         """
+        from channels.db import database_sync_to_async
+
         from general_manager.manager.meta import GeneralManagerMeta
 
         url_route = scope.get("url_route", {})
@@ -314,6 +383,12 @@ class RemoteInvalidationConsumer:
         if protocol_version and protocol_version != config.protocol_version:
             await send({"type": "websocket.close", "code": 4406})
             return
+        principal = await database_sync_to_async(_fresh_remote_principal)(
+            scope.get("user")
+        )
+        if principal is None:
+            await send({"type": "websocket.close", "code": 4401})
+            return
         channel_layer = _get_channel_layer_safe()
         if channel_layer is None:
             await send({"type": "websocket.close", "code": 1011})
@@ -321,13 +396,13 @@ class RemoteInvalidationConsumer:
         self._channel_layer = channel_layer
         self._group_name = remote_invalidation_group_name(config)
         self._channel_name = await channel_layer.new_channel()
-        await channel_layer.group_add(self._group_name, self._channel_name)
-        await send({"type": "websocket.accept"})
-        receive_task: asyncio.Task[AsgiMessage] = asyncio.create_task(receive())
-        event_task: asyncio.Task[object] = asyncio.create_task(
-            channel_layer.receive(self._channel_name)
-        )
+        receive_task: asyncio.Task[AsgiMessage] | None = None
+        event_task: asyncio.Task[object] | None = None
         try:
+            await channel_layer.group_add(self._group_name, self._channel_name)
+            await send({"type": "websocket.accept"})
+            receive_task = asyncio.create_task(receive())
+            event_task = asyncio.create_task(channel_layer.receive(self._channel_name))
             while True:
                 done, _ = await asyncio.wait(
                     {receive_task, event_task},
@@ -347,6 +422,9 @@ class RemoteInvalidationConsumer:
                         not disconnect
                         and isinstance(event, Mapping)
                         and event.get("type") == "gm.remote.invalidation"
+                        and await database_sync_to_async(_can_receive_remote_event)(
+                            config, principal, event
+                        )
                     ):
                         await send(
                             {
@@ -372,9 +450,12 @@ class RemoteInvalidationConsumer:
                     await asyncio.gather(event_task, return_exceptions=True)
                     break
         finally:
-            receive_task.cancel()
-            event_task.cancel()
-            await asyncio.gather(receive_task, event_task, return_exceptions=True)
+            pending_tasks = [
+                task for task in (receive_task, event_task) if task is not None
+            ]
+            for task in pending_tasks:
+                task.cancel()
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
             if self._group_name is not None and self._channel_name is not None:
                 await channel_layer.group_discard(self._group_name, self._channel_name)
 
@@ -396,11 +477,19 @@ def ensure_remote_invalidation_route(
     trailing slash. The helper is idempotent for the same `(base_path,
     resource_name)` pair using the resolved config values without additional
     normalization; changed config for an existing key is preserved unchanged.
-    Routes append after existing websocket patterns. Missing or non-mutable
+    Existing middleware wrappers and the live URLRouter are preserved; opaque
+    websocket applications are left unchanged with a warning. Routes append
+    after existing websocket patterns. Missing or non-mutable
     `websocket_urlpatterns` are replaced with a new list. The helper supports
     ASGI modules that expose either a Channels `application_mapping` router or a
-    plain HTTP application attribute named by `ASGI_APPLICATION`.
+    unwrapped Django ASGIHandler attribute named by `ASGI_APPLICATION`. Unknown
+    root callables (including closures and custom HTTP wrappers) are left unchanged
+    because treating them as HTTP-only could bypass their websocket security.
     """
+    registry = build_remote_api_registry(manager_classes)
+    enabled = [config for config in registry.values() if config.websocket_invalidation]
+    if not enabled:
+        return
     asgi_path = getattr(settings, "ASGI_APPLICATION", None)
     if not asgi_path:
         return
@@ -419,26 +508,34 @@ def ensure_remote_invalidation_route(
         if "populate() isn't reentrant" in str(exc):
             return
         raise
-    websocket_patterns = _websocket_patterns(asgi_module)
-    if websocket_patterns is None:
-        websocket_patterns = []
-        cast(_AsgiModuleRoutes, asgi_module).websocket_urlpatterns = websocket_patterns
     application = getattr(asgi_module, attr_name, None)
     if application is None:
         return
-    for route in _websocket_application_routes(application):
-        if route not in websocket_patterns:
-            websocket_patterns.append(route)
-    registry = build_remote_api_registry(manager_classes)
-    for config in registry.values():
-        if not config.websocket_invalidation:
-            continue
+    mapped_application = _protocol_application(application)
+    websocket_app = (
+        mapped_application.application_mapping.get("websocket")
+        if mapped_application is not None
+        else None
+    )
+    router = _websocket_router(websocket_app)
+    if (websocket_app is not None and router is None) or (
+        mapped_application is None and type(application) is not ASGIHandler
+    ):
+        logger.warning("remote invalidation routes require an accessible URLRouter")
+        return
+    websocket_patterns = _websocket_patterns(asgi_module)
+    patterns = list(websocket_patterns or [])
+    if router is not None:
+        for route in router.routes:
+            if route not in patterns:
+                patterns.append(route)
+    for config in enabled:
         normalized = f"{config.base_path.strip('/')}/ws/{config.resource_name}"
         pattern = rf"^{re.escape(normalized)}/?$"
         route_exists = any(
             getattr(route, "_general_manager_remote_ws_key", None)
             == (config.base_path, config.resource_name)
-            for route in websocket_patterns
+            for route in patterns
         )
         if route_exists:
             continue
@@ -459,11 +556,16 @@ def ensure_remote_invalidation_route(
             config.base_path,
             config.resource_name,
         )
-        websocket_patterns.append(websocket_route)
-    if hasattr(application, "application_mapping"):
-        mapped_application = cast(_ApplicationMapping, application)
+        patterns.append(websocket_route)
+    if websocket_patterns is None:
+        cast(_AsgiModuleRoutes, asgi_module).websocket_urlpatterns = patterns
+    else:
+        websocket_patterns[:] = patterns
+    if router is not None:
+        router.routes = list(patterns)
+    elif mapped_application is not None:
         mapped_application.application_mapping["websocket"] = AuthMiddlewareStack(
-            URLRouter(list(websocket_patterns))
+            URLRouter(list(patterns))
         )
     else:
         setattr(
@@ -472,9 +574,7 @@ def ensure_remote_invalidation_route(
             ProtocolTypeRouter(
                 {
                     "http": application,
-                    "websocket": AuthMiddlewareStack(
-                        URLRouter(list(websocket_patterns))
-                    ),
+                    "websocket": AuthMiddlewareStack(URLRouter(list(patterns))),
                 }
             ),
         )
@@ -491,8 +591,8 @@ def clear_remote_invalidation_routes() -> None:
     routes in the configured ASGI module are removed regardless of path or
     resource shape while preserving the order of remaining routes. Returns
     without changes when ASGI settings, Channels, the ASGI module, or mutable
-    sequence websocket patterns are unavailable. Router reconstruction errors
-    propagate.
+    sequence websocket patterns are unavailable. The live URLRouter is updated in place through existing middleware wrappers.
+    A plain HTTP application is never wrapped merely to clear routes.
     """
     asgi_path = getattr(settings, "ASGI_APPLICATION", None)
     if not asgi_path:
@@ -502,47 +602,30 @@ def clear_remote_invalidation_routes() -> None:
     except ValueError:
         return
     try:
-        from channels.auth import AuthMiddlewareStack
-        from channels.routing import ProtocolTypeRouter, URLRouter
-    except ImportError:  # pragma: no cover - optional dependency
-        return
-    try:
         asgi_module = import_module(module_path)
     except ImportError:
         return
     websocket_patterns = _websocket_patterns(asgi_module)
-    if websocket_patterns is None:
-        return
-    filtered_patterns = [
-        route
-        for route in websocket_patterns
-        if not (
+    application = getattr(asgi_module, attr_name, None)
+    mapped_application = _protocol_application(application)
+    router = _websocket_router(
+        mapped_application.application_mapping.get("websocket")
+        if mapped_application is not None
+        else None
+    )
+
+    def retained(route: object) -> bool:
+        return not (
             getattr(route, "_general_manager_remote_ws", False)
             or getattr(route, "_general_manager_remote_ws_key", None) is not None
         )
-    ]
-    cast(_AsgiModuleRoutes, asgi_module).websocket_urlpatterns = filtered_patterns
-    application = getattr(asgi_module, attr_name, None)
-    if application is None:
-        return
-    if hasattr(application, "application_mapping"):
-        mapped_application = cast(_ApplicationMapping, application)
-        mapped_application.application_mapping["websocket"] = AuthMiddlewareStack(
-            URLRouter(list(filtered_patterns))
-        )
-    else:
-        setattr(
-            asgi_module,
-            attr_name,
-            ProtocolTypeRouter(
-                {
-                    "http": application,
-                    "websocket": AuthMiddlewareStack(
-                        URLRouter(list(filtered_patterns))
-                    ),
-                }
-            ),
-        )
+
+    if websocket_patterns is not None:
+        websocket_patterns[:] = [
+            route for route in websocket_patterns if retained(route)
+        ]
+    if router is not None:
+        router.routes = [route for route in router.routes if retained(route)]
 
 
 def _websocket_patterns(
@@ -557,19 +640,43 @@ def _websocket_patterns(
     return value
 
 
-def _websocket_application_routes(application: object) -> list[object]:
-    """Return routes already installed in a Channels websocket router."""
-    if not hasattr(application, "application_mapping"):
-        return []
-    websocket_app = cast(_ApplicationMapping, application).application_mapping.get(
-        "websocket"
-    )
-    router = websocket_app
+class _RouteCollection(Protocol):
+    routes: Sequence[object]
+
+
+def _protocol_application(application: object) -> _ApplicationMapping | None:
+    """Find the protocol router without discarding wrappers around it."""
     seen: set[int] = set()
-    while router is not None and id(router) not in seen:
-        seen.add(id(router))
-        routes = getattr(router, "routes", None)
-        if isinstance(routes, Sequence) and not isinstance(routes, str | bytes):
-            return list(routes)
-        router = getattr(router, "inner", None)
-    return []
+    while application is not None and id(application) not in seen:
+        seen.add(id(application))
+        if isinstance(getattr(application, "application_mapping", None), dict):
+            return cast(_ApplicationMapping, application)
+        application = _middleware_inner(application)
+    return None
+
+
+def _websocket_router(application: object) -> _RouteCollection | None:
+    """Locate an actual URLRouter through the existing middleware chain."""
+    try:
+        from channels.routing import URLRouter
+    except ImportError:  # pragma: no cover - optional dependency
+        return None
+
+    seen: set[int] = set()
+    while application is not None and id(application) not in seen:
+        seen.add(id(application))
+        if isinstance(application, URLRouter):
+            return cast(_RouteCollection, application)
+        application = _middleware_inner(application)
+    return None
+
+
+def _middleware_inner(application: object) -> object:
+    """Traverse standard inner links and Channels' known origin wrapper."""
+    try:
+        from channels.security.websocket import OriginValidator
+    except ImportError:  # pragma: no cover - optional dependency
+        return getattr(application, "inner", None)
+    if isinstance(application, OriginValidator):
+        return application.application
+    return getattr(application, "inner", None)
