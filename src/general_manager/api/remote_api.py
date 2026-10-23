@@ -8,6 +8,8 @@ from uuid import uuid4
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from importlib import import_module
+from itertools import islice
+from types import SimpleNamespace
 from typing import Callable, Protocol, TYPE_CHECKING, cast
 
 from django.conf import settings
@@ -16,11 +18,24 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.urls import URLPattern, path
 
 from general_manager.logging import get_logger
+from general_manager.conf import get_setting
 from general_manager.api.mutation_controls import MUTATION_CONTROL_KEYS
 from general_manager.bucket._ordering import normalize_ordering
 from general_manager.bucket.request_bucket import RequestBucket
+from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket._materialized_bucket import MaterializedBucket
+from general_manager.api.property import GraphQLProperty
+from general_manager.api.graphql_errors import get_read_permission_filter
+from general_manager.api.graphql_resolvers import (
+    check_read_permission_for_user,
+    finalize_read_authorization,
+    prepare_read_authorization,
+)
 
 if TYPE_CHECKING:
+    from general_manager.api.graphql_errors import (
+        GraphQLResolveInfo as ReadPermissionInfo,
+    )
     from general_manager.manager.general_manager import GeneralManager
 
 logger = get_logger("api.remote")
@@ -96,6 +111,12 @@ class RemoteAPIConfigurationError(ValueError):
     """Raised when RemoteAPI declarations are invalid."""
 
     @classmethod
+    def invalid_page_limits(cls) -> "RemoteAPIConfigurationError":
+        return cls(
+            "RemoteAPI page limits must be positive integers and default must not exceed maximum"
+        )
+
+    @classmethod
     def empty_segments(cls, base_path: str) -> "RemoteAPIConfigurationError":
         return cls(
             f"Invalid RemoteAPI.base_path {base_path!r}: empty path segments are not allowed."
@@ -145,8 +166,11 @@ class RemoteAPIConfigurationError(ValueError):
 class InvalidRemotePaginationError(ValueError):
     """Raised when remote query controls cannot produce a valid page."""
 
-    def __init__(self) -> None:
-        super().__init__("page and page_size must be positive integers")
+    def __init__(self, max_size: int | None = None) -> None:
+        message = "page and page_size must be positive integers"
+        if max_size is not None:
+            message = f"page_size must not exceed {max_size}"
+        super().__init__(message)
 
 
 class RemoteAPIRequestError(ValueError):
@@ -470,8 +494,63 @@ def _request_id(
     return f"gm-{prefix}-{uuid4()}"
 
 
-def _serialize_manager(manager: "GeneralManager") -> RemoteJSONPayload:
-    return dict(manager)
+def _read_permission_info(request: HttpRequest) -> ReadPermissionInfo:
+    """Adapt the request principal to the shared read-authorization context."""
+    from django.contrib.auth.models import AnonymousUser
+
+    user = getattr(request, "user", None)
+    return SimpleNamespace(
+        context=SimpleNamespace(user=AnonymousUser() if user is None else user)
+    )
+
+
+def _serialize_manager(
+    manager: "GeneralManager", request: HttpRequest
+) -> RemoteJSONPayload:
+    """Resolve only fields the caller may read, without iterating their values."""
+    manager._ensure_manager_state_valid()
+    user = _read_permission_info(request).context.user
+    field_names = dict.fromkeys(manager._attributes)
+    for name, value in manager.__class__.__dict__.items():
+        if name == "history" or getattr(
+            value, "_general_manager_generated_relation", False
+        ):
+            continue
+        if isinstance(value, (GraphQLProperty, property)):
+            field_names[name] = None
+    return {
+        name: getattr(manager, name)
+        for name in field_names
+        if check_read_permission_for_user(manager, user, name)
+    }
+
+
+def _serialize_readable_manager(
+    manager: "GeneralManager", request: HttpRequest, *, require_read: bool = False
+) -> RemoteJSONList:
+    """Apply the row policy to detail and mutation results before field reads."""
+    info = _read_permission_info(request)
+    permission_plan = get_read_permission_filter(type(manager), info)
+    source: Bucket[GeneralManager] = MaterializedBucket(type(manager), [manager])
+    if permission_plan.decision == "conditional" and any(
+        constraint.get("filter") or constraint.get("exclude")
+        for constraint in permission_plan.filters
+    ):
+        # Database subsets must retain ORM lookup semantics (including excludes).
+        source = type(manager).all().with_instances([manager])
+    preparation = prepare_read_authorization(
+        source, type(manager), info, permission_plan=permission_plan
+    )
+    authorized = finalize_read_authorization(
+        preparation,
+        type(manager),
+        info,
+        source="remote_detail",
+    ).queryset
+    items = [_serialize_manager(item, request) for item in authorized]
+    if require_read and not items:
+        raise PermissionError
+    return items
 
 
 def _success_payload(
@@ -579,19 +658,26 @@ def _apply_ordering(
 def _resolve_remote_pagination(
     page: object,
     page_size: object,
-) -> tuple[int, int] | None:
-    """Normalize known remote query controls without accepting booleans as ints."""
-    if page is None and page_size is None:
-        return None
+) -> tuple[int, int]:
+    """Apply finite server-owned defaults and reject oversized client pages."""
+    default_size = get_setting("REMOTE_API_DEFAULT_PAGE_SIZE", 10)
+    max_size = get_setting("REMOTE_API_MAX_PAGE_SIZE", 100)
+    for value in (default_size, max_size):
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise RemoteAPIConfigurationError.invalid_page_limits()
+    default_size = cast(int, default_size)
+    max_size = cast(int, max_size)
+    if default_size > max_size:
+        raise RemoteAPIConfigurationError.invalid_page_limits()
     for value in (page, page_size):
         if value is not None and (
             not isinstance(value, int) or isinstance(value, bool) or value <= 0
         ):
             raise InvalidRemotePaginationError()
-    return (
-        1 if page is None else cast(int, page),
-        10 if page_size is None else cast(int, page_size),
-    )
+    effective_size = default_size if page_size is None else cast(int, page_size)
+    if effective_size > max_size:
+        raise InvalidRemotePaginationError(max_size)
+    return (1 if page is None else cast(int, page), effective_size)
 
 
 @dataclass(frozen=True, slots=True)
@@ -631,6 +717,9 @@ def _forward_remote_request_controls(
 ) -> tuple[RemoteAPIBucket, bool]:
     """Compile supported page and ordering controls into one remote request."""
     if not _is_remote_request_bucket(bucket):
+        return bucket, False
+    # Snapshots have no upstream plan: controls would become local field filters.
+    if cast("RequestBucket[GeneralManager]", bucket).request_plan is None:
         return bucket, False
     ordering_values = [ordering] if isinstance(ordering, str) else list(ordering or ())
     terms = normalize_ordering(ordering_values)
@@ -681,7 +770,23 @@ def _build_query_view(config: RemoteAPIConfig) -> RemoteAPIView:
                 body.get("page"),
                 body.get("page_size"),
             )
+            info = _read_permission_info(request)
             bucket = manager_cls.all()
+            permission_plan = get_read_permission_filter(config.manager_cls, info)
+            request_alternatives = (
+                isinstance(bucket, RequestBucket) and len(permission_plan.filters) > 1
+            )
+            if request_alternatives and (pagination is not None or ordering):
+                raise UnsupportedRequestGlobalOperationError(
+                    "pagination" if pagination is not None else "ordering"
+                )
+            preparation = prepare_read_authorization(
+                cast("Bucket[GeneralManager]", bucket),
+                config.manager_cls,
+                info,
+                permission_plan=permission_plan,
+            )
+            bucket = cast(RemoteAPIBucket, preparation.queryset)
             if filters:
                 bucket = bucket.filter(**cast(Mapping[str, object], filters))
             if excludes:
@@ -691,7 +796,13 @@ def _build_query_view(config: RemoteAPIConfig) -> RemoteAPIView:
                 pagination,
                 ordering,
             )
-            provenance = _request_query_provenance(bucket)
+            # A union materializes request branches and loses their completeness.
+            # Without that provenance we cannot claim a global authorized count.
+            provenance = (
+                RequestQueryProvenance(None, None, None, False)
+                if request_alternatives
+                else _request_query_provenance(bucket)
+            )
             if provenance is not None and not provenance.is_complete:
                 if pagination is not None and pagination != (
                     provenance.page,
@@ -706,6 +817,11 @@ def _build_query_view(config: RemoteAPIConfig) -> RemoteAPIView:
                     and not remote_ordering_forwarded
                 ):
                     raise UnsupportedRequestGlobalOperationError("ordering")
+            preparation.queryset = cast("Bucket[GeneralManager]", bucket)
+            authorization = finalize_read_authorization(
+                preparation, config.manager_cls, info, source="remote_query"
+            )
+            bucket = cast(RemoteAPIBucket, authorization.queryset)
             bucket = (
                 bucket
                 if remote_ordering_forwarded
@@ -714,7 +830,11 @@ def _build_query_view(config: RemoteAPIConfig) -> RemoteAPIView:
             total_count = (
                 bucket.count()
                 if provenance is None or provenance.is_complete
-                else provenance.total_count
+                else (
+                    None
+                    if authorization.requires_instance_check
+                    else provenance.total_count
+                )
             )
             upstream_page_matches = (
                 provenance is not None
@@ -726,7 +846,11 @@ def _build_query_view(config: RemoteAPIConfig) -> RemoteAPIView:
                 start = (page - 1) * page_size
                 end = start + page_size
                 bucket = bucket[start:end]
-            items = [_serialize_manager(item) for item in bucket]
+            # Matching upstream metadata does not guarantee a bounded response.
+            items = [
+                _serialize_manager(item, request)
+                for item in islice(bucket, pagination[1])
+            ]
             metadata_pagination = pagination
             if metadata_pagination is None and provenance is not None:
                 metadata_pagination = (
@@ -811,8 +935,11 @@ def _build_item_view(config: RemoteAPIConfig) -> RemoteAPIItemView:
                     )
                 manager_cls = cast(RemoteAPIManagerClass, config.manager_cls)
                 detail_manager = manager_cls(id=_coerce_identifier(config, identifier))
+                items = _serialize_readable_manager(
+                    detail_manager, request, require_read=True
+                )
                 return _success_payload(
-                    items=[_serialize_manager(detail_manager)],
+                    items=items,
                     config=config,
                     request_id=request_id,
                 )
@@ -837,7 +964,7 @@ def _build_item_view(config: RemoteAPIConfig) -> RemoteAPIItemView:
                     **payload,
                 )
                 return _success_payload(
-                    items=[_serialize_manager(updated)],
+                    items=_serialize_readable_manager(updated, request),
                     config=config,
                     request_id=request_id,
                 )
@@ -925,7 +1052,7 @@ def _build_create_view(config: RemoteAPIConfig) -> RemoteAPIView:
                 **payload,
             )
             return _success_payload(
-                items=[_serialize_manager(manager)],
+                items=_serialize_readable_manager(manager, request),
                 config=config,
                 request_id=request_id,
                 status=201,
