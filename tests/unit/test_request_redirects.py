@@ -63,6 +63,8 @@ def _record_http_requests(
         "http://10.0.0.1/admin",
         "http://169.254.169.254/latest/meta-data/",
         "/same-origin",
+        pytest.param("https://[invalid", id="malformed-ipv6"),
+        pytest.param("https://example.test\uff0fpath", id="malformed-netloc"),
     ],
 )
 @pytest.mark.parametrize(
