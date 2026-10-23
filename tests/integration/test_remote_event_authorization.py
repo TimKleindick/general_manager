@@ -198,8 +198,18 @@ class RemoteEventAuthorizationTests(GeneralManagerTransactionTestCase):
         get_user_model().objects.filter(pk=self.user.pk).update(is_active=False)
         assert self.user.is_active
         assert not _can_receive_remote_event(self.config, self.user, event)
-        get_user_model().objects.filter(pk=self.user.pk).delete()
-        assert not _can_receive_remote_event(self.config, self.user, event)
+        deleted_user = get_user_model().objects.create_user(
+            username="deleted-reader", is_staff=True
+        )
+        assert _can_receive_remote_event(self.config, deleted_user, event)
+        deleted_account = get_user_model().objects.filter(pk=deleted_user.pk)
+        # This account has no related fixtures. Delete only its persisted row:
+        # other test modules register reverse relations before creating tables,
+        # so the global cascade collector is unrelated to this missing-user gate.
+        assert deleted_account._raw_delete(using=deleted_account.db) == 1
+        assert not deleted_account.exists()
+        assert deleted_user.is_authenticated
+        assert not _can_receive_remote_event(self.config, deleted_user, event)
 
     def test_memory_exhaustion_is_not_swallowed_as_permission_denial(self):
         event = {
