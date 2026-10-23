@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.86.8 (2026-10-23)
+
+### Bug Fixes
+
+- Use exact historical snapshots for recent reads
+  ([`6480678`](https://github.com/TimKleindick/general_manager/commit/6480678a64917a48f5beeb57c9d7471894472064))
+
+### Testing
+
+- Cover historical read backend failures
+  ([`79ce220`](https://github.com/TimKleindick/general_manager/commit/79ce220dbdc3e1d9dec46f7d5e7bd21e9d59fcd5))
+
+
 ## v0.86.7 (2026-10-23)
 
 ### Bug Fixes
