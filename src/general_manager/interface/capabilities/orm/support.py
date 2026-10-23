@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Hashable
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Type, cast
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, connections, models
 from django.db.models import Subquery
-from django.utils import timezone
 from general_manager.as_of import (
     HistoricalReadNotSupportedError,
     InvalidSearchDateError,
@@ -347,54 +346,51 @@ class OrmReadCapability(BaseCapability):
                 instance = None
                 missing_error = error
             if search_date is not None:
-                if search_date <= timezone.now() - timedelta(
-                    seconds=interface_cls.historical_lookup_buffer_seconds
-                ):
-                    from .history import HistoryNotSupportedError
+                from .history import HistoryNotSupportedError
 
-                    if current_as_of_date() is not None and not hasattr(
-                        model_cls, "history"
-                    ):
-                        history_unavailable = HistoryNotSupportedError(
-                            interface_cls.__name__
-                        )
+                if current_as_of_date() is not None and not hasattr(
+                    model_cls, "history"
+                ):
+                    history_unavailable = HistoryNotSupportedError(
+                        interface_cls.__name__
+                    )
+                    raise HistoricalReadNotSupportedError(
+                        interface_cls.__name__
+                    ) from history_unavailable
+                historical: models.Model | None
+                try:
+                    history_handler = _history_capability_for(interface_cls)
+                except (NotImplementedError, TypeError) as error:
+                    if current_as_of_date() is not None:
                         raise HistoricalReadNotSupportedError(
                             interface_cls.__name__
-                        ) from history_unavailable
-                    historical: models.Model | None
-                    try:
-                        history_handler = _history_capability_for(interface_cls)
-                    except (NotImplementedError, TypeError) as error:
-                        if current_as_of_date() is not None:
-                            raise HistoricalReadNotSupportedError(
-                                interface_cls.__name__
-                            ) from error
-                        history_error = HistoryNotSupportedError(interface_cls.__name__)
-                        raise history_error from error
-                    try:
-                        if instance is not None:
-                            historical = history_handler.get_historical_record(
-                                interface_cls,
-                                instance,
-                                search_date,
-                            )
-                        else:
-                            historical = history_handler.get_historical_record_by_pk(
-                                interface_cls,
-                                pk,
-                                search_date,
-                            )
-                    except HistoryNotSupportedError as error:
-                        if current_as_of_date() is not None:
-                            raise HistoricalReadNotSupportedError(
-                                interface_cls.__name__
-                            ) from error
-                        raise
-                    if historical is not None:
-                        return historical
-                    if missing_error is not None:
-                        raise missing_error
-                    raise model_cls.DoesNotExist
+                        ) from error
+                    history_error = HistoryNotSupportedError(interface_cls.__name__)
+                    raise history_error from error
+                try:
+                    if instance is not None:
+                        historical = history_handler.get_historical_record(
+                            interface_cls,
+                            instance,
+                            search_date,
+                        )
+                    else:
+                        historical = history_handler.get_historical_record_by_pk(
+                            interface_cls,
+                            pk,
+                            search_date,
+                        )
+                except HistoryNotSupportedError as error:
+                    if current_as_of_date() is not None:
+                        raise HistoricalReadNotSupportedError(
+                            interface_cls.__name__
+                        ) from error
+                    raise
+                if historical is not None:
+                    return historical
+                if missing_error is not None:
+                    raise missing_error
+                raise model_cls.DoesNotExist
             if instance is not None:
                 return instance
             if missing_error is not None:
@@ -899,9 +895,7 @@ class OrmQueryCapability(BaseCapability):
         support = get_support_capability(interface_cls)
         if support.__class__ is not OrmPersistenceSupportCapability:
             return None
-        if search_date is not None and search_date <= timezone.now() - timedelta(
-            seconds=interface_cls.historical_lookup_buffer_seconds
-        ):
+        if search_date is not None:
             return None
         queryset_base = (
             support.get_manager(interface_cls, only_active=False).all()
@@ -993,9 +987,7 @@ class OrmQueryCapability(BaseCapability):
                     only_active=False,
                 ).all(),
             )
-        if search_date is not None and search_date <= timezone.now() - timedelta(
-            seconds=interface_cls.historical_lookup_buffer_seconds
-        ):
+        if search_date is not None:
             from .history import HistoryNotSupportedError
 
             try:

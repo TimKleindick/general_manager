@@ -447,7 +447,7 @@ class TestOrmReadCapability:
                     return_value=mock_history_capability,
                 ):
                     with patch(
-                        "general_manager.interface.capabilities.orm.support.timezone.now",
+                        "django.utils.timezone.now",
                         return_value=fixed_now,
                     ):
                         with patch(
@@ -498,7 +498,7 @@ class TestOrmReadCapability:
                 return_value=False,
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=10),
             ),
             patch(
@@ -547,7 +547,7 @@ class TestOrmReadCapability:
                 return_value=False,
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=1),
             ),
             patch(
@@ -609,7 +609,7 @@ class TestOrmReadCapability:
                 return_value=False,
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=1),
             ),
             patch(
@@ -623,7 +623,7 @@ class TestOrmReadCapability:
         assert exc_info.value.__cause__ is capability_error
         support.get_manager.assert_not_called()
 
-    def test_recent_explicit_get_data_without_history_preserves_live_fallback(self):
+    def test_recent_explicit_get_data_without_history_fails_closed(self):
         capability = OrmReadCapability()
 
         class DoesNotExist(Exception):
@@ -651,6 +651,10 @@ class TestOrmReadCapability:
 
         with (
             patch(
+                "general_manager.interface.capabilities.orm.support._history_capability_for",
+                side_effect=NotImplementedError("missing history capability"),
+            ),
+            patch(
                 "general_manager.interface.capabilities.orm.support.get_support_capability",
                 return_value=support,
             ),
@@ -659,7 +663,7 @@ class TestOrmReadCapability:
                 return_value=False,
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=1),
             ),
             patch(
@@ -667,7 +671,8 @@ class TestOrmReadCapability:
                 side_effect=lambda *_args, **kwargs: kwargs["func"](),
             ),
         ):
-            assert capability.get_data(InterfaceInstance()) is live_instance
+            with pytest.raises(HistoryNotSupportedError):
+                capability.get_data(InterfaceInstance())
 
         manager.get.assert_called_once_with(pk=1)
 
@@ -720,7 +725,7 @@ class TestOrmReadCapability:
                 return_value=False,
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=1),
             ),
             patch(
@@ -793,7 +798,7 @@ class TestOrmReadCapability:
                 return_value=False,
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=1),
             ),
             patch(
@@ -807,6 +812,7 @@ class TestOrmReadCapability:
             CalculationRunContext(),
         ):
             explicit = InterfaceInstance()
+            explicit._search_date = None
             assert capability.get_data(explicit) is live_instance
             support_calls_after_warmup = get_support.call_count
 
@@ -1926,7 +1932,7 @@ class TestOrmQueryCapability:
                     mock_bucket.return_value = Mock()
 
                     with patch(
-                        "general_manager.interface.capabilities.orm.support.timezone.now",
+                        "django.utils.timezone.now",
                         return_value=now_time,
                     ):
                         with patch(
@@ -1982,7 +1988,7 @@ class TestOrmQueryCapability:
                 side_effect=NotImplementedError("missing history"),
             ):
                 with patch(
-                    "general_manager.interface.capabilities.orm.support.timezone.now",
+                    "django.utils.timezone.now",
                     return_value=now_time,
                 ):
                     with patch(
@@ -2020,7 +2026,7 @@ class TestOrmQueryCapability:
                 side_effect=NotImplementedError("missing history"),
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=10),
             ),
             patch(
@@ -2075,7 +2081,7 @@ class TestOrmQueryCapability:
                 return_value=support,
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=1),
             ),
             patch(
@@ -2133,7 +2139,7 @@ class TestOrmQueryCapability:
                 side_effect=capability_error,
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=1),
             ),
             patch(
@@ -2147,7 +2153,7 @@ class TestOrmQueryCapability:
         assert exc_info.value.__cause__ is capability_error
         support.get_queryset.assert_not_called()
 
-    def test_recent_explicit_query_without_history_preserves_live_fallback(self):
+    def test_recent_explicit_query_without_history_fails_closed(self):
         capability = OrmQueryCapability()
 
         class Model:
@@ -2177,11 +2183,15 @@ class TestOrmQueryCapability:
 
         with (
             patch(
+                "general_manager.interface.capabilities.orm.support._history_capability_for",
+                side_effect=NotImplementedError("missing history capability"),
+            ),
+            patch(
                 "general_manager.interface.capabilities.orm.support.get_support_capability",
                 return_value=support,
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=1),
             ),
             patch(
@@ -2192,10 +2202,11 @@ class TestOrmQueryCapability:
                 side_effect=lambda *_args, **call_kwargs: call_kwargs["func"](),
             ),
         ):
-            capability.filter(interface_cls, id=1, search_date=search_date)
+            with pytest.raises(HistoryNotSupportedError):
+                capability.filter(interface_cls, id=1, search_date=search_date)
 
-        live_queryset.filter.assert_called_once_with(id=1)
-        bucket_cls.assert_called_once()
+        live_queryset.filter.assert_not_called()
+        bucket_cls.assert_not_called()
 
     def test_recent_ambient_query_rejects_before_live_run_bucket_cache_lookup(self):
         capability = OrmQueryCapability()
@@ -2249,7 +2260,7 @@ class TestOrmQueryCapability:
                 return_value=False,
             ),
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=search_date + timedelta(seconds=1),
             ),
             patch(
@@ -2266,7 +2277,7 @@ class TestOrmQueryCapability:
             ),
             CalculationRunContext(),
         ):
-            capability.filter(interface_cls, id=1, search_date=search_date)
+            capability.filter(interface_cls, id=1)
             live_reads_after_warmup = support.get_queryset.call_count
 
             with as_of(search_date):

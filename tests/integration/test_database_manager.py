@@ -1019,7 +1019,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
         try:
             with (
                 patch(
-                    "general_manager.interface.capabilities.orm.support.timezone.now",
+                    "django.utils.timezone.now",
                     return_value=snapshot + timedelta(seconds=1),
                 ),
                 patch.object(
@@ -1061,7 +1061,7 @@ class DatabaseIntegrationTest(GeneralManagerTransactionTestCase):
 
         with (
             patch(
-                "general_manager.interface.capabilities.orm.support.timezone.now",
+                "django.utils.timezone.now",
                 return_value=snapshot + timedelta(seconds=1),
             ),
             patch.object(

@@ -116,9 +116,10 @@ inherits `InterfaceBase`, declares the default `input_fields` as
 key into the internal `_instance` attribute during construction. Pass
 `search_date=...` to resolve a point-in-time row; naive datetimes are made
 timezone-aware with Django's current timezone before lookup. The
-`historical_lookup_buffer_seconds` class attribute controls how far in the past a
-`search_date` must be before ORM support reads from history tables instead of the
-current row.
+`historical_lookup_buffer_seconds` class attribute is retained for source
+compatibility but no longer changes lookup behavior. Every supplied `search_date`
+selects history, including timestamps within the former five-second buffer.
+A missing snapshot is never replaced with the current row.
 
 Subclasses normally use `DatabaseInterface`, `ExistingModelInterface`, or
 `ReadOnlyInterface` rather than subclassing this base directly, but custom ORM
@@ -166,7 +167,7 @@ existing-model lifecycle for them.
 Construction inherits the ORM input contract: pass the wrapped row `id`, parsed
 through the default `Input(int)`, and optional `search_date: datetime | None`.
 Naive search dates are made aware with Django's current timezone, and history
-lookup uses `historical_lookup_buffer_seconds` from `OrmInterfaceBase`. Missing
+lookup uses the exact supplied timestamp without a recency buffer. Missing
 current or historical rows propagate the wrapped model's `DoesNotExist`
 exception. `get_field_type(field_name)` first lazily resolves this interface's
 own model, then delegates to ORM read support. Stored model fields return the
@@ -611,10 +612,8 @@ many-to-many accessor names raise `AttributeError`, and invalid interface model
 field names raise Django's `FieldDoesNotExist`. A dated relation read fails with
 `HistoricalReadNotSupportedError` (chained from `HistoryNotSupportedError`) when
 either membership history or target-row history is unavailable; it never falls
-back to current relation data. This remains true inside the scalar historical
-lookup buffer: a source row may be hydrated from the live table, but its
-many-to-many membership is resolved from the source history row at the effective
-date. Equal `history_date` values are broken by greatest `history_id` for both
+back to current relation data. Many-to-many membership is resolved from the
+source history row at the effective date, including for recent timestamps. Equal `history_date` values are broken by greatest `history_id` for both
 source and related rows.
 
 Historical through-table columns are resolved from the concrete
@@ -638,8 +637,8 @@ creation is not auto-registered for history; define and track that through
 model explicitly if its membership must support historical reads.
 
 `OrmReadCapability.get_data(interface_instance)` returns the live model row for
-`pk` or, when `search_date` is older than the interface
-`historical_lookup_buffer_seconds`, the matching historical row. It caches reads
+`pk` or, whenever `search_date` is supplied, the matching historical row.
+It caches reads
 inside the active calculation run using interface class, primary key, database
 alias, active/all manager choice, and search date. Missing rows propagate the
 generated model's `DoesNotExist`.

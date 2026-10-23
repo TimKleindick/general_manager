@@ -329,7 +329,9 @@ When a document contains multiple operations, `operationName` therefore chooses
 which operation and snapshot execute. The date applies to every resolver,
 nested relation, calculation, and cache access in that operation. A resolver
 that reaches a request-backed or otherwise unsupported interface fails closed
-instead of mixing current data into the response.
+instead of mixing current data into the response. ORM reads use the exact
+snapshot even when it is only milliseconds old; there is no recent-time fallback
+to the live row. A timestamp before creation yields no matching historical row.
 
 `@asOf` is query-only and accepts exactly one non-null `date`. It cannot be
 placed on mutations or subscriptions. The synchronous GeneralManager GraphQL
