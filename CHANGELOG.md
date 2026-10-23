@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.86.11 (2026-10-23)
+
+### Bug Fixes
+
+- Enforce upload intent preflight and S3 proxy transfers
+  ([`77c88d4`](https://github.com/TimKleindick/general_manager/commit/77c88d422d6f130db77f2ec90ed81d5d8cf8a29a))
+
+- Validate S3 proxy registration and single PUT bounds
+  ([`3edb971`](https://github.com/TimKleindick/general_manager/commit/3edb971e7122e687ed725ceca7dfc52769368f5a))
+
+
 ## v0.86.10 (2026-10-23)
 
 ### Bug Fixes
