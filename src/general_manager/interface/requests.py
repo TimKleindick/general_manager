@@ -20,6 +20,7 @@ from typing import (
     Iterable,
     Literal,
     Mapping,
+    NoReturn,
     Protocol,
     TypeVar,
     TypedDict,
@@ -1898,17 +1899,21 @@ def map_request_transport_error(
 class _NoRedirectHandler(HTTPRedirectHandler):
     """Leave redirect responses to the normal HTTP error handling path."""
 
-    def redirect_request(
+    def http_error_302(
         self,
         req: UrlRequest,
         fp: IO[bytes],
         code: int,
         msg: str,
         headers: Message,
-        newurl: str,
-    ) -> None:
-        # Redirect targets must never receive credentials or request bodies.
-        return None
+    ) -> NoReturn:
+        # Reject before urllib parses Location, preserving malformed responses too.
+        raise HTTPError(req.full_url, code, msg, headers, fp)
+
+    http_error_301 = http_error_302
+    http_error_303 = http_error_302
+    http_error_307 = http_error_302
+    http_error_308 = http_error_302
 
 
 class UrllibRequestTransport(SharedRequestTransport):
@@ -1920,6 +1925,13 @@ class UrllibRequestTransport(SharedRequestTransport):
     rejects redirects, including same-origin redirects, instead of forwarding
     credentials or accessing response-controlled destinations. An injected
     `urlopen` callable is responsible for its own redirect policy.
+
+    The default opener does not inherit handlers registered globally with
+    `urllib.request.install_opener`; environment proxy settings still apply.
+    For custom TLS contexts or explicit proxy handlers, build an opener with
+    those handlers plus redirect rejection and pass its `open` method as
+    `urlopen`. Reject 301/302/303/307/308 before parsing `Location` to preserve
+    the upstream status and headers even when that header is malformed.
     """
 
     def __init__(
