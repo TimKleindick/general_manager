@@ -1,0 +1,34 @@
+# Compose builds the application image from this repository root.
+# Git ignore rules and the example's nested .dockerignore do not apply here.
+**/.git
+**/.env
+**/.env.*
+**/.venv
+**/venv
+**/env
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/build
+**/dist
+**/*.egg-info
+**/site
+**/coverage.xml
+**/*.sqlite3
+**/*.sqlite3-journal
+**/*.log
+**/logs
+**/backups
+**/*.sql
+**/*.dump
+
+# Credentials are mounted at runtime, never sent to the image builder.
+**/docker/secrets
+**/docker/certs
+**/docker/htpasswd
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
