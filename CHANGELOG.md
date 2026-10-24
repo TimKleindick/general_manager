@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.86.14 (2026-10-24)
+
+### Bug Fixes
+
+- Bound HTTP response body reads
+  ([`d3ed317`](https://github.com/TimKleindick/general_manager/commit/d3ed3172c3cff0c13f77ad714717ea21911a3e3a))
+
+- Preserve HTTP error metadata after connection resets
+  ([`9b64b2c`](https://github.com/TimKleindick/general_manager/commit/9b64b2caa9893ecaf2e82f0ed1d47a83bfe52da3))
+
+- Preserve HTTP error metadata on malformed body framing
+  ([`b395b18`](https://github.com/TimKleindick/general_manager/commit/b395b188453178b2724bb19d3862e78906d6332c))
+
+
 ## v0.86.13 (2026-10-24)
 
 ### Bug Fixes
