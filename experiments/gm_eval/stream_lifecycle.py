@@ -1,7 +1,6 @@
 """Strict, source-bound Responses lifecycle and opt-in local SIWC metadata policy.
 
-Ported from the frozen astra_validation_sequence_v27 lifecycle owner; see
- docs/chat/eval-stream-metadata-r58.md for provenance and local contract authority.
+See experiments/gm_eval/README.md#stream-lifecycle-contract for the local contract.
 Metadata is consumed and validated; it grants no content, completion or retry
 permission. Callers retain their independent HTTP/raw/history/source/cleanup gates.
 """

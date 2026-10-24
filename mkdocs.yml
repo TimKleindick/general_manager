@@ -4,11 +4,6 @@ site_url: https://timkleindick.github.io/general_manager/
 repo_name: TimKleindick/general_manager
 repo_url: https://github.com/TimKleindick/general_manager
 
-# Historical source authority referenced by the experimental lifecycle validator.
-# Keep the exact repository bytes; omit this implementation-era report from the site.
-exclude_docs: |
-  /chat/eval-stream-metadata-r58.md
-
 theme:
   name: material
   logo: images/logo.svg

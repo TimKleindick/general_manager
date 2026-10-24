@@ -198,12 +198,46 @@ these are experiment-specific settings, not general exceptions or production
 defaults. Report the actual bound settings and keep production compliance
 unmeasured unless it was actually measured.
 
-## Historical contract authority
+## Stream lifecycle contract
 
-Historical result files and external review evidence remain outside the published
-user guide. Git history retains earlier remediation notes. One exact source
-contract is intentionally retained at
-[`docs/chat/eval-stream-metadata-r58.md`](../../docs/chat/eval-stream-metadata-r58.md)
-because `stream_lifecycle.py` references it as provenance authority. It is excluded
-from the published documentation rather than rewritten or deleted. The local
-metadata policy it describes is not a public provider protocol specification.
+[`stream_lifecycle.py`](stream_lifecycle.py) owns strict response-lifecycle
+validation. `metadata_contract=None` retains the legacy accepted language;
+`siwc-response-metadata-1` explicitly enables the closed local metadata policy.
+Unknown selectors reject. This policy describes observed synthetic captures,
+not a public provider protocol or the semantics of its opaque moderation flags.
+
+The optional `response.metadata` event is accepted once, immediately before
+text-done after consecutive text deltas, or immediately before arguments-done
+after argument deltas for the final declared tool. Other positions reject.
+Original sequence numbers remain part of the complete `0..N-1` sequence; no
+event is removed or renumbered. The closed envelope contains only `type`,
+`response_id`, `sequence_number` and `metadata`, with the bound response identity.
+Every nested object is closed: the sole metadata key is
+`openai_chatgpt_moderation_metadata`; its keys are `prompt`, `generation`,
+`tool_call` and `tool_response`, with the latter three empty. `prompt.omnimod`
+contains only `protection_type="omnimod"` and a singleton `outputs` list.
+Its object contains only singleton `results` and `is_blocked`; the result contains
+only `category_flags`, whose exact 42-name vocabulary is `_OMNIMOD_FLAGS` in the
+validator. Every flag and `is_blocked` must be literal JSON `false`. Unknown
+fields, false-like values, missing flags and unsupported variants reject.
+
+`function_calls` binds all declared calls in order with unique IDs, exact names
+and arguments, complete item closure and no missing or extra call. The singleton
+`function_call` interface remains available; supplying both selectors rejects.
+[`validation_history.py`](validation_history.py) reconstructs already bound
+sources through the runtime's `remember_tool_result` and `group_tool_results`.
+It preserves provider ordinals, declaration/result order and independent
+history/source checks; this helper grants no additional execution authority.
+
+Metadata neither replaces text/response completion nor certifies safety, task
+success or retry permission. Metadata absence supplies no moderation proof.
+All identity, text/item, error/incomplete-terminal and lifecycle checks remain;
+callers independently enforce HTTP/auth/quota/transport, request/raw/boundary,
+history/source, parser/action/feedback, audit, fixture and cleanup gates. Validation
+of parsed objects does not prove wire-level duplicate-key absence. Any later
+integrity rejection still stops the run; it does not authorize replay or retries.
+
+The [lifecycle regressions](../../tests/experiments/test_gm_eval_stream_lifecycle_r58.py)
+retain the original synthetic streams as required test fixtures, with source-hash
+and negative controls. Historical result reports and development notes belong
+outside the current tree; earlier versions remain available in Git history.
