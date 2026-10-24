@@ -184,16 +184,31 @@ class GeminiProvider(BaseLLMProvider):
             config=request_config,
         )
         usage = TokenUsage()
+        usage_observed = False
         completed = False
+        completion_failure = False
         try:
             async for chunk in stream:
+                usage_metadata = getattr(chunk, "usage_metadata", None)
+                if usage_metadata is not None:
+                    usage_observed = True
+                    usage = TokenUsage(
+                        input_tokens=int(
+                            getattr(usage_metadata, "prompt_token_count", 0)
+                        ),
+                        output_tokens=int(
+                            getattr(usage_metadata, "candidates_token_count", 0)
+                        ),
+                    )
                 for candidate in getattr(chunk, "candidates", None) or []:
                     reason = getattr(candidate, "finish_reason", None)
                     label = getattr(reason, "name", reason)
                     if label == "STOP":
                         completed = True
                     elif label not in (None, "FINISH_REASON_UNSPECIFIED"):
-                        raise ProviderCompletionError("provider_response_incomplete")
+                        completion_failure = True
+                if completion_failure:
+                    continue
                 text = getattr(chunk, "text", None)
                 if isinstance(text, str) and text:
                     yield TextChunkEvent(content=text)
@@ -209,16 +224,12 @@ class GeminiProvider(BaseLLMProvider):
                             name=name,
                             args=args,
                         )
-                usage_metadata = getattr(chunk, "usage_metadata", None)
-                if usage_metadata is not None:
-                    usage = TokenUsage(
-                        input_tokens=int(
-                            getattr(usage_metadata, "prompt_token_count", 0)
-                        ),
-                        output_tokens=int(
-                            getattr(usage_metadata, "candidates_token_count", 0)
-                        ),
-                    )
+            if completion_failure:
+                # Streaming metadata can be cumulative; retain the latest
+                # counters through EOF before observing rejected-response usage.
+                if usage_observed:
+                    yield DoneEvent(usage=usage)
+                raise ProviderCompletionError("provider_response_incomplete")
             if not completed:
                 raise ProviderCompletionError()
             yield DoneEvent(usage=usage)

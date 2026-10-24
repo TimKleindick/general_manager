@@ -19,7 +19,10 @@ import django
 
 django.setup()
 
-from general_manager.chat.evals.fingerprints import build_run_fingerprint
+from general_manager.chat.evals.fingerprints import (
+    build_native_prompt_contract,
+    build_run_fingerprint,
+)
 from general_manager.chat.evals.fixtures import setup_large_schema
 from general_manager.chat.evals.readiness import (
     ReadinessConfig,
@@ -100,6 +103,7 @@ def main() -> None:
         tier=tier,
         tags=tags,
         prompt=build_system_prompt(),
+        native_prompt_contract=build_native_prompt_contract(),
         tool_definitions=get_tool_definitions(),
         selection_manifest=selection.manifest(),
     )

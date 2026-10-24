@@ -173,6 +173,20 @@ class OllamaProvider(BaseLLMProvider):
                 stream=True,
             )
             async for chunk in stream:
+                if chunk.get("done") is True and chunk.get("done_reason") not in {
+                    None,
+                    "stop",
+                }:
+                    # Record literal terminal usage without admitting this
+                    # rejected response or any tool calls on its final chunk.
+                    if "prompt_eval_count" in chunk or "eval_count" in chunk:
+                        yield DoneEvent(
+                            usage=TokenUsage(
+                                input_tokens=int(chunk.get("prompt_eval_count", 0)),
+                                output_tokens=int(chunk.get("eval_count", 0)),
+                            )
+                        )
+                    raise ProviderCompletionError("incomplete_provider_response")
                 message = chunk.get("message", {})
                 content = message.get("content")
                 if isinstance(content, str) and content:
@@ -196,10 +210,6 @@ class OllamaProvider(BaseLLMProvider):
                                 args=arguments,
                             )
                 if chunk.get("done") is True:
-                    # Older clients omit done_reason; an explicit unsuccessful
-                    # or unknown reason never proves successful completion.
-                    if chunk.get("done_reason") not in {None, "stop"}:
-                        raise ProviderCompletionError("incomplete_provider_response")
                     yield DoneEvent(
                         usage=TokenUsage(
                             input_tokens=int(chunk.get("prompt_eval_count", 0)),

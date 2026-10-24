@@ -163,12 +163,21 @@ class AnthropicProvider(BaseLLMProvider):
             request["system"] = system
         stream = await client.messages.create(**request)
         usage = TokenUsage()
+        usage_observed = False
+        usage_emitted = False
         tool_call_builders: dict[int, StreamingToolCallBuilder] = {}
         completed = False
+        completion_failure = False
         stop_reason = None
         try:
             async for event in stream:
                 event_type = getattr(event, "type", None)
+                if completion_failure and event_type not in {
+                    "message_start",
+                    "message_delta",
+                    "message_stop",
+                }:
+                    continue
                 event_index = getattr(event, "index", 0)
                 block_index = event_index if isinstance(event_index, int) else 0
                 if event_type == "content_block_delta":
@@ -215,19 +224,39 @@ class AnthropicProvider(BaseLLMProvider):
                 elif event_type == "message_start":
                     event_usage = get_attr(event, "message", "usage")
                     if event_usage is not None:
+                        usage_observed = True
                         usage = _merge_usage(usage, event_usage)
                 elif event_type == "message_delta":
                     reason = get_attr(event, "delta", "stop_reason")
                     if reason is not None:
                         stop_reason = reason
+                        if reason not in {"end_turn", "tool_use", "stop_sequence"}:
+                            completion_failure = True
                     event_usage = getattr(event, "usage", None)
                     if event_usage is not None:
+                        usage_observed = True
                         usage = _merge_usage(usage, event_usage)
                 elif event_type == "message_stop":
                     completed = True
+                    if stop_reason not in {"end_turn", "tool_use", "stop_sequence"}:
+                        completion_failure = True
+                if (
+                    completed
+                    and completion_failure
+                    and usage_observed
+                    and not usage_emitted
+                ):
+                    # message_stop follows the final usage delta. Buffer this
+                    # observation while EOF/cleanup retain the rejected outcome.
+                    usage_emitted = True
+                    yield DoneEvent(usage=usage)
             if not completed:
                 raise ProviderCompletionError()
-            if stop_reason not in {"end_turn", "tool_use", "stop_sequence"}:
+            if completion_failure or stop_reason not in {
+                "end_turn",
+                "tool_use",
+                "stop_sequence",
+            }:
                 raise ProviderCompletionError("provider_response_incomplete")
             for block_index in sorted(tool_call_builders):
                 event = tool_call_builders[block_index].build()

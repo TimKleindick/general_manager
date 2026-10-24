@@ -33,6 +33,7 @@ class InvalidProviderRoundError(ValueError):
     """Raised when a provider stream cannot represent one planned round."""
 
     def __init__(self, detail: str, *, usage: TokenUsage | None = None) -> None:
+        self.usage_observed = usage is not None
         self.usage = usage if usage is not None else TokenUsage()
         super().__init__(detail)
 
@@ -82,7 +83,7 @@ class ProviderRoundResult:
         object.__setattr__(self, "tool_calls", calls)
 
 
-def _invalid(detail: str, usage: TokenUsage) -> NoReturn:
+def _invalid(detail: str, usage: TokenUsage | None) -> NoReturn:
     raise InvalidProviderRoundError(detail, usage=usage)
 
 
@@ -99,7 +100,9 @@ def _validate_timeout(timeout_seconds: float) -> float:
     return float(timeout_seconds)
 
 
-def _snapshot_tool_call(event: ToolCallEvent, usage: TokenUsage) -> ToolCallEvent:
+def _snapshot_tool_call(
+    event: ToolCallEvent, usage: TokenUsage | None
+) -> ToolCallEvent:
     if not isinstance(event.id, str) or not event.id:
         _invalid("tool calls must have a non-empty ID.", usage)
     if not isinstance(event.name, str) or not event.name:
@@ -186,11 +189,16 @@ async def complete_provider_round(
                             "invalid_completion_usage": "a done event must carry token usage.",
                             "unsupported_provider_event": "a provider round emitted an unsupported event.",
                         }
-                        _invalid(messages_by_code.get(exc.code, exc.code), usage)
-                    except (
-                        InvalidProviderRoundError,
-                        InvalidProviderRoundTimeoutError,
-                    ):
+                        _invalid(
+                            messages_by_code.get(exc.code, exc.code),
+                            usage if usage_observed else None,
+                        )
+                    except InvalidProviderRoundError as exc:
+                        if usage_observed and not exc.usage_observed:
+                            exc.usage = usage
+                            exc.usage_observed = True
+                        raise
+                    except InvalidProviderRoundTimeoutError:
                         raise
                     except Exception as exc:
                         if classify_provider_errors or usage_observed:
@@ -202,21 +210,23 @@ async def complete_provider_round(
                         if tool_calls:
                             _invalid(
                                 "a provider round cannot contain text and a tool call.",
-                                usage,
+                                usage if usage_observed else None,
                             )
                         text_parts.append(event.content)
                         continue
                     if isinstance(event, ToolCallEvent):
-                        call = _snapshot_tool_call(event, usage)
+                        call = _snapshot_tool_call(
+                            event, usage if usage_observed else None
+                        )
                         if call.id in call_ids:
                             _invalid(
                                 "tool call IDs must be unique within a provider round.",
-                                usage,
+                                usage if usage_observed else None,
                             )
                         if text_parts:
                             _invalid(
                                 "a provider round cannot contain text and a tool call.",
-                                usage,
+                                usage if usage_observed else None,
                             )
                         tool_calls.append(call)
                         call_ids.add(call.id)
@@ -225,7 +235,10 @@ async def complete_provider_round(
                         done_count += 1
                         usage = event.usage
                         continue
-                    _invalid("a provider round emitted an unsupported event.", usage)
+                    _invalid(
+                        "a provider round emitted an unsupported event.",
+                        usage if usage_observed else None,
+                    )
     except TimeoutError as exc:
         if not deadline.expired():
             raise
@@ -234,10 +247,16 @@ async def complete_provider_round(
         ) from exc
 
     if done_count != 1:
-        _invalid("a provider round must finish with one done event.", usage)
+        _invalid(
+            "a provider round must finish with one done event.",
+            usage if usage_observed else None,
+        )
     text = "".join(text_parts)
     if not tool_calls and not text.strip():
-        _invalid("a provider round must produce text or tool calls.", usage)
+        _invalid(
+            "a provider round must produce text or tool calls.",
+            usage if usage_observed else None,
+        )
     return ProviderRoundResult(
         text=text, tool_call=None, usage=usage, tool_calls=tuple(tool_calls)
     )

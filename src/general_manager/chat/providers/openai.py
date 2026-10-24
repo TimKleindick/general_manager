@@ -168,6 +168,8 @@ class OpenAIProvider(BaseLLMProvider):
                 **response_options,
             )
             usage = TokenUsage()
+            usage_observed = False
+            usage_emitted = False
             tool_call_builders: dict[tuple[int, int], StreamingToolCallBuilder] = {}
             seen_choices: set[int] = set()
             completed_choices: set[int] = set()
@@ -185,10 +187,6 @@ class OpenAIProvider(BaseLLMProvider):
                             if reason in {"stop", "tool_calls"}:
                                 completed_choices.add(choice_index)
                             elif reason is not None:
-                                if not schema_guidance:
-                                    raise ProviderCompletionError(
-                                        "provider_response_incomplete"
-                                    )
                                 completion_failure = "provider_response_incomplete"
                             delta = getattr(choice, "delta", None)
                             if schema_guidance and getattr(delta, "refusal", None):
@@ -235,14 +233,26 @@ class OpenAIProvider(BaseLLMProvider):
                                         yield event
                     chunk_usage = getattr(chunk, "usage", None)
                     if chunk_usage is not None:
+                        usage_observed = True
                         usage = TokenUsage(
                             input_tokens=int(getattr(chunk_usage, "prompt_tokens", 0)),
                             output_tokens=int(
                                 getattr(chunk_usage, "completion_tokens", 0)
                             ),
                         )
+                    if (
+                        usage_observed
+                        and not usage_emitted
+                        and completion_failure is not None
+                        and chunk_usage is not None
+                        and not content
+                    ):
+                        # OpenAI's final usage-only tail follows the terminal
+                        # choice. Earlier choice usage may still be provisional.
+                        usage_emitted = True
+                        yield DoneEvent(usage=usage)
                 if not seen_choices or seen_choices != completed_choices:
-                    if not schema_guidance:
+                    if not schema_guidance and completion_failure is None:
                         raise ProviderCompletionError()
                     completion_failure = (
                         completion_failure or "provider_response_incomplete"
@@ -250,7 +260,8 @@ class OpenAIProvider(BaseLLMProvider):
                 if completion_failure is not None:
                     # completed_events observes usage immediately but admits
                     # Done only after EOF, so this failure cannot become success.
-                    yield DoneEvent(usage=usage)
+                    if usage_observed and not usage_emitted:
+                        yield DoneEvent(usage=usage)
                     raise ProviderCompletionError(completion_failure)
                 for key in sorted(tool_call_builders):
                     event = tool_call_builders[key].build()
