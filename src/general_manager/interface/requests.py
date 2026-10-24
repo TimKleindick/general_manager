@@ -2012,7 +2012,7 @@ class UrllibRequestTransport(SharedRequestTransport):
                 error_payload = self._decode_payload(
                     self._read_response_body(cast(UrlopenResponse, error))
                 )
-            except (RequestSchemaError, TimeoutError, HTTPException):
+            except (RequestSchemaError, OSError, HTTPException):
                 # HTTP status and transport metadata remain authoritative when
                 # an upstream body is malformed, oversized, or incomplete.
                 error_payload = None

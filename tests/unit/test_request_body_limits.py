@@ -185,3 +185,37 @@ def test_native_framing_failure_preserves_only_known_http_error_metadata(
     finally:
         reader.close()
         writer.close()
+
+
+@pytest.mark.parametrize("failure_type", [ConnectionResetError, OSError])
+@pytest.mark.parametrize("http_error", [False, True])
+def test_socket_read_failure_preserves_only_known_http_error_metadata(
+    failure_type, http_error
+):
+    failure = failure_type("connection failed during body read")
+
+    class FailingBody(Body):
+        def read1(self, size=-1):
+            raise failure
+
+    body = FailingBody(b"")
+    error = HTTPError(
+        "https://example.test/", 503, "Unavailable", {"Retry-After": "7"}, body
+    )
+
+    def opener(*_args, **_kwargs):
+        if http_error:
+            raise error
+        return body
+
+    expected = RequestTransportStatusError if http_error else failure_type
+    with pytest.raises(expected) as raised:
+        send(UrllibRequestTransport(urlopen=opener))
+    if http_error:
+        assert raised.value.status_code == 503
+        assert raised.value.headers["Retry-After"] == "7"
+        assert raised.value.payload is None
+        assert raised.value.__cause__ is error
+    else:
+        assert raised.value is failure
+    assert body.closed
