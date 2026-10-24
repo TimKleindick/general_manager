@@ -299,6 +299,9 @@ def conversion_scope(
         used.add(factor_manager)
     if used != set(schemas):
         _fail("conversion schema witnesses must cover exactly the actual manager path.")
+    from general_manager.chat.planned.cross_query import validate_query_schema_witness
+
+    validate_query_schema_witness(record, manager, schemas, used)
     if conversion.factor_identity_path != (*conversion.factor_path[:-1], "id"):
         _fail("factor identity must belong to the same observed factor object.")
     factor_identity = _identifier(schemas, factor_manager)

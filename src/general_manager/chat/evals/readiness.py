@@ -20,7 +20,11 @@ from general_manager.chat.evals.diagnostics import FailureDiagnostic
 from general_manager.chat.evals.diagnostics import summarize_failure_class_cases
 from general_manager.chat.evals.diagnostics import summarize_failure_classes
 from general_manager.chat.evals.diagnostics import summarize_diagnostics
-from general_manager.chat.evals.runner import EvalResult, is_forbidden_recovery_event
+from general_manager.chat.evals.runner import (
+    EvalResult,
+    dimension_results,
+    is_forbidden_recovery_event,
+)
 from general_manager.chat.evals.fingerprints import (
     EVALUATION_CONTRACT,
     selection_manifest_is_valid,
@@ -78,10 +82,13 @@ def build_summary(
         raise ValueError(message)
     diagnostics = _classify_results(results, include_passing=True)
     failure_diagnostics = _classify_results(results, include_passing=False)
-    contract_total = sum(1 for result in results if result.contract_score is not None)
+    scored_results = dimension_results(results)
+    contract_total = sum(
+        1 for result in scored_results if result.contract_score is not None
+    )
     contract_passed = sum(
         1
-        for result in results
+        for result in scored_results
         if result.contract_score is not None and result.contract_score.passed
     )
     recovered_results = [result for result in results if result.recovery_events]

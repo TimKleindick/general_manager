@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from decimal import Decimal, localcontext
+import json
 from typing import Any
 
 import pytest
@@ -17,6 +18,7 @@ from general_manager.chat.planned.evidence import (
     EvidenceStore,
     canonical_call_identity,
 )
+from general_manager.chat.planned.cross_query import capture_query_schema_witness
 from general_manager.chat.planned.models import (
     CalculationBinding,
     EvidenceRequirement,
@@ -114,12 +116,24 @@ def _setup(
         "has_more": case == "partial",
         "total_count": 3 if case == "wrong_count" else 2,
     }
+    query_schema = capture_query_schema_witness("Item")
     query = EvidenceRecord.create(
         "q",
         "foreign" if case == "foreign" else "t",
         "query",
         canonical_call_identity("query", args),
-        {"manager": "Other" if case == "wrong_provenance" else "Item", "tool": "query"},
+        {
+            "manager": "Other" if case == "wrong_provenance" else "Item",
+            "tool": "query",
+            "query_schema_witness": json.dumps(
+                {
+                    "version": 1,
+                    "before": query_schema,
+                    "after": query_schema,
+                    "stable": True,
+                }
+            ),
+        },
         payload,
     )
     store.add(

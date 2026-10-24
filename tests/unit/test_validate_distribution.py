@@ -49,6 +49,7 @@ def test_dependency_metadata_keeps_security_patched_versions() -> None:
     assert "setuptools>=83.0.0" in pyproject["build-system"]["requires"]
     assert "Django>=5.2.16" in pyproject["project"]["dependencies"]
     assert "GitPython>=3.1.58" in pyproject["project"]["dependencies"]
+    assert "graphql-core>=3.2.13" in pyproject["project"]["dependencies"]
     assert "sqlparse>=0.6.0" in pyproject["project"]["dependencies"]
 
     base_requirements = (repository_root / "requirements" / "base.txt").read_text(
@@ -56,8 +57,19 @@ def test_dependency_metadata_keeps_security_patched_versions() -> None:
     )
     assert "Django==5.2.16\n" in base_requirements
     assert "GitPython==3.1.58\n" in base_requirements
+    assert "graphql-core==3.2.13\n" in base_requirements
     assert "setuptools==83.0.0\n" in base_requirements
     assert "sqlparse==0.6.0\n" in base_requirements
+
+    development_requirements = (
+        repository_root / "requirements" / "development.txt"
+    ).read_text(encoding="utf-8")
+    production_requirements = (
+        repository_root / "requirements" / "production.txt"
+    ).read_text(encoding="utf-8")
+    assert "-r base.txt\n" in development_requirements
+    assert "-r base.txt\n" in production_requirements
+    assert "mkdocs-material==9.7.7\n" in development_requirements
 
 
 def _write_wheel(

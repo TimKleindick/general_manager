@@ -1,6 +1,8 @@
 """Regression coverage for strict per-turn evaluation and exact result sets."""
 
 import asyncio
+from copy import deepcopy
+from dataclasses import asdict
 import json
 
 import pytest
@@ -12,9 +14,11 @@ from general_manager.chat.evals.runner import (
     _write_trace,
     load_dataset,
     print_report,
+    print_compare_report,
     run_case,
 )
 from general_manager.chat.evals.diagnostics import classify_result
+from general_manager.chat.evals.readiness import build_summary
 from general_manager.chat.providers.base import (
     DoneEvent,
     TokenUsage,
@@ -30,6 +34,70 @@ def record(names, answer):
         tool_results=[{"data": [{"name": name} for name in names]}],
         answer_chunks=[answer],
     )
+
+
+@pytest.mark.parametrize("first_answer", ["required", "wrong"])
+@pytest.mark.parametrize("parent_contract", [False, True])
+def test_turn_dimensions_agree_without_changing_case_scores(
+    first_answer, parent_contract
+):
+    expected = {
+        "contract": {
+            "category": "reporting",
+            "hard": {"answer_contains": ["required"]},
+        },
+        "answer_contains": ["required"],
+    }
+    case = EvalCase(
+        "reporting",
+        "",
+        [{"user": "first"}, {"user": "second"}],
+        {
+            "turns": [deepcopy(expected), deepcopy(expected)],
+            **(expected if parent_contract else {}),
+        },
+    )
+    result = _score_case(
+        case,
+        [
+            TurnRecord(answer_chunks=[first_answer]),
+            TurnRecord(answer_chunks=["required"]),
+        ],
+    )
+    before = deepcopy(asdict(result))
+    summary = build_summary(
+        gate="offline",
+        run_metadata={
+            "run_hash": "fixed",
+            "provider": "offline",
+            "model": "fixed",
+            "fixture": "toy",
+            "datasets": ["synthetic"],
+        },
+        results=[result],
+    )
+    single = print_report([result])
+    comparison = print_compare_report({"offline": [result]})
+    contract = next(
+        line for line in single.splitlines() if line.startswith("Product contract")
+    )
+    assert (summary.product_contract_passed, summary.product_contract_total) == tuple(
+        map(int, contract.split()[-3:-1])
+    )
+    assert summary.product_contract_total == 2 + int(parent_contract)
+    for label in ["Answer quality", "Answer sense", "Overall"]:
+        individual = next(
+            line for line in single.splitlines() if line.startswith(label)
+        )
+        compared = next(
+            line for line in comparison.splitlines() if line.startswith(label)
+        )
+        assert compared.split()[-1] == individual.split()[-1]
+    assert summary.total == 1
+    assert summary.passed == int(first_answer == "required")
+    assert summary.failed == int(first_answer == "wrong")
+    assert summary.unscored == 0
+    assert asdict(result) == before
 
 
 def test_refine_query_cannot_pass_on_evidence_from_first_turn():

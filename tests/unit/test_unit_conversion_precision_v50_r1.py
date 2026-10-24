@@ -58,6 +58,8 @@ def test_product_coefficients_and_span_are_independent_of_ambient_precision(
 
 
 def _native_population(fixture: Any, order: tuple[int, ...]) -> Any:
+    from general_manager.chat.planned.cross_query import capture_query_schema_witness
+
     old, binding, _ = _setup(fixture)
     rows = [
         {
@@ -73,7 +75,9 @@ def _native_population(fixture: Any, order: tuple[int, ...]) -> Any:
         "pageInfo": {"totalCount": 3},
     }
     query = "{ itemList { items { id amount unitLabel other { id rate } } pageInfo { totalCount } } }"
+    before = capture_query_schema_witness("Item")
     native = graphql_sync(fixture[0], query)
+    after = capture_query_schema_witness("Item")
     assert native.errors is None and native.data is not None
     observed = native.data["itemList"]
     assert all(
@@ -140,7 +144,18 @@ def _native_population(fixture: Any, order: tuple[int, ...]) -> Any:
         "t",
         "query",
         canonical_call_identity("query", args),
-        {"manager": "Item", "tool": "query"},
+        {
+            "manager": "Item",
+            "tool": "query",
+            "query_schema_witness": json.dumps(
+                {
+                    "version": 1,
+                    "before": before,
+                    "after": after,
+                    "stable": before == after,
+                }
+            ),
+        },
         payload,
     )
     store.add(

@@ -54,10 +54,15 @@ Exact subnormal values also retain the precision their exponents require.
 28 significant digits with round-half-even; percentage scales its numerator
 exactly before division. These are significant digits, not a fixed number of
 decimal places or a currency rounding rule. Arithmetic, including intermediate
-products and sums, beyond Decimal's supported precision or exponent range raises
-`CalculationError` rather than publishing an
-infinite or silently underflowed value. Stored calculation values use the same
-policy when their derivations are verified again.
+products and sums, requires at most 4,300 digits of working precision, including
+the conservative addition-carry allowance. Larger requests or values beyond
+Decimal's supported exponent range raise `CalculationError` before expansion;
+they are not rounded to fit. Compact extreme exponents remain supported by
+`calculate()`. Before `calculate_evidence()` expands a result into an integer or
+fixed-point string, it also limits that representation to 4,300 numeric digits,
+including fractional zero padding. Numeric zero does not expand its exponent.
+These fixed resource limits leave the rounding policy unchanged. Stored values
+use the same policy when their derivations are verified again.
 
 
 An explicit calculation requirement with `binding=null` is valid pending work.
@@ -197,6 +202,11 @@ nonfinite values, absent or duplicate IDs, partial populations, unknown units,
 foreign/unlinked schemas, stale snapshots and incompatible declared dimensions
 are rejected. Source units must match exactly after canonical declaration;
 automatic scale/FX lookup and offset conversion are unsupported.
+
+The source query must retain its original stable before/after schema witness for
+all quantity and factor managers. Those snapshots must still match the current
+schema observations. Fetching fresh schema details cannot re-attest old values
+after a unit contract changes; query the values again under the new contract.
 
 Identity authority comes from the shared interface's actual single required `id`
 constructor input, explicitly captured as `identity_contract`. Its declared input

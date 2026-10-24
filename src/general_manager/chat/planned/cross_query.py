@@ -25,7 +25,7 @@ from general_manager.chat.planned.conversion import (
     _value,
     _source_hash,
 )
-from general_manager.chat.planned.evidence import EvidenceStore
+from general_manager.chat.planned.evidence import EvidenceRecord, EvidenceStore
 from general_manager.chat.planned.models import (
     CalculationBinding,
 )
@@ -79,6 +79,33 @@ def capture_query_schema_witness(manager: object) -> dict[str, str]:
     except (ValueError, TypeError):
         return {}
     return result
+
+
+def validate_query_schema_witness(
+    query: EvidenceRecord,
+    manager: str,
+    schemas: Mapping[str, Any],
+    path_managers: set[str],
+) -> dict[str, Any]:
+    """Bind original query values to the stable schema contracts that produced them."""
+    try:
+        witness = json.loads(query.provenance.get("query_schema_witness", ""))
+    except (TypeError, ValueError):
+        _fail("cross-query query-time schema witness is absent.")
+    current = capture_query_schema_witness(manager)
+    if (
+        not isinstance(witness, dict)
+        or set(witness) != {"version", "before", "after", "stable"}
+        or type(witness["version"]) is not int
+        or witness["version"] != 1
+        or witness["stable"] is not True
+        or not current
+        or witness["before"] != witness["after"]
+        or witness["before"] != current
+        or any(current.get(name) != schemas[name]["snapshot"] for name in path_managers)
+    ):
+        _fail("cross-query original query-time schema witness is stale or unstable.")
+    return witness
 
 
 def _timestamp(value: object) -> datetime:
@@ -484,27 +511,7 @@ def cross_query_scope(
             _fail(
                 "cross-query contributing rows must satisfy their exact entity and period predicates."
             )
-        try:
-            witness = json.loads(query.provenance.get("query_schema_witness", ""))
-        except (TypeError, ValueError):
-            _fail("cross-query query-time schema witness is absent.")
-        current = capture_query_schema_witness(manager)
-        if (
-            not isinstance(witness, dict)
-            or set(witness) != {"version", "before", "after", "stable"}
-            or type(witness["version"]) is not int
-            or witness["version"] != 1
-            or witness["stable"] is not True
-            or not current
-            or witness["before"] != witness["after"]
-            or witness["before"] != current
-            or any(
-                current.get(name) != schemas[name]["snapshot"] for name in path_managers
-            )
-        ):
-            _fail(
-                "cross-query original query-time schema witness is stale or unstable."
-            )
+        witness = validate_query_schema_witness(query, manager, schemas, path_managers)
         unit = _unit(schemas, manager, predecessor, rows)
         entities.append({"manager": entity_manager, "identity": expected_entity})
         windows.append(

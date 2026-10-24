@@ -12,7 +12,6 @@ from decimal import (
     Inexact,
     InvalidOperation,
     MAX_EMAX,
-    MAX_PREC,
     MIN_EMIN,
     Overflow,
     ROUND_HALF_EVEN,
@@ -47,9 +46,13 @@ def _type_error(message: str) -> NoReturn:
     raise TypeError(message)
 
 
+MAX_CALCULATION_DIGITS = 4300
+
+
 def _decimal_context(precision: int = 28, *, exact: bool = False) -> Context:
     """Own every Decimal setting; neither host nor mutable defaults are policy."""
-    if not 1 <= precision <= MAX_PREC:
+    # Bound coefficient expansion independently of compact Decimal exponents.
+    if not 1 <= precision <= MAX_CALCULATION_DIGITS:
         _calculation_error("calculation exceeds Decimal precision or exponent range.")
     traps = [InvalidOperation, DivisionByZero, Overflow, Underflow]
     if exact:
@@ -227,10 +230,15 @@ def calculate_evidence(
     payload_value: int | str
     if isinstance(result, int):
         payload_value = result
-    elif result == result.to_integral_value():
-        payload_value = int(result)
     else:
-        payload_value = format(result, "f")
+        integral = result == result.to_integral_value()
+        if result:
+            digits = max(1, result.adjusted() + 1)
+            if not integral:
+                digits += max(0, -int(result.as_tuple().exponent))
+            if digits > MAX_CALCULATION_DIGITS:
+                _calculation_error("calculation exceeds numeric representation limit.")
+        payload_value = int(result) if integral else format(result, "f")
     payload: dict[str, object] = {
         "operation": operation,
         "value": payload_value,
