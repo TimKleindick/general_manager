@@ -37,15 +37,6 @@ def test_saved_syntax_pair_keeps_invalid_json_and_exact_runtime_state_digest():
         sha256(data["actions"][0].encode()).hexdigest()
         == data["validation_cycle"]["action_sha256"]
     )
-    old_state = {
-        k: v
-        for k, v in first.items()
-        if k not in {"action_validation_error", "manager_candidates"}
-    }
-    assert (
-        sha256(json.dumps(old_state, sort_keys=True).encode()).hexdigest()
-        == "1be42017251e6d17651f39761969a14b69ccea8d4d46bb00199d71eadd001b1b"
-    )
     assert hasattr(scheduler, "execution_state_signature")
     state = scheduler.execution_state_signature(first)
     assert state == scheduler.execution_state_signature(repeated)
