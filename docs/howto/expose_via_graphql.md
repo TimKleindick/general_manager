@@ -325,6 +325,12 @@ same way. This behavior applies when the calculation input metadata omits
 relation descriptors; explicitly declared relation metadata and custom lookup
 prefixes remain authoritative.
 
+The same calculation filter contract applies when an input's
+`possible_values` returns a Python iterable such as `list(Project.all())` or a
+GeneralManager bucket. Manager equality, `_id`, `__in`, and nested lookups are
+applied before generated relations are paginated, so each relation remains
+scoped to its parent. A cached calculation value does not widen that scope.
+
 ## Declare typed calculation collections
 
 Use a parameterized `Input(list[T])` when one calculation input represents an
@@ -458,6 +464,36 @@ behavior. See the [mutation concept](../concepts/graphql/schema_autogen.md#mutat
 the [GraphQL query cookbook](../examples/graphql_queries.md#update-only-the-fields-you-supply),
 and the [API reference](../api/graphql.md#generated-crud-mutation-contract) for
 the complete contract and error behavior.
+
+### Keep mutation controls out of client input
+
+Generated create and update schemas reserve `creator_id`, `ignore_permission`,
+and `history_comment` for manager execution metadata. If an editable interface
+field uses one of those names, schema generation raises a reserved-control
+error; a relation alias such as `creator` is rejected when it normalizes to
+`creator_id`. Rename the field or make it read-only.
+
+Do not send `creatorId` or `ignorePermission` as generated GraphQL arguments;
+they are undeclared and fail schema validation before the resolver runs. The
+resolver's runtime guard also rejects `creator_id` or `ignore_permission` kwargs
+with `BAD_USER_INPUT` before upload-token preflight, and checks again after
+relation normalization. The actor always comes from `info.context.user`. Use the generated
+`historyComment` argument when an audit comment is needed:
+
+```graphql
+mutation RenameProject($id: ID!) {
+  updateProject(id: $id, name: "Renamed", historyComment: "Reviewed") {
+    success
+    project { id name }
+  }
+}
+```
+
+This is distinct from application code calling `GeneralManager.update()`
+directly, where trusted server-side callers may still supply the manager's
+execution metadata. See the [GraphQL security concept](../concepts/graphql/security.md),
+the [mutation cookbook](../examples/graphql_queries.md#reserved-mutation-controls),
+and the [API reference](../api/graphql.md#generated-crud-mutation-contract).
 
 ## Query generated lists
 

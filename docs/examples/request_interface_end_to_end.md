@@ -8,6 +8,7 @@ This recipe shows the recommended production-facing request-interface shape:
 - provider-style auth with `BearerTokenAuthProvider`
 - framework retry policy with `RequestRetryPolicy`
 - outbound mutation shaping with `FieldMappingSerializer`
+- redirect rejection and explicit custom-opener injection
 
 Application code usually declares fields, filters, query/mutation operations,
 transport config, auth, and retry policy. Integration code usually implements a
@@ -118,4 +119,9 @@ Notes:
 - `RequestRetryPolicy.compute_backoff_seconds(retry_count=...)` uses a 1-based retry count. By default only `GET`, `HEAD`, `OPTIONS`, and `DELETE` retry. To retry `POST` or `PATCH`, set `retry_non_idempotent_methods=True` and configure an idempotency key header/factory.
 - `RequestTransportResponse.payload` must be a decoded mapping or a list of mappings. The default normalizer turns a mapping into a one-item `RequestQueryResult` and preserves status code, retry count, response headers, and request id in result metadata.
 - HTTP status errors map to stable exceptions: `401` to `RequestAuthenticationError`, `403` to `RequestAuthorizationError`, `404` to `RequestNotFoundError`, `409` to `RequestConflictError`, `429` to `RequestRateLimitedError`, and `5xx` to `RequestServerError`.
+- `UrllibRequestTransport` rejects all HTTP redirects before parsing `Location`, including malformed targets, and preserves the original status and headers. Its private opener does not inherit `install_opener()` handlers; inject `build_opener(...).open` when custom TLS or proxy handlers are required, and keep redirect rejection in that opener.
 - `RequestSerializer` receives one resolved value and returns a serialized value. `RequestValidator` receives one lookup value and should raise when invalid. A `RequestResponseNormalizer` receives a raw response plus interface, operation, and plan, and must return `RequestQueryResult`.
+
+The built-in transport never forwards credentials or request bodies to a redirect
+target. Configure the final URL directly. For an explicit opener, use the
+redirect-rejecting handler shown in the [request transport how-to](../howto/request_interface.md#keep-redirects-explicit).
