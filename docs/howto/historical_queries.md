@@ -37,6 +37,13 @@ projects = Project.filter(search_date=snapshot, status="active")
 Inside an active context, an explicit `search_date` must represent the same
 instant. It cannot override the operation snapshot.
 
+ORM interfaces use the exact supplied instant for every dated read, including a
+timestamp only milliseconds before the current time. The legacy
+`historical_lookup_buffer_seconds` attribute remains accepted for source
+compatibility, but it no longer falls back to the live row. If no historical
+row exists at or before the timestamp, the read remains missing rather than
+silently returning current data.
+
 ## 2. Expose the snapshot through GraphQL
 
 GeneralManager registers this built-in directive in generated schemas:

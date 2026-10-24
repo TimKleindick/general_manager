@@ -63,16 +63,16 @@ Every REST view accepts the `X-General-Manager-Protocol-Version` header. If the
 header is present, it must match `RemoteAPI.protocol_version`; omitted headers are
 accepted. `POST /query` reads an object body with optional `filters`, `excludes`,
 `ordering`, `page`, and `page_size`. The view starts with `manager_cls.all()`,
-applies `filter(**filters)` only when `filters` is truthy, applies
-`exclude(**excludes)` only when `excludes` is truthy, then applies ordering,
-computes `total_count` before pagination, and returns a JSON envelope with
-`items`, `metadata`, and `total_count`. `ordering` may be one field name or a
-list of field names; a leading `-` sorts that field descending, and multi-field
-ordering is passed once as one complete bucket sort call. A nonempty sort
-replaces prior ordering. Pagination is
-applied when either positive integer `page` or `page_size` is supplied; the
-omitted control defaults to page 1 or size 10. Zero, negative, and boolean
-controls are rejected.
+applies the request user's read policy before local ordering, counting, and
+slicing, and always resolves finite pagination. Omitted controls mean page 1 and
+size 10; configure positive `REMOTE_API_DEFAULT_PAGE_SIZE` and
+`REMOTE_API_MAX_PAGE_SIZE` settings when needed (the maximum defaults to 100).
+Oversized, non-positive, and boolean page sizes return HTTP 400 before query
+execution. Only readable rows contribute to `total_count`; incomplete upstream
+responses requiring per-instance checks omit it. `ordering` may be one field
+name or a list of field names; a leading `-` sorts that field descending, and
+multi-field ordering is passed once as one complete bucket sort call. A nonempty
+sort replaces prior ordering.
 `GET /<id>` returns one item, `PATCH /<id>` requires an object body and returns
 the updated item, `DELETE /<id>` returns an empty `items` list, and
 `POST /<resource>` creates an item and returns HTTP `201`. URL identifiers are
@@ -92,7 +92,12 @@ uses this envelope automatically when its trusted Python `create`, `update`, or
 
 Success envelopes include `items`, `metadata.protocol_version`,
 `metadata.request_id`, response header `X-Request-ID`, optional metadata extras
-such as query controls, and `total_count` only when supplied by the endpoint.
+such as effective query controls, and `total_count` only when the authorized
+scope is complete and known. Detail reads return `403/permission_denied` when
+the row policy denies access; denied fields are omitted without evaluating
+their values. A successful write may retain its success status with `items: []`
+when the resulting row is unreadable. Managers without a permission class keep
+the framework's default public read behavior.
 RemoteAPI error responses use sanitized messages in a stable JSON object with
 `error`, `error_code`, and `metadata`; `details` may be included for structured
 errors. `ObjectDoesNotExist` maps to `404/not_found`, `PermissionError` to
@@ -397,6 +402,14 @@ rejected when a connection is first created, which can happen from `connect()`,
 shutdown; it cancels current listener tasks and closes cached connections. It
 does not directly cancel a `listen_once()` call that is already waiting; that
 one-off receive finishes according to the connection's receive/close behavior.
+
+The server requires an authenticated, active Django user for websocket
+admission. Configure the client `connection_factory` to carry the same session
+or authorization headers; the default URL-only factory does not copy HTTP
+credentials. Anonymous or inactive connections close with `4401` before group
+registration. Identified create/update events are forwarded only when a fresh
+current-row read check succeeds; deleted, missing, unreadable, or failed rows
+are suppressed.
 
 Server-side event emission is handled by `emit_remote_invalidation()` after data
 changes. RemoteAPI receives `post_data_change` immediately but schedules each
