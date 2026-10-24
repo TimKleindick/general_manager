@@ -52,6 +52,24 @@ changed. A manager opts in with `RemoteAPI.enabled = True` and
 decide when to refetch the resource over REST; the event is not a second data
 transport and does not contain a complete resource snapshot.
 
+The websocket admission boundary requires an authenticated, active Django user
+from the existing ASGI authentication middleware. Anonymous or inactive users
+are closed with code `4401` before channel or group registration. Each
+identified create/update event reloads that user and the current manager row,
+then applies the manager's native read policy; missing, deleted, unreadable,
+or failed reads are silently suppressed. A fresh authorization check does not
+evict data already held by a client and does not revalidate arbitrary external
+tokens.
+
+`ensure_remote_invalidation_route()` preserves the existing ASGI security stack.
+It updates an accessible Channels `URLRouter` in place through known middleware
+wrappers, including origin validation and custom authentication. Opaque root
+callables, custom `.app` wrappers, and closures are left unchanged with a
+warning; configure the route explicitly inside those stacks. Only an unwrapped
+Django `ASGIHandler` is automatically wrapped with a protocol router. Clearing
+removes only GeneralManager-marked routes and preserves the wrappers and other
+websocket routes.
+
 ## Mental model
 
 The server-side flow has four stages:
@@ -95,6 +113,8 @@ remain visible to the caller.
 
 For the task-oriented transaction and batching instructions, see the [bulk
 notification how-to](../../howto/bulk_data_change_notifications.md). The
+[RemoteAPI setup how-to](../../howto/remote_manager_interface.md) covers
+authentication, finite pagination, and client/server configuration. The
 [Remote manager end-to-end recipe](../../examples/remote_manager_interface_end_to_end.md)
 shows the server and client setup, and the [API reference](../../api/graphql.md)
 records the callable contract for `emit_remote_invalidation()`.

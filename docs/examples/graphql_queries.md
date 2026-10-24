@@ -275,6 +275,43 @@ apply model defaults when their fields are omitted. See the [GraphQL how-to](../
 the [mutation concept](../concepts/graphql/schema_autogen.md#mutations), and
 the [API reference](../api/graphql.md#generated-crud-mutation-contract).
 
+## Reserved mutation controls
+
+Generated create and update payloads cannot override the trusted manager
+controls `creator_id` or `ignore_permission`. For example, this request is
+rejected with `BAD_USER_INPUT` before a file-upload token is processed:
+
+```graphql
+mutation UnsafeUpdate($id: ID!, $creator: ID!) {
+  updateProject(
+    id: $id
+    name: "Attempted impersonation"
+    creatorId: $creator
+    ignorePermission: true
+  ) {
+    success
+  }
+}
+```
+
+The authenticated GraphQL user is always the manager actor. Use the separate
+`historyComment` argument for audit metadata:
+
+```graphql
+mutation ReviewedUpdate($id: ID!) {
+  updateProject(id: $id, name: "Approved", historyComment: "Reviewed") {
+    success
+    project { id name }
+  }
+}
+```
+
+Editable fields or relation aliases that normalize to `creator_id`,
+`ignore_permission`, or `history_comment` are rejected while the schema is
+generated. See the [GraphQL task guide](../howto/expose_via_graphql.md#keep-mutation-controls-out-of-client-input),
+the [security concept](../concepts/graphql/security.md), and the
+[API reference](../api/graphql.md#generated-crud-mutation-contract).
+
 ## Create with a manual primary key
 
 For a manager with an editable integer PK field named `id` and no default,
@@ -464,6 +501,32 @@ server translates `project: {id: ...}` to the calculation lookup
 needed. See the [calculation how-to](../howto/expose_via_graphql.md#filter-calculation-managers-by-manager-input)
 and [API reference](../api/graphql.md#manager-typed-calculation-input-filters) for
 the declaration and compatibility rules.
+
+The same lookup behavior applies when `possible_values` returns a list instead
+of a bucket:
+
+```python
+from general_manager.interface import CalculationInterface
+from general_manager.manager import GeneralManager, Input
+from myapp.managers import Project
+
+
+class ProjectCommercial(GeneralManager):
+    class Interface(CalculationInterface):
+        project = Input(
+            Project,
+            possible_values=lambda: list(Project.all()),
+        )
+
+
+ProjectCommercial.filter(project__name__startswith="North")
+```
+
+Manager objects, `project_id`, `project__id__in`, and nested manager lookups
+work for both domain shapes. Generated reverse relations keep the parent filter
+when the relation is paginated, so a project never receives another project's
+calculation rows. See the [calculation concept](../concepts/interfaces/computed_data_interfaces.md#iterating-combinations)
+and [task guide](../howto/expose_via_graphql.md#filter-calculation-managers-by-manager-input).
 
 ## Custom mutation with Measurement input
 

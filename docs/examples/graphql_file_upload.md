@@ -127,6 +127,14 @@ async function uploadAvatar(profileId, file) {
 }
 ```
 
+For the built-in S3 backend, new instructions use `transport: "PROXY"` and
+the authenticated application upload endpoint; keep the returned
+`Authorization: GMUpload ...` header and the authenticated session. Do not send
+that credential to S3. The proxy enforces the S3 single-`PUT` ceiling of
+5,368,709,120 bytes even when the global upload limit is larger. Cross-origin
+application clients must use their normal credentialed CORS/CSRF configuration
+and `credentials: "include"` for session cookies.
+
 The `isPublicCode` allowlist treats the stable upload codes as a client
 contract, so this recipe can show actionable upload failures without trusting
 arbitrary server messages. Framework-owned `UploadError` types use their safe

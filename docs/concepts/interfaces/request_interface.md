@@ -105,6 +105,11 @@ Then the default `execute_request_plan()` implementation delegates to that trans
 
 For most HTTP integrations, start with the built-in `UrllibRequestTransport`. Keep a custom `SharedRequestTransport` subclass only when the upstream service needs special request signing, non-JSON wire behavior, or custom response parsing.
 
+The [request-interface how-to](../../howto/request_interface.md) covers the
+redirect, opener, authentication, and transport configuration choices; the
+[end-to-end recipe](../../examples/request_interface_end_to_end.md) shows the
+complete manager declaration.
+
 The built-in transport does not follow HTTP redirects, including redirects to
 the same origin. Redirect responses raise `RequestTransportError` through
 `execute()` (`RequestTransportStatusError` through `send()`), preserving the
