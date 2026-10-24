@@ -31,6 +31,11 @@ The list, each manager attribute, and the nested `owner` read use the same
 historical instant. A cached calculation or GraphQL property reached by those
 reads is namespaced by that instant as well.
 
+The timestamp is exact: a recent `search_date` still selects the history row,
+and a date before the object's creation does not fall forward to the current
+row. `historical_lookup_buffer_seconds` is retained only so existing interface
+classes continue to import; changing it does not restore live-row fallback.
+
 ## Equivalent GraphQL request
 
 ```graphql

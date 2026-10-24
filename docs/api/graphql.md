@@ -287,6 +287,21 @@ GeneralManager 0.80.1. Clients that need to clear or reset a field must send an
 explicit value (including `null` for nullable fields); omitting the field never
 re-applies its model default during an update.
 
+Generated create and update fields reserve the manager execution controls
+`creator_id`, `ignore_permission`, and `history_comment`. Editable interface
+fields with those names, including relation aliases that normalize to
+`creator_id`, raise `ReservedMutationControlFieldError` during schema
+generation. GraphQL documents that supply the undeclared `creatorId` or
+`ignorePermission` arguments fail schema validation before a resolver runs.
+If resolver kwargs contain `creator_id` or `ignore_permission`, the runtime
+guard raises `ReservedMutationControlInputError` as a GraphQL error with
+`extensions.code == "BAD_USER_INPUT"`; the check runs before upload-token
+preflight and again after relation normalization. The actor is always taken
+from `info.context.user`. The generated `historyComment` argument remains the
+supported audit-metadata input and is passed to the manager as
+`history_comment`. Direct trusted manager calls retain their existing metadata
+parameters; this restriction applies to generated GraphQL writes.
+
 ## Historical queries with `@asOf`
 
 The [Historical Context API reference](historical_context.md) contains the
@@ -679,6 +694,17 @@ GraphQL contracts:
 - `StoredFile` and `StoredImage` are generated structured output types.
 - `StoredFileStatus` contains `AVAILABLE`, `PROCESSING`, and `FAILED`.
 - `UploadTransport` contains `DIRECT` and `PROXY`.
+- New built-in S3 upload intents use `PROXY` through the authenticated
+  application transfer endpoint; `S3UploadAdapter.create_upload_instructions()`
+  is retained for persisted legacy identities and rejects new PUT instructions
+  with `UploadBackendUnsupportedError`. Legacy direct identities remain
+  resolvable for existing intent processing and downloads, and previously
+  issued presigned PUT URLs are not revoked.
+- S3 proxy instructions and streamed bodies are bounded by the single-`PUT`
+  limit of 5,368,709,120 bytes. The global upload setting may be lower, but
+  cannot raise this S3-specific ceiling. Conditional put/get/delete and safe
+  signing/transport capabilities are required; known S3 backends fail closed
+  instead of falling back to generic `save()` behavior.
 
 Custom storage extension contracts:
 
@@ -1103,6 +1129,23 @@ immediately from the signal receiver. Callers should use the documented
 `post_data_change` integration rather than treating the underscored publisher
 helper as public.
 
+`RemoteInvalidationConsumer` requires an authenticated, active Django user in
+the ASGI scope and closes anonymous or inactive connections with `4401` before
+channel/group registration. For identified create/update events it reloads the
+current principal and manager row and applies native read authorization;
+missing, deleted, unreadable, or failed rows are suppressed without sending a
+fallback identity. A connection therefore needs the application's existing
+authentication middleware, and `RemoteInvalidationClient` callers must provide
+credentials through their connection factory when the default URL-only factory
+cannot do so. Existing client data is not evicted when access is later lost.
+
+`ensure_remote_invalidation_route()` and
+`clear_remote_invalidation_routes()` preserve accessible Channels
+`URLRouter`/middleware stacks in place, including origin validators and custom
+authentication. Opaque root callables are left unchanged with a warning; only
+an unwrapped Django `ASGIHandler` is automatically wrapped. Clearing removes
+only GeneralManager-marked routes and never reconstructs an opaque application.
+
 ::: general_manager.api.remote_invalidation.RemoteInvalidationConsumer
 
 ::: general_manager.api.remote_invalidation.ensure_remote_invalidation_route
@@ -1141,14 +1184,18 @@ RemoteAPI views accept an optional `X-General-Manager-Protocol-Version` header;
 when present it must match the configured protocol version. Request bodies must
 be empty or JSON objects. `POST <base>/<resource>/query` accepts optional
 `filters`, `excludes`, `ordering`, `page`, and `page_size`. It starts with
-`manager_cls.all()`, applies `bucket.filter(**filters)` only when `filters` is
-truthy, applies `bucket.exclude(**excludes)` only when `excludes` is truthy,
-then applies ordering, computes `total_count`, and finally slices when either
-positive integer pagination control is supplied, defaulting the omitted control
-to page 1 or size 10. Zero, negative, and boolean pagination values are rejected.
+`manager_cls.all()`, applies the manager's row read policy before
+local ordering, counting, and slicing, and always resolves finite pagination:
+omitted controls mean page 1 and size 10. `REMOTE_API_DEFAULT_PAGE_SIZE` and
+`REMOTE_API_MAX_PAGE_SIZE` are positive integer settings (the maximum defaults
+to 100); an oversized, non-positive, or boolean page size returns HTTP 400
+before execution. Only readable rows contribute to local `total_count`, and an
+incomplete upstream result requiring per-instance authorization omits the
+count. Request-backed managers with multiple permission alternatives reject
+global pagination or ordering controls that cannot be proven complete.
 `ordering` may be one field name or an iterable of field names; entries prefixed
-with `-` sort descending and are applied in reverse order so multi-key ordering
-is stable with bucket chaining. `GET`, `PATCH`, and
+with `-` sort descending. The complete normalized ordering is passed to one
+`bucket.sort(*fields)` call, replacing prior ordering. `GET`, `PATCH`, and
 `DELETE <base>/<resource>/<identifier>` are controlled by the item operation
 flags; disabled operations and unsupported methods return HTTP 405 without
 constructing a manager. `PATCH` and `POST <base>/<resource>` require object
@@ -1157,7 +1204,15 @@ permission, validation, and interface errors still apply.
 
 Success envelopes include `items`, `metadata.protocol_version`,
 `metadata.request_id`, response header `X-Request-ID`, optional metadata extras
-such as query controls, and `total_count` only when supplied by the endpoint.
+such as effective query controls, and `total_count` only when the authorized
+scope is complete and known. `RemoteManagerInterface` forwards effective page
+controls upstream. Matching upstream pages can be returned without claiming
+that the source is complete, and output is capped at the effective page size.
+An incomplete source rejects mismatched pagination or ordering that cannot be
+forwarded upstream. Detail reads return
+`403/permission_denied` when the row policy denies access, denied fields are
+omitted, and a successful create/update may retain its success status with
+`items: []` when the resulting row is unreadable.
 Error responses are sanitized envelopes with `error`, `error_code`, `metadata`,
 `X-Request-ID`, and optional `details`. `ObjectDoesNotExist` maps to
 `404/not_found`, `PermissionError` to `403/permission_denied`, `ValidationError`

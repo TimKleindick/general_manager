@@ -1366,6 +1366,18 @@ operation using `plan.operation_name`. Missing mutation operations raise
 normalization errors propagate according to the configured transport and
 normalizer implementations.
 
+`UrllibRequestTransport` builds a private opener that rejects `301`, `302`,
+`303`, `307`, and `308` responses before urllib parses their `Location` header.
+`execute()` therefore raises `RequestTransportError` and `send()` raises the
+mapped `RequestTransportStatusError`, preserving the original status and
+headers even when `Location` is malformed; no redirect request receives the
+original credentials or body. The default opener does not inherit handlers from
+`urllib.request.install_opener`, although urllib environment proxy settings
+still apply. Applications that need a custom TLS context or explicit proxy must
+inject `build_opener(...).open` through `urlopen` and enforce the same early
+redirect rejection in that opener. See the [request transport how-to](../howto/request_interface.md)
+for a complete setup.
+
 ::: general_manager.interface.requests.RequestField
 
 ::: general_manager.interface.requests.RequestFilter
