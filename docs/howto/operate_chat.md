@@ -95,6 +95,12 @@ wrong schema selectors, missing filter details and duplicate incomplete reads.
 Test changes under explicit configuration and retain the original results. An
 extended diagnostic success does not establish compliance with production defaults.
 
+Measure planning/evidence and synthesis separately. A total turn duration alone
+cannot establish which stage exceeded its budget, and finishing within their
+combined allowance does not prove compliance with each deadline. Historical
+diagnostic timings can identify risk, but they cannot predict the answer or
+success rate of a new run under the deployment's actual stage settings.
+
 ## Manage conversations and cleanup
 
 Chat persists conversations, messages and pending mutation confirmations in the
