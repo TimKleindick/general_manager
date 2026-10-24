@@ -82,8 +82,11 @@ class MonitoringRuntimeTests(unittest.TestCase):
                 password_file.write_text(f"fixture:{password_hash}\n")
                 password_file.chmod(0o644)
                 (fixture / "backend.conf").write_text(
-                    "events {}\nhttp { server { listen 9090; listen 3100; "
-                    'location / { return 200 "auth=<$http_authorization>"; } } }\n'
+                    "events {}\nhttp { "
+                    'server { listen 9090; location / { return 200 "service=prometheus '
+                    'auth=<$http_authorization>"; } } '
+                    'server { listen 3100; location / { return 200 "service=loki '
+                    'auth=<$http_authorization>"; } } }\n'
                     "pid /tmp/backend.pid;\nerror_log /tmp/backend-error.log;\n"
                 )
                 run([docker, "network", "create", "--internal", network])
@@ -164,7 +167,13 @@ class MonitoringRuntimeTests(unittest.TestCase):
                                 body, status = run(request).rsplit("\n", 1)
                                 self.assertEqual(int(status), expected)
                                 if expected == 200:
-                                    self.assertEqual(body, "auth=<>")
+                                    self.assertEqual(
+                                        body,
+                                        {
+                                            "/prometheus/": "service=prometheus auth=<>",
+                                            "/loki/": "service=loki auth=<>",
+                                        }[route],
+                                    )
             finally:
                 # Remove only this invocation's unique resources, even on failure.
                 for cleanup in (
