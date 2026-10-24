@@ -1,6 +1,7 @@
-"""Keep assembled role instructions bounded without trimming application context."""
+"""Preserve the evaluated role instructions and verbatim application context."""
 
 from dataclasses import replace
+from hashlib import sha256
 
 import pytest
 
@@ -56,11 +57,24 @@ def role_messages(role):
 
 
 @pytest.mark.parametrize(
-    "role,maximum", [("planner", 7000), ("executor", 8500), ("synthesis", 4500)]
+    "role,expected_digest",
+    [
+        ("planner", "b345fb35d4c5e544ae824bf3e08319c3eafa8eee590fe156462a6538b75272ab"),
+        (
+            "executor",
+            "9fb129f5e168d96b8107c88404190dd09cb9e6ea9bd79a34ce2b5a34fe480042",
+        ),
+        (
+            "synthesis",
+            "334e0b7bc297f54c6c538e6ffca3eb5bfa8ad5191fb66a3fa608b7397031b2db",
+        ),
+    ],
 )
-def test_role_system_instructions_fit_compactness_budget(role, maximum):
+def test_role_system_instructions_match_evaluated_contract(role, expected_digest):
+    # Assembled from the independently frozen 7e465eb2 evaluation source. Changes
+    # to this contract need explicit review; application context is not hashed.
     messages = role_messages(role)
     systems = [message.content for message in messages if message.role == "system"]
     assert systems.count(APPLICATION) == 1
     instructions = [text for text in systems if text != APPLICATION]
-    assert sum(map(len, instructions)) <= maximum
+    assert sha256("\n".join(instructions).encode()).hexdigest() == expected_digest
