@@ -8,6 +8,7 @@ import pytest
 
 from general_manager.api.graphql import GraphQL
 from general_manager.api.graphql_type import GraphQLType
+from general_manager.api.graphql_search import create_filter_options
 from general_manager.api.property import graph_ql_property
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.manager import GeneralManager
@@ -120,3 +121,35 @@ def test_business_property_identity_flag_defaults_to_false(name):
     assert prop.is_identifier is False
     assert prop.graphql_type_hint is int
     assert generate_property_type(prop, name)._meta.fields[name].type is graphene.Int
+
+
+@pytest.mark.parametrize("annotation", [int, str, UUID])
+def test_identity_property_override_keeps_id_filters_without_attribute_authority(
+    annotation,
+):
+    """A property keeps its native ID type without inheriting an attribute predicate."""
+    prop = property_with_annotation(annotation, filterable=True)
+
+    class IdentityOverrideInterface:
+        input_fields: ClassVar[dict] = {}
+
+        @staticmethod
+        def get_attribute_types():
+            return {"key": {"type": annotation, "is_identifier": True}}
+
+        @staticmethod
+        def get_graph_ql_properties():
+            return {"key": prop}
+
+    manager = SimpleNamespace(
+        __name__="IdentityOverrideManager", Interface=IdentityOverrideInterface
+    )
+    filter_type = create_filter_options(
+        manager, {}, GraphQL._map_field_to_graphene_read
+    )
+
+    assert filter_type is not None
+    assert filter_type._meta.fields["key"].type is graphene.ID
+    assert filter_type._meta.fields["key__in"].type.of_type is graphene.ID
+    assert "key" not in filter_type._general_manager_filter_contracts
+    assert "key__in" not in filter_type._general_manager_filter_contracts

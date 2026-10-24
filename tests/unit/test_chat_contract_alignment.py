@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.unit.test_chat_consumer import _receive_prevalidated_mutation
+
 import asyncio
 from pathlib import Path
 import tomllib
@@ -115,7 +117,9 @@ class ChatSignalEmissionTests(unittest.TestCase):
                     side_effect=TimeoutError("provider timeout"),
                 ),
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
 
         try:
             asyncio.run(run())
@@ -212,7 +216,9 @@ class ChatSignalEmissionTests(unittest.TestCase):
                     side_effect=TimeoutError("provider timeout"),
                 ),
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
                 assert mock_send_json.await_args_list[-1].args[0] == {
                     "type": "error",
                     "message": "The request reached its time limit.",

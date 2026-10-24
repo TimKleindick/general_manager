@@ -19,7 +19,10 @@ import django
 
 django.setup()
 
-from general_manager.chat.evals.fingerprints import build_run_fingerprint
+from general_manager.chat.evals.fingerprints import (
+    build_native_prompt_contract,
+    build_run_fingerprint,
+)
 from general_manager.chat.evals.fixtures import setup_large_schema
 from general_manager.chat.evals.readiness import (
     ReadinessConfig,
@@ -29,31 +32,50 @@ from general_manager.chat.evals.readiness import (
     write_readiness_artifacts,
 )
 from general_manager.chat.evals.runner import (
-    list_datasets,
+    execution_dataset_names,
     print_report,
     run_eval_suite_sync,
+    select_eval_cases,
 )
 from general_manager.chat.evals.traces import EvalTraceWriter
 from general_manager.chat.providers.ollama import OllamaProvider
 from general_manager.chat.system_prompt import build_system_prompt
 from general_manager.chat.tools import get_tool_definitions
-from scripts.run_chat_evals import _resolve_ollama_base_url, setup_test_schema
+from scripts.run_chat_evals import (
+    _patch_ollama_provider,
+    _resolve_ollama_base_url,
+    setup_test_schema,
+)
 
 
 def main() -> None:
     """Run selected readiness gates and write artifacts."""
     args = _parse_args()
+    datasets = args.dataset or _datasets_for_gate(args.gate)
+    tier = _tier_for_gate(args.gate) if args.tier is None else args.tier
+    tags = args.tag
+    selection = select_eval_cases(datasets, tier=tier, tags=tags)
+    datasets = list(selection.datasets)
     output_dir = Path(args.output_dir)
     trace_path = output_dir / "trace.jsonl"
 
-    if args.run_tests:
+    if args.run_tests and selection.manifest()["cases"]:
+        test_paths = sorted(
+            str(path.relative_to(PROJECT_ROOT))
+            for pattern in (
+                "tests/unit/test_chat*.py",
+                "tests/integration/test_chat*.py",
+            )
+            for path in PROJECT_ROOT.glob(pattern)
+        )
+        if not test_paths:
+            sys.exit("No chat test files matched the readiness test selection.")
         test_result = subprocess.run(  # noqa: S603
             [
                 sys.executable,
                 "-m",
                 "pytest",
-                "tests/unit/test_chat*.py",
-                "tests/integration/test_chat*.py",
+                *test_paths,
             ],
             cwd=PROJECT_ROOT,
             check=False,
@@ -73,9 +95,6 @@ def main() -> None:
         _patch_ollama_provider(base_url=resolved_base_url)
         config = OllamaProvider._provider_config()
 
-    datasets = args.dataset or _datasets_for_gate(args.gate)
-    tier = _tier_for_gate(args.gate) if args.tier is None else args.tier
-    tags = args.tag
     run_metadata = build_run_fingerprint(
         provider="OllamaProvider",
         model=str(config["model"]),
@@ -84,7 +103,9 @@ def main() -> None:
         tier=tier,
         tags=tags,
         prompt=build_system_prompt(),
+        native_prompt_contract=build_native_prompt_contract(),
         tool_definitions=get_tool_definitions(),
+        selection_manifest=selection.manifest(),
     )
 
     print(f"Provider: OllamaProvider ({config['model']})")
@@ -97,16 +118,21 @@ def main() -> None:
     print(f"Artifacts: {output_dir}")
     print()
 
-    results = run_eval_suite_sync(
-        OllamaProvider(),
-        datasets,
-        trace_writer=EvalTraceWriter(trace_path),
-        tier=tier,
-        tags=tags,
-        run_metadata=run_metadata,
-        recover_missing_tools=True,
+    results = (
+        run_eval_suite_sync(
+            OllamaProvider(),
+            trace_writer=EvalTraceWriter(trace_path),
+            selection=selection,
+            run_metadata=run_metadata,
+        )
+        if selection.manifest()["cases"]
+        else []
     )
-    report = print_report(results, verbose=True)
+    report = (
+        print_report(results, verbose=True)
+        if results
+        else "No eval cases selected; run not evaluated."
+    )
     summary = build_summary(gate=args.gate, run_metadata=run_metadata, results=results)
     readiness_config = ReadinessConfig(
         gate=args.gate,
@@ -169,30 +195,9 @@ def _parse_args() -> argparse.Namespace:
     return args
 
 
-def _patch_ollama_provider(
-    *,
-    model: str | None = None,
-    base_url: str | None = None,
-) -> None:
-    if model is None and base_url is None:
-        return
-    original = OllamaProvider._provider_config
-
-    @staticmethod  # type: ignore[misc]
-    def _patched_config() -> dict:
-        cfg = original()
-        if model is not None:
-            cfg["model"] = model
-        if base_url is not None:
-            cfg["base_url"] = base_url
-        return cfg
-
-    OllamaProvider._provider_config = _patched_config  # type: ignore[assignment]
-
-
 def _datasets_for_gate(gate: str) -> list[str]:
     if gate == "tier0":
-        return list_datasets()
+        return execution_dataset_names()
     if gate == "large":
         return ["large_schema"]
     return ["demo_readiness"]

@@ -223,12 +223,14 @@ def test_enabled_planned_settings_validate_catalog_source_at_startup() -> None:
         }
     }
 )
-def test_disabled_planned_settings_do_not_import_invalid_catalog_source() -> None:
+def test_deprecated_false_setting_does_not_bypass_invalid_profile_validation() -> None:
     class Query(graphene.ObjectType):
         ping = graphene.String()
 
     GraphQL._schema = graphene.Schema(query=Query)
     try:
-        validate_chat_settings()
+        with pytest.warns(DeprecationWarning, match="planned.enabled"):
+            with pytest.raises(ChatConfigurationError, match="must be a mapping"):
+                validate_chat_settings()
     finally:
         GraphQL.reset_registry()

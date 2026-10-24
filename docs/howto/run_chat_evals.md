@@ -1,5 +1,8 @@
 # Run the installed chat evaluation suite
 
+See [evaluation concepts](../concepts/chat_evaluation.md) for
+completion requirements, PASS/FAIL/UNSCORED reporting and historical baselines.
+
 Use the installed module CLI when you want to evaluate a provider against the
 datasets shipped in the GeneralManager wheel. The command runs inside a Django
 project, so it must load that project's settings before it imports providers or
@@ -37,9 +40,9 @@ against a development-only configuration.
 
 The wheel includes `basic_queries`, `demo_readiness`, `edge_cases`,
 `follow_ups`, `large_schema`, `multi_hop`, and `planned_orchestration`. The
-legacy CLI runs the six provider-backed datasets by default. The
+CLI runs the six provider-backed datasets through production Planned orchestration by default. The
 `planned_orchestration` dataset is packaged separately for deterministic,
-role-pinned tests and is not part of the legacy CLI suite. The `basic_queries`
+role-pinned tests and is not selected by the provider-backed CLI. The `basic_queries`
 dataset can use the built-in toy schema and data:
 
 ```bash
@@ -53,7 +56,7 @@ python -m general_manager.chat.evals \
 ```
 
 Omit `--provider` to use the provider configured in
-`GENERAL_MANAGER["CHAT"]`. Omit `--dataset` to run every legacy-compatible
+`GENERAL_MANAGER["CHAT"]`. Omit `--dataset` to run every provider-backed
 shipped dataset whose managers and expectations fit the configured project.
 Selecting `--dataset planned_orchestration` in this CLI is rejected; use the
 deterministic test command in section 6 instead. Use `--fixture large` with
@@ -87,7 +90,7 @@ python -m general_manager.chat.evals \
 ```
 
 The command exits with status 0 when every selected case passes and status 1
-when any case fails. Provider imports, provider construction, Django setup, and
+when any case fails or is unscored. An empty selection is rejected; it is not a pass. Provider imports, provider construction, Django setup, and
 dataset-loading errors propagate and produce a nonzero process exit.
 
 ## 4. Interpret the report
@@ -97,126 +100,77 @@ identify a skipped discovery path even when the final answer still satisfies
 the product contract. Use `--verbose` for failure details and `--trace-jsonl`
 when you need the full per-case trace.
 
-See the [chat prompt and eval model](../concepts/chat_prompting.md), the
+See [evaluation and reproducible comparisons](../concepts/chat_evaluation.md), the
 [copy-ready command recipes](../examples/chat_eval_cli.md), and the complete
 [chat eval CLI reference](../api/chat.md).
 
-## 5. Roll out planned chat safely
 
-Keep planned chat disabled by default while you validate the application's
-catalog, profile construction, role mappings, and single trust group. The
-smallest rollout uses the legacy provider as the implicit `default` profile:
+## 5. Freeze comparisons and retain evidence
 
-```python
-GENERAL_MANAGER = {
-    "CHAT": {
-        "enabled": True,
-        "provider": "general_manager.chat.providers.OllamaProvider",
-        "provider_config": {"model": "gemma4:e4b"},
-        "planned": {
-            "enabled": True,
-            "catalog": "myproject.chat.catalog.catalog",
-        },
-    }
-}
-```
+The CLI freezes the actual ordered selected cases once and reuses them for each
+compared provider. Keep the settings/source revision, fixture identity, provider
+and model configuration, full outcome denominator and traces with the report.
+Do not exclude UNSCORED results or silently replace a failed follow-up with an
+earlier successful turn. Comparisons across evaluation contracts or different
+case definitions need a new explicitly established baseline.
 
-For role-specific models, configure explicit profiles. Every role must be
-mapped, every profile must provide a `trust_group`, and all mapped profiles
-must use the same trust group:
+Both source CLIs use fingerprint contract `chat-run-fingerprint/2`. Its prompt
+hash includes the existing system prompt plus the native planner, executor and
+synthesis instructions, their conditional and repair variants, and active schema
+transport instructions. The scoring contract remains `chat-evaluation/5`.
+Historical fingerprints remain unchanged; summaries without the new fingerprint
+contract cannot serve as baselines for new native runs. Establish a new baseline
+instead of rewriting historical artifacts. Within the same fingerprint contract,
+comparisons across provider, model and prompt hashes remain supported.
 
-```python
-GENERAL_MANAGER["CHAT"].update(
-    {
-        "provider_profiles": {
-            "fast_local": {
-                "provider": "general_manager.chat.providers.OllamaProvider",
-                "provider_config": {"model": "gemma4:e4b"},
-                "trust_group": "local",
-            },
-            "strong_local": {
-                "provider": "general_manager.chat.providers.OllamaProvider",
-                "provider_config": {"model": "qwen3.5:9b"},
-                "trust_group": "local",
-            },
-        },
-        "planned": {
-            "enabled": True,
-            "catalog": "myproject.chat.catalog.catalog",
-            "roles": {
-                "planner": "strong_local",
-                "simple_executor": "fast_local",
-                "complex_executor": "strong_local",
-                "synthesizer": "strong_local",
-                "fallback_executor": "strong_local",
-            },
-            "max_concurrent_tasks": 3,
-            "evidence_timeout_seconds": 90,
-            "synthesis_timeout_seconds": 30,
-        },
-    }
-)
-```
+The production stage defaults are 90 seconds for planning/evidence and 30 for
+synthesis. Configure roles and domain metadata using
+[the configuration guide](configure_chat.md); verify the application with
+`python manage.py check`. A diagnostic experiment's longer deadline or larger
+request guard is not a production default.
 
-The catalog callable must return metadata for already chat-exposed managers.
-Each entry requires `domain`, `aliases`, `use_when`, and `distinguish_from`.
-Catalog metadata improves local ranking only; it does not expose managers or
-change permissions:
+## 6. Test deterministic orchestration in a source checkout
 
-```python
-def catalog():
-    return {
-        "PartManager": {
-            "domain": "manufacturing",
-            "aliases": ["part", "component"],
-            "use_when": "The question concerns designed components.",
-            "distinguish_from": ["MaterialManager"],
-        },
-    }
-```
-
-Run `python manage.py check` before enabling traffic. Use one non-production
-environment first; public requests must never select profiles or trust groups.
-
-Add deterministic fake-provider cases for graph validation, manager resolution,
-round exhaustion, 90-second evidence and 30-second synthesis deadlines,
-calculation evidence, partial coverage, and every stable terminal reason. Run
-those cases together with the existing legacy WebSocket, SSE, and HTTP tests.
-Then enable `GENERAL_MANAGER["CHAT"]["planned"]["enabled"]` for the
-non-production environment and inspect the allowlisted audit events: role,
-match-source category, hashed canonical call identity, progress, budgets,
-latency, usage/cost, evidence counts, coverage, and terminal reason. Do not
-add raw results, profile names, trust groups, plans, hidden manager metadata,
-credentials, or provider exceptions to an audit sink.
-
-Production rollout is an application-owned settings change and requires no
-migration. If an evaluation or operational check regresses, disable planned
-mode; the next request uses the compatible legacy strategy. Mutation requests
-already use that legacy safety path, including its authentication, mutation
-allow-listing, confirmation, persistence, and transport behavior. See the
-[planned-chat cookbook](../examples/planned_chat_orchestration.md) for a
-client-visible event sequence and the [Chat API reference](../api/chat.md#planned-read-orchestration)
-for exact payload and error contracts.
-
-## 6. Run deterministic planned orchestration evaluations
-
-The shipped `planned_orchestration` dataset is intentionally unavailable to the
-legacy provider CLI. It is exercised by deterministic role-pinned fake providers
-in the test suite, not by a network provider. It covers alias resolution, a
-one-edge dependency, dynamic children, calculation, partial answers, budget and
-deadline exhaustion, duplicate calls, no-progress termination, and mutation
-fallback. Run it with the legacy eval regressions and sanitized-diagnostic
-checks:
+The `planned_orchestration` dataset uses explicit deterministic role pins. It is
+not a network-provider CLI dataset. The relevant source tests run the production
+scheduler with controlled provider/tool IO:
 
 ```bash
-python -m pytest \
-  tests/unit/test_chat_planned_evals.py \
-  tests/unit/test_chat_evals.py \
-  tests/unit/test_chat_eval_diagnostics.py -q
+python -m pytest   tests/unit/test_chat_planned_evals.py   tests/unit/test_chat_eval_execution.py   tests/unit/test_chat_eval_diagnostics.py -q
 ```
 
-These tests require a role override for every planned role and reject mixed
-trust groups. They assert deterministic fingerprints, aggregate provider usage,
-public coverage, and traces with profile and trust-group values removed. The
-legacy strategy remains a separate adapter, so existing `_run_turn` behavior
-and event shape remain covered independently.
+These test mechanics and negative outcomes, not model answer accuracy. A negative
+scheduler scenario can pass pytest while its captured quality outcome correctly
+remains FAIL or UNSCORED.
+
+## 7. Migrate older integrations
+
+New runs identify `chat-evaluation/5` and use the production planned scheduler.
+The selected no-argument provider class is bound across planner, executor,
+synthesizer and fallback, with serial evaluator execution. Old `/1`, `/2`, `/3` and `/4`
+reports remain readable and unchanged; they are not comparable new baselines.
+Contract `/5` retains the bounded result-list check and adds conservative
+quantity-prose abstention after a recognized list; it does not establish factual
+correctness of arbitrary prose or quantity claims. See the
+[coverage limits](../concepts/chat_evaluation.md#packaged-answer-checks-have-limited-coverage).
+
+Remove `strategy="legacy"`, `recover_missing_tools=True` and custom `tool_defs`
+overrides from internal `run_case` callers. Omit `tool_defs` to use native
+scheduler definitions. `None`, an empty list and the exact current
+`get_tool_definitions()` list remain compatibility sentinels, not overrides.
+Modified schemas, subsets and duplicates reject before provider calls.
+
+`max_provider_requests` is the hard per-turn dispatch cap across all roles,
+including failed attempts (default 10, supported range 1–64).
+`max_tool_iterations` is its compatibility alias; do not supply both. It does not
+mean executor-only iterations or authorize an extra final-answer request.
+This cap is separate from normal production round accounting.
+
+Custom providers must emit exactly one terminal `DoneEvent`, then end/close the
+iterator successfully. EOF alone and a cleanup failure cannot establish success.
+Retain original provider/timeout/cancellation provenance and observed usage.
+
+The retired standalone `experiments.siwc_eval.runner --live` toy flags reject
+before setup/authentication. Source-checkout infrastructure experiments are
+explained in the [GM development guide](https://github.com/TimKleindick/general_manager/tree/feature/chat-schema-executor-v53/experiments/gm_eval).
+They do not log in implicitly or authorize an automatic live replacement.

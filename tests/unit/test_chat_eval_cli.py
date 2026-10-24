@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from general_manager.chat.evals import __main__ as eval_cli
+from general_manager.chat.evals.runner import EvalCase
 from general_manager.chat.settings import get_chat_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +23,14 @@ class _Provider:
 
 class _OtherProvider:
     pass
+
+
+def _filter_cases():
+    return [
+        EvalCase("selected", "", [], {}, tier=1, tags=["smoke", "regression"]),
+        EvalCase("other-tier", "", [], {}, tier=2, tags=["smoke"]),
+        EvalCase("other-tag", "", [], {}, tier=1, tags=[]),
+    ]
 
 
 def test_instantiate_provider_applies_model_override() -> None:
@@ -143,6 +152,10 @@ def test_main_runs_default_provider_with_fixture_filters_and_trace(capsys, tmp_p
     with (
         patch("django.setup") as django_setup,
         patch(
+            "general_manager.chat.evals.runner.load_dataset",
+            side_effect=lambda _name: _filter_cases(),
+        ),
+        patch(
             "general_manager.chat.evals.fixtures.setup_toy_schema"
         ) as setup_toy_schema,
         patch(
@@ -180,11 +193,12 @@ def test_main_runs_default_provider_with_fixture_filters_and_trace(capsys, tmp_p
 
     provider = run_eval_suite_sync.call_args.args[0]
     assert isinstance(provider, _Provider)
-    assert run_eval_suite_sync.call_args.args[1] == ["basic_queries"]
+    selection = run_eval_suite_sync.call_args.kwargs["selection"]
+    assert selection.datasets == ("basic_queries",)
+    assert [case.name for _dataset, case in selection.iter_cases()] == ["selected"]
     assert run_eval_suite_sync.call_args.kwargs == {
         "trace_writer": writer,
-        "tier": 1,
-        "tags": ["smoke"],
+        "selection": selection,
     }
     django_setup.assert_called_once_with()
     setup_toy_schema.assert_called_once_with()
@@ -200,6 +214,10 @@ def test_main_compare_mode_runs_each_provider_and_prints_report(capsys):
 
     with (
         patch("django.setup"),
+        patch(
+            "general_manager.chat.evals.runner.load_dataset",
+            side_effect=lambda _name: _filter_cases(),
+        ),
         patch(
             "general_manager.chat.evals.fixtures.setup_large_schema"
         ) as setup_large_schema,
@@ -233,8 +251,10 @@ def test_main_compare_mode_runs_each_provider_and_prints_report(capsys):
     assert import_string.call_args_list[0].args == ("demo.FirstProvider",)
     assert import_string.call_args_list[1].args == ("demo.SecondProvider",)
     assert run_eval_suite_sync.call_count == 2
-    assert run_eval_suite_sync.call_args_list[0].args[1] is None
-    assert run_eval_suite_sync.call_args_list[0].kwargs["tags"] == ["regression"]
+    selection = run_eval_suite_sync.call_args_list[0].kwargs["selection"]
+    assert run_eval_suite_sync.call_args_list[1].kwargs["selection"] is selection
+    assert all(case.name == "selected" for _dataset, case in selection.iter_cases())
+    assert "planned_orchestration" not in selection.datasets
     print_compare_report.assert_called_once_with(
         {
             "demo.FirstProvider": [first_result],

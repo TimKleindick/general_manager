@@ -40,10 +40,9 @@
         required_tool_calls:
           - name: search_managers
         forbidden_tools: ["mutate", "query"]
-        answer_excludes: ["VehicleManager"]
+        unavailable_managers: ["VehicleManager"]
     tool_calls:
       - name: search_managers
-    answer_excludes: ["VehicleManager"]
 
 - name: ambiguous_query
   description: "Vague question that requires discovery before answering"

@@ -40,3 +40,20 @@ def test_build_run_fingerprint_contains_prompt_tool_model_and_dataset_hashes() -
     assert len(fingerprint["prompt_hash"]) == 16
     assert len(fingerprint["tool_hash"]) == 16
     assert len(fingerprint["run_hash"]) == 16
+
+
+def test_bounded_list_gate_has_a_distinct_versioned_run_fingerprint() -> None:
+    current = build_run_fingerprint(
+        provider="local",
+        model="offline",
+        fixture="toy",
+        datasets=["basic_queries"],
+        tier=0,
+        tags=[],
+        prompt="same prompt",
+        tool_definitions=[],
+    )
+    assert current["evaluation_contract"] == "chat-evaluation/5"
+    historical = {key: value for key, value in current.items() if key != "run_hash"}
+    historical["evaluation_contract"] = "chat-evaluation/3"
+    assert current["run_hash"] != stable_hash(historical)

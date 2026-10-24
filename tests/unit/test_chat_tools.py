@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -27,6 +28,7 @@ from general_manager.chat.tools import (
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.utils.path_mapping import PathMap
+from tests.utils.chat_schema import install_registered_schema
 from tests.utils.simple_manager_interface import BaseTestInterface
 
 
@@ -103,9 +105,7 @@ class ChatSchemaIndexTests(SimpleTestCase):
             "PartManager": PartManager,
             "SecretManager": SecretManager,
         }
-        GraphQL._schema = graphene.Schema(
-            query=type("Query", (graphene.ObjectType,), {})
-        )
+        install_registered_schema()
 
         PathMap.mapping[("PartManager", "MaterialManager")] = SimpleNamespace(
             path=["material"]
@@ -173,17 +173,17 @@ class ChatSchemaIndexTests(SimpleTestCase):
         assert "MaterialManager" in index
 
     def test_build_schema_index_is_cached_until_explicitly_cleared(self) -> None:
-        """Registry content changes refresh the cache without manual clear."""
+        """An explicit lifecycle reset refreshes detached discovery exports."""
         first = build_schema_index()
         GraphQL.graphql_type_registry.pop("PartManager")
         GraphQL.manager_registry.pop("PartManager")
 
         second = build_schema_index()
-        third = build_schema_index()
-
         assert second is not first
-        assert third is second
-        assert set(second.keys()) == {"MaterialManager"}
+        assert second == first
+        clear_schema_index_cache()
+        third = build_schema_index()
+        assert set(third.keys()) == {"MaterialManager"}
 
     def test_search_managers_matches_name_description_and_fields(self) -> None:
         results = search_manager_summaries("materials density")
@@ -206,9 +206,10 @@ class ChatSchemaIndexTests(SimpleTestCase):
 
                 name = graphene.String()
 
-            ArchiveType.__name__ = f"ArchiveType{index:02d}"
+            ArchiveType._meta.__dict__["name"] = f"ArchiveType{index:02d}"
             GraphQL.graphql_type_registry[manager_name] = ArchiveType
             GraphQL.manager_registry[manager_name] = self.PartManager
+        install_registered_schema()
         clear_schema_index_cache()
 
         results = search_manager_summaries("inventory manager")
@@ -225,7 +226,7 @@ class ChatSchemaIndexTests(SimpleTestCase):
         assert summary["manager"] == "PartManager"
         assert summary["fields"] == ["name"]
         assert summary["relations"] == [
-            {"name": "material", "target": "MaterialManager"}
+            {"name": "material", "target": "MaterialManager", "path": ["material"]}
         ]
         assert summary["filters"] == []
 
@@ -235,8 +236,8 @@ class ChatSchemaIndexTests(SimpleTestCase):
     def test_find_exposed_path_rejects_hidden_destinations(self) -> None:
         assert find_exposed_path("PartManager", "SecretManager") is None
 
-    def test_find_exposed_path_discovers_reverse_multi_hop_paths(self) -> None:
-        assert find_exposed_path("MaterialManager", "PartManager") == ["material"]
+    def test_find_exposed_path_rejects_non_executable_reverse_paths(self) -> None:
+        assert find_exposed_path("MaterialManager", "PartManager") is None
 
     def test_find_exposed_path_returns_identity_path(self) -> None:
         assert find_exposed_path("PartManager", "PartManager") == []
@@ -248,13 +249,10 @@ class ChatSchemaIndexTests(SimpleTestCase):
 
     def test_tool_wrappers_delegate_to_schema_index(self) -> None:
         assert search_managers("inventory")[0]["manager"] == "PartManager"
-        assert get_manager_schema("MaterialManager") == {
-            "manager": "MaterialManager",
-            "description": "Materials used by parts.",
-            "fields": ["density", "name"],
-            "relations": [],
-            "filters": ["density_gt", "name"],
-        }
+        summary = get_manager_schema("MaterialManager")
+        assert summary["fields"] == ["density", "name"]
+        assert summary["filters"] == ["densityGt", "name"]
+        assert summary["contract_version"] == 2
         assert find_path("PartManager", "MaterialManager") == ["material"]
 
     @override_settings(
@@ -296,6 +294,8 @@ class ChatSchemaIndexTests(SimpleTestCase):
         assert result == {"data": [{"name": "Steel"}]}
         query_tool.assert_called_once_with(
             manager="MaterialManager",
+            root=None,
+            arguments=None,
             filters={"name": "Steel"},
             fields=["name"],
             limit=None,
@@ -314,6 +314,39 @@ class ChatSchemaIndexTests(SimpleTestCase):
         ]
         assert tools["query"]["input_schema"]["required"] == ["manager", "fields"]
         assert tools["mutate"]["input_schema"]["required"] == ["mutation", "input"]
+
+    def test_tool_definition_outputs_cannot_mutate_canonical_or_sibling_schemas(
+        self,
+    ) -> None:
+        from general_manager.chat.tool_metadata import TOOL_INPUT_SCHEMAS
+
+        original = deepcopy(TOOL_INPUT_SCHEMAS)
+        for strategy in ("discovery", "direct"):
+            with (
+                self.subTest(strategy=strategy),
+                override_settings(
+                    GENERAL_MANAGER={"CHAT": {"tool_strategy": strategy}}
+                ),
+                patch.dict(TOOL_INPUT_SCHEMAS, deepcopy(original), clear=True),
+            ):
+                definitions = get_tool_definitions()
+                baseline = deepcopy(definitions)
+                query = next(
+                    tool
+                    for tool in definitions
+                    if tool["name"] == "query" or tool["name"].startswith("query_")
+                )
+                schema = query["input_schema"]
+                schema["properties"]["fields"]["items"]["$ref"] = "tampered"
+                schema["required"].append("tampered")
+                schema["$defs"]["fieldSelection"].clear()
+                assert TOOL_INPUT_SCHEMAS == original
+                assert get_tool_definitions() == baseline
+                assert all(
+                    tool == unchanged
+                    for tool, unchanged in zip(definitions, baseline, strict=True)
+                    if tool["name"] != query["name"]
+                )
 
     def test_tool_descriptions_include_decision_hints_for_weaker_models(
         self,
@@ -338,8 +371,11 @@ class ChatSchemaIndexTests(SimpleTestCase):
         assert "When a query returns data successfully, use that result" in prompt
         assert "Answer rules" in prompt
         assert "Mutation safety" in prompt
-        assert '"filters": {"material__name": "Steel"}' in prompt
-        assert '"filters": {"parts__material__name": "Cobalt"}' in prompt
+        assert '"filters": {"material": {"name": "Steel"}}' in prompt
+        assert (
+            '"filters": {"partsList": {"any": {"material": {"name": "Cobalt"}}}}'
+            in prompt
+        )
         assert "Example tool call for search_managers:" in prompt
         assert '"query": "parts"' in prompt
         assert "Example tool call for query:" in prompt

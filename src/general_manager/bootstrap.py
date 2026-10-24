@@ -609,6 +609,14 @@ def handle_graph_ql(
         schema_kwargs["directives"] = _build_schema_directives(custom_directives)
     schema = graphene.Schema(**schema_kwargs)
     _attach_as_of_directive(schema)
+    from general_manager.api.graphql_units import attach_unit_contracts
+
+    attach_unit_contracts(
+        schema.graphql_schema, GraphQL.manager_registry, GraphQL.graphql_type_registry
+    )
+    from general_manager.chat.graphql_contract import compile_read_contract
+
+    compile_read_contract(schema.graphql_schema)
     GraphQL._schema = schema
     from general_manager.uploads.urls import add_file_upload_urls
 

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 from general_manager.chat.schema_index import build_schema_index
 from general_manager.chat.settings import get_chat_settings
-from general_manager.chat.tool_metadata import TOOL_DESCRIPTIONS, TOOL_USAGE_EXAMPLES
-from general_manager.utils.path_mapping import PathMap
+from general_manager.chat.tool_metadata import (
+    TOOL_DESCRIPTIONS,
+    TOOL_USAGE_EXAMPLES,
+    READ_TOOL_GUIDANCE,
+)
 
 PROMPT_MANAGER_DETAIL_LIMIT = 30
 
@@ -72,9 +76,8 @@ def _tool_decision_section() -> list[str]:
             "fields."
         ),
         (
-            "- If find_path returns a non-empty path for a record question, call "
-            "query on the destination manager before answering; do not say there "
-            "is no path."
+            "- find_path returns executable selections from the starting manager, "
+            "including collection wrappers. Do not reverse the path."
         ),
         (
             "4. For data questions, call every needed tool before writing any "
@@ -82,7 +85,7 @@ def _tool_decision_section() -> list[str]:
         ),
         (
             "5. When a query returns data successfully, use that result. Do not "
-            "retry the same question with different syntax."
+            "retry the same question with different syntax. Continue pagination when needed."
         ),
     ]
 
@@ -90,22 +93,28 @@ def _tool_decision_section() -> list[str]:
 def _query_construction_section() -> list[str]:
     return [
         "Query construction rules:",
+        READ_TOOL_GUIDANCE,
         (
             "1. Use exact manager names, exact field names, exact relation names, "
             "and exact filter names from get_manager_schema or the schema context."
         ),
         (
-            "2. Always use flat filter keys listed in the schema, such as "
-            "material__name or parts__material__name. Never invent nested filter "
-            'objects like {"material": {"name": "X"}}.'
+            "2. Contract 2 uses exact GraphQL names and the input shapes returned "
+            "by get_manager_schema. Use nested filter objects only where typed "
+            "inputs support them. query.filters contains the direct fields of the "
+            "root's filter input; do not add a filter wrapper. Alternatively pass "
+            "that input in arguments using the exact advertised root filter argument "
+            "name (arguments.filter only when named filter), never both forms. Never convert names "
+            "to Python snake_case."
         ),
         (
             "3. For query.fields, use strings for scalar fields and single-key "
             "objects for relation selections."
         ),
         (
-            "4. Relation selections must be arrays: "
-            '{"parts": ["name"]}, {"material": ["name", "density"]}.'
+            "4. Paginated relations retain items and pageInfo selections. "
+            "For nested arguments use {field, arguments, fields}. Inspect the "
+            "actual schema before choosing any argument or wrapper."
         ),
         (
             '5. Never use wildcard field selections like "*"; call '
@@ -134,7 +143,7 @@ def _answer_rules_section() -> list[str]:
         (
             "5. Do not ask whether to run another query after a successful query. "
             "Do not propose another query after data has already been returned. "
-            "Give the final answer from the returned rows."
+            "Give the final answer from the returned rows once required pages are covered."
         ),
         (
             "6. For which/list/show/find questions, name the requested row type "
@@ -261,16 +270,12 @@ def _relationship_lines(
         # Bound lazy path resolution to avoid reintroducing CPU-bound O(n^2) work.
         return relationship_lines
     for from_manager in exposed_names:
-        path_map = PathMap(from_manager)
-        for to_manager in exposed_names:
-            if from_manager == to_manager:
-                continue
-            tracer = path_map.to(to_manager)
-            path = getattr(tracer, "path", None) if tracer is not None else None
-            if path:
-                relationship_lines.append(
-                    f"{from_manager} -> {to_manager}: {' -> '.join(path)}"
-                )
+        for relation in cast(
+            list[dict[str, Any]], index[from_manager].get("relations", [])
+        ):
+            relationship_lines.append(
+                f"{from_manager} -> {relation['target']}: {' -> '.join(relation['path'])}"
+            )
     return relationship_lines
 
 

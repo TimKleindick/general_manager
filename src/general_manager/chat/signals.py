@@ -28,6 +28,21 @@ def emit_chat_tool_called(**kwargs: Any) -> None:
     chat_tool_called.send_robust(sender="general_manager.chat", **kwargs)
 
 
+def emit_chat_mutation_result(
+    *, user: Any, mutation: str, input: dict[str, Any], result: Any
+) -> None:
+    """Emit the existing tool and mutation signals for a resolved confirmation."""
+    emit_chat_tool_called(
+        user=user,
+        tool_name="mutate",
+        args={"mutation": mutation, "input": input},
+        result=result,
+    )
+    emit_chat_mutation_executed(
+        user=user, mutation=mutation, input=input, result=result
+    )
+
+
 def emit_chat_error(**kwargs: Any) -> None:
     """Emit the chat_error signal."""
     chat_error.send_robust(sender="general_manager.chat", **kwargs)
@@ -41,5 +56,6 @@ __all__ = [
     "emit_chat_error",
     "emit_chat_message_received",
     "emit_chat_mutation_executed",
+    "emit_chat_mutation_result",
     "emit_chat_tool_called",
 ]

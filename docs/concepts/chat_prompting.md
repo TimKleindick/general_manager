@@ -1,237 +1,133 @@
-# Chat prompt and eval iteration
+# Chat business definitions and conversational choices
 
-GeneralManager chat uses a fixed set of discovery tools instead of one tool per
-manager. This keeps the prompt small enough for projects with hundreds of
-managers, but it means prompt changes must be tested against tool-choice and
-answer-quality evals before they are treated as reliable.
+The same numerical question can have different legitimate meanings: gross or
+net revenue, a calendar or fiscal year, known values or all competitors, pieces
+or mass. Define application conventions once, preserve the user's scope and ask
+only for choices that remain open. Tool/schema evidence still supplies record
+facts. See [architecture](chat.md) for the complete request flow.
 
-This page is for prompt and eval contributors. Application developers should
-start with [Add LLM chat to a GeneralManager project](../howto/install_llm_chat.md)
-and [How LLM chat works](chat.md).
+## Supply business definitions
 
-## Prompt contract
+`GENERAL_MANAGER["CHAT"]["system_prompt"]` adds application context. Describe
+what a metric means, which manager/fields it applies to, relevant calendars,
+handling of missing values and genuine defaults. Avoid rules that falsely imply
+all data is known or override native permissions. For example:
 
-The system prompt is built in `general_manager.chat.system_prompt` and is split
-into stable sections:
-
-- identity and grounding
-- available tool descriptions
-- tool decision process
-- query construction rules
-- answer rules
-- mutation safety
-- tool examples
-- compact schema context
-- project-specific developer instructions
-
-The prompt should keep these behaviors stable:
-
-- call `search_managers` when the user does not provide an exact manager name
-- call `get_manager_schema` before using uncertain fields, filters, or relations
-- call `find_path` for cross-manager questions
-- answer data questions only from tool results
-- copy returned values exactly and avoid values not present in the tool JSON
-- report empty results honestly
-- avoid mutation calls unless the user clearly requests a write
-
-## Eval workflow
-
-Add eval cases before changing prompt text. The datasets live in
-`general_manager.chat.evals.datasets` and are scored as product contracts first:
-hard contract failures affect pass/fail, while strategy deviations explain when
-the model skipped a preferred discovery path but still satisfied the product
-contract.
-
-## Eval tiers
-
-The chat eval suite is a product behavior contract first and a model benchmark
-second.
-
-- Tier 0: toy contract cases that verify the harness, tool loop, prompt basics,
-  and safety invariants.
-- Tier 1: local demo readiness cases that should pass before showing the
-  prototype with a weaker local Ollama model.
-- Tier 2: synthetic large-schema cases that stress manager discovery, path
-  finding, and no-hallucination behavior.
-- Tier 3: production-like cases copied or adapted from real project workflows.
-
-Hard contract failures indicate product behavior that must be fixed. Strategy
-deviations indicate that the model skipped a preferred discovery path while
-still satisfying the hard contract.
-
-Run the deterministic tests first:
-
-```bash
-PYTHONPATH=src python -m pytest tests/unit/test_chat*.py
+```python
+GENERAL_MANAGER["CHAT"]["system_prompt"] = """
+For quantity comparisons, use pieces unless the user asks for another unit.
+Our reporting year is a calendar year. Missing prices remain unknown, not zero.
+A quantity forecast does not require a future price assumption.
+""".strip()
 ```
 
-Then run a live provider pass. For a local Ollama Gemma model:
+This text is a business convention for the example application, not an automatic
+framework default. A different application's definitions must match its actual
+data and reporting rules. A definition for one metric does not resolve another.
+Storage units and available years alone do not select a requested unit or horizon.
 
-```bash
-PYTHONPATH=src python scripts/run_chat_evals.py --tier 0 -v
+With nonempty configured context, a read planner returns a contextual envelope
+containing `plan`, `choices`, `clarification_requests` and `definition_bindings`,
+including on the first turn. Each definition binding quotes the actual application
+context and latest user scope for a closed analytical topic. The validator checks
+source membership, unique topics and consistency with open questions. Applicability
+is still a model judgment; a valid quote alone does not prove the interpretation.
+
+`plan_request()` defaults to configured application context. Custom callers may
+select an explicit `configured_context`; the response must follow the published
+schema for that input. Without application context or previous runtime questions,
+the ordinary first-turn plan remains valid. Explicit write requests retain their
+mutation intent and confirmation path.
+
+## Preserve original quote sources
+
+The planner's `user_sources` contains each eligible original USER message's
+`index` and `content`. Indices refer to the complete conversation context,
+counting all roles, rather than a USER-only ordinal. A definition or new question
+must quote the latest eligible user source. A reply to an earlier question must
+quote a real user message after that question.
+
+Do not rewrite indices or invent source text in a custom adapter. Standalone
+callers without any user message receive the original request as a user source;
+a mismatching current user message is not silently replaced. Tool observations,
+assistant objectives and application instructions cannot impersonate user quotes.
+
+## Ask analytical questions
+
+The analytical clarification branch accepts a closed JSON shape:
+
+```json
+{
+  "clarification": {
+    "language": "en",
+    "requirements": ["forecast_method", "reporting_currency"]
+  }
+}
 ```
 
-For local demo readiness with a weaker model:
+Supported topics are `criterion`, `metric`, `horizon`, `population`,
+`customer_identity`, `record_selector`, `unit`, `forecast_method`, `future_pricing`
+and `reporting_currency`. Languages are `en`, `de` and `fr`. The runtime renders
+fixed questions. This branch accepts no arbitrary question prose, numbers,
+entity names, factual claims or evidence IDs. Mixed answers and questions belong
+to the grounded answer branch and still need eligible evidence.
 
-```bash
-PYTHONPATH=src python scripts/run_chat_evals.py --model glm-4.7-flash:q4_K_M --dataset demo_readiness --tier 1 -v --trace-jsonl /tmp/chat-demo-eval.jsonl
-```
+Use `criterion` for the missing standard of an evaluative question and `metric`
+for the missing measurement of an already defined analysis. Ask for future
+pricing only if it affects the requested metric; a quantity forecast does not
+need it. Definitions may resolve analytical topics, but cannot decide concrete
+customer/record identity or create mutation permission.
 
-For synthetic large-schema discovery checks:
+Persisted question metadata binds the exact rendered assistant question, topic,
+original user request and history position. The next planner classifies every
+relevant question as `answered`, `open` or `conflicting`, with `same_scope`,
+`changed_scope` or `unrelated` applicability. It must use eligible original user
+quotes. Partial replies do not automatically close a choice.
 
-```bash
-PYTHONPATH=src python scripts/run_chat_evals.py --fixture large --dataset large_schema --tier 2 -v
-```
+An answered same-scope topic cannot be asked again under a new question ID. A
+changed entity, period or analysis may need a new source-bound choice. Validated
+choice context reaches execution and synthesis; synthesis cannot reopen a topic
+outside its permitted schema. A rejected response uses the existing bounded
+fallback and does not create another round/deadline allowance.
 
-For debugging a specific dataset, include the transcript:
+## Ask concrete record questions
 
-```bash
-PYTHONPATH=src python scripts/run_chat_evals.py --model gemma4:e4b --dataset basic_queries -v --show-chat --trace-jsonl /tmp/chat-basic-eval.jsonl
-```
+When a query finds ambiguous records, `clarify_selector` selects one current
+same-task query requirement and its actually linked evidence. The renderer
+requires 2–20 complete rows, an exact integer `total_count`, `complete=true`,
+`has_more=false` and distinct nonempty labels from a supported identity field.
+Every option comes from that query. The executor must first query the relevant
+population; the scheduler does not filter a broader saved population for it.
 
-### Installed module CLI
+The task waits for clarification rather than pretending to complete. Dependent
+work pauses and the terminal coverage lists `clarification_required`, including
+when no task resolved. A failed question-persistence callback produces a failure
+rather than publishing an unbound question. User selection is conversational
+scope; the next executor re-queries the current identity before dependent reads.
 
-The built-in YAML eval datasets ship with GeneralManager. The installed module
-CLI still needs the consuming Django project's settings for Django and provider
-configuration. For `basic_queries`, register its matching built-in toy schema
-and data:
+Only exact supported runtime question renderings/metadata are restored from
+history. Quoted examples, arbitrary assistant prose or summarized-away choices
+are not reconstructed by assumption. Decisions remain turn-local; the persisted
+question is not a cross-conversation cache of permissions or facts.
 
-```bash
-python -m general_manager.chat.evals \
-  --settings myproject.settings \
-  --dataset basic_queries \
-  --fixture toy \
-  --provider general_manager.chat.providers.OllamaProvider
-```
+## Population and dates
 
-Omit a built-in fixture only when the selected dataset's managers and
-expectations match the configured project's schema and data.
+An unqualified ranking with a clear metric, period and entity uses accessible
+records of that entity. Explicit current and unchanged prior user filters remain
+binding. That rule does not resolve an ambiguous metric or entity. Named targets
+require eligible identity-query evidence, including a correctly empty result.
+Explanatory comparison entities do not replace selected result entities.
 
-You can set `DJANGO_SETTINGS_MODULE` instead of passing `--settings`. Displaying
-the CLI help does not require Django settings:
+Explicit periods and later corrections take precedence over a completed-calendar-
+year default. The current year remains queryable. If the supplied business clock
+shows an included calendar year is still running, identify it as incomplete.
+Keep application fiscal calendars distinct from calendar-year conventions.
 
-```bash
-python -m general_manager.chat.evals --help
-```
+## Validate changes
 
-Treat failures by category:
-
-- **Product contract**: fix unsafe behavior, wrong data, hallucinated fields, or
-  ungrounded answers.
-- **Strategy deviation**: improve prompt/tool descriptions when the model skips
-  a preferred discovery path but still satisfies the hard contract.
-- **Tool selection**: adjust the decision process or add a more specific eval
-  when the legacy tool-sequence judge is still active for a case.
-- **Query correctness**: prefer tool-side normalization for common harmless LLM
-  formatting mistakes, and keep prompt wording exact.
-- **Answer quality**: strengthen answer rules and examples, but do not relax
-  grounding requirements.
-
-The eval runner should mirror production message shape. In particular, after a
-tool call it resumes with a neutral assistant marker plus the `tool` result, not
-with placeholders such as `[tool:query]`.
-
-## Production-readiness loop
-
-Use the readiness loop when changing the chat system prompt, tool metadata, tool
-schemas, tool-loop harness, or eval contracts.
-
-```bash
-PYTHONPATH=src python scripts/run_chat_readiness_loop.py \
-  --model glm-4.7-flash:q4_K_M \
-  --gate demo \
-  --output-dir /tmp/gm-chat-readiness \
-  --baseline-json .chat-readiness/demo-baseline.json \
-  --fail-on-regression
-```
-
-The loop writes:
-
-- `summary.json`: machine-readable pass rates, selected gate, run hash, and
-  diagnostics.
-- `report.md`: human-readable report with diagnostics and baseline comparison.
-- `trace.jsonl`: per-case conversation, tool calls, tool results, answer text,
-  and run fingerprint.
-
-Treat the loop as an iteration driver:
-
-1. Run the loop.
-2. Fix the largest hard diagnostic class first.
-3. Change one surface per iteration: prompt, tool metadata/schema, harness, or
-   dataset.
-4. Rerun the same gate and compare to the previous accepted baseline.
-5. Commit when deterministic tests pass and the selected gate improves without
-   a new hard diagnostic category.
-
-Do not relax product contracts to make a weaker local model pass. A contract
-change is valid only when the expected behavior was wrong for production.
-
-## Production hardening gates
-
-Before enabling chat for production traffic:
-
-- Run the deterministic chat suite:
-  `PYTHONPATH=src python -m pytest tests/unit/test_chat*.py tests/integration/test_chat*.py -q`
-- Run the full project suite:
-  `PYTHONPATH=src python -m pytest -q`
-- Run the local demo gate for stability:
-  `PYTHONPATH=src python scripts/run_chat_readiness_loop.py --gate tier0 --model glm-4.7-flash:q4_K_M --output-dir /tmp/gm-chat-readiness-tier0 --skip-tests`
-- Run the large-schema gate:
-  `PYTHONPATH=src python scripts/run_chat_readiness_loop.py --gate large --model glm-4.7-flash:q4_K_M --output-dir /tmp/gm-chat-readiness-large --skip-tests`
-
-A gate may pass with generic prompt/tool retries, but it must not pass with forbidden recovery or harness-synthesized answers.
-
-## Planned orchestration bounds and grounding
-
-The optional planned strategy is a read-only orchestration layer behind the
-normal chat transports. It converts a complex read into a validated graph of
-one to six root tasks, resolves each task against the live chat-exposed schema,
-collects immutable evidence, and synthesizes an answer only from evidence that
-belongs to resolved roots. Mutations stay on the legacy confirmation path. The
-[planned-chat rollout guide](../howto/run_chat_evals.md#5-roll-out-planned-chat-safely)
-shows how to enable the strategy; the [planned-chat cookbook](../examples/planned_chat_orchestration.md)
-contains a copy-ready settings and transport example.
-
-The five configured roles separate responsibilities: `planner` returns a
-strict JSON task graph, `simple_executor` and `complex_executor` gather
-evidence, `synthesizer` produces the grounded answer, and
-`fallback_executor` handles bounded escalation. A provider profile is selected
-by the server-side role mapping; clients cannot select a profile or trust
-group. All profiles used by one turn must share a trust group so escalation
-cannot silently cross a provider boundary.
-
-Roots can depend only on earlier roots, the longest root dependency chain has
-one edge, and a root can create at most two non-recursive children. The task
-runtime states are `pending`, `running`, `resolved`, `blocked`, and
-`budget_exhausted`; only committed compatible evidence resolves a task. Failed
-calls, candidate lists, provider prose, and raw plans are diagnostics rather
-than facts.
-
-Every provider request consumes a round, including failed, duplicate, cached,
-planner, and synthesis requests. A root and its children share 15 rounds. The
-whole turn has `min(5 + 13 * root_task_count, 80)` rounds. Local resolver passes
-are free but are limited to ten; after two consecutive no-progress passes an
-executor must select, escalate within its trust group, or block with
-`manager_unresolved`.
-
-The 120-second default response budget has a 90-second planning/evidence stage
-and a 30-second synthesis stage. Each provider request is capped by its stage's
-remaining time. At the evidence deadline, no new round starts, async provider
-work is cancelled, and unfinished tasks become `deadline_exceeded`; synthesis
-uses only already committed evidence. PostgreSQL queries receive a statement
-timeout bounded by the smaller of query timeout and remaining evidence time.
-Other database backends have best-effort cancellation: a synchronous query can
-finish in its worker thread after the response stops awaiting it.
-
-Derived evidence permits only `count`, `sum`, `average`, `minimum`, `maximum`,
-`difference`, `ratio`, and `percentage`. Operands reference resolved query
-evidence; arbitrary expressions, imports, callbacks, and code execution are
-not allowed. An invalid, missing, incompatible, or nonnumeric operand blocks
-that requirement rather than becoming a synthesized fact.
-
-Plans, routes, budgets, candidates, and evidence lineage stay in memory for the
-request. A disconnect or process restart ends the turn; planned execution is
-not resumable and introduces no persistence table or migration. This is
-compatible with legacy chat: disabling `planned.enabled` immediately restores
-the legacy strategy and its event behavior. The [chat API reference](../api/chat.md#planned-read-orchestration)
-lists the stable event, error, settings, and Python helper contracts.
+Review definitions, exact source roles, question rendering and multi-turn scope
+with deterministic tests. Then evaluate representative whole conversations with
+the actual provider/model and source revision. Structural validation cannot prove
+that a model interprets a definition or partial reply correctly. Keep historical
+requests and scores unchanged; see [evaluation concepts](chat_evaluation.md) and
+[the evaluation how-to](../howto/run_chat_evals.md).

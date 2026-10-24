@@ -103,6 +103,7 @@ class _SummaryProvider:
         del messages, tools
         yield TextChunkEvent(content=" brief")
         yield TextChunkEvent(content=" summary ")
+        yield DoneEvent(TokenUsage())
 
 
 class _NeverCompletingSummaryProvider:
@@ -126,6 +127,7 @@ class _UsageSummaryProvider:
 
 class _DoneThenWaitSummaryProvider:
     closed = False
+    provider_config: ClassVar[dict[str, float]] = {"timeout_seconds": 0.02}
 
     async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         del messages, tools
@@ -149,6 +151,7 @@ class _MutateSuccessProvider:
                 name="mutate",
                 args={"mutation": "updatePart", "input": {"id": "1"}},
             )
+            yield DoneEvent(TokenUsage())
             return
         yield TextChunkEvent(content="updated")
         yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=3))
@@ -177,6 +180,7 @@ class _QueryLoopProvider:
             name="query",
             args={"manager": "Part", "fields": ["name"]},
         )
+        yield DoneEvent(TokenUsage())
 
 
 class _ToolThenSynthesisProvider:
@@ -211,6 +215,7 @@ class _TwoQueryRoundProvider:
                 name="query",
                 args={"manager": "Part", "fields": ["name"]},
             )
+            yield DoneEvent(TokenUsage())
             return
         if len(self.calls) == 2:
             yield ToolCallEvent(
@@ -218,6 +223,7 @@ class _TwoQueryRoundProvider:
                 name="search_managers",
                 args={"query": "parts", "limit": 2},
             )
+            yield DoneEvent(TokenUsage())
             return
         yield TextChunkEvent(content="Both calls completed.")
         yield DoneEvent(usage=TokenUsage(input_tokens=2, output_tokens=3))
@@ -347,16 +353,14 @@ class ChatViewHelperTests(SimpleTestCase):
             ]
         )
 
-    def test_summary_stops_and_closes_stream_after_done(self) -> None:
+    def test_summary_rejects_a_stream_that_does_not_end_after_done(self) -> None:
         provider = _DoneThenWaitSummaryProvider()
 
-        assert (
+        with self.assertRaises(asyncio.TimeoutError):
             async_to_sync(_summarize_messages_with_provider)(
                 provider,
                 [SimpleNamespace(role="user", tool_name="", content="hello")],
             )
-            == ""
-        )
         assert provider.closed is True
 
     def test_build_messages_updates_empty_summary_when_history_is_long(self) -> None:
@@ -1014,7 +1018,7 @@ class ChatViewHelperTests(SimpleTestCase):
         }
         assert events[-1]["type"] == "done"
 
-    def test_run_provider_turn_returns_empty_list_when_provider_yields_no_events(
+    def test_run_provider_turn_rejects_missing_completion_when_provider_yields_no_events(
         self,
     ) -> None:
         with (
@@ -1027,15 +1031,14 @@ class ChatViewHelperTests(SimpleTestCase):
             ),
             patch("general_manager.chat.views.get_tool_definitions", return_value=[]),
         ):
-            events = async_to_sync(_run_provider_turn)(
-                scope={},
-                conversation=object(),
-                provider=_NoEventProvider(),
-                messages=[Message(role="user", content="hello")],
-                transport="http",
-            )
-
-        assert events == []
+            with self.assertRaisesRegex(ValueError, "stream_without_completion"):
+                async_to_sync(_run_provider_turn)(
+                    scope={},
+                    conversation=object(),
+                    provider=_NoEventProvider(),
+                    messages=[Message(role="user", content="hello")],
+                    transport="http",
+                )
 
     def test_execute_message_request_returns_empty_events_without_provider(
         self,
@@ -1065,16 +1068,16 @@ class ChatViewHelperTests(SimpleTestCase):
         assert returned is conversation
         assert events == []
 
-    def test_execute_message_request_default_strategy_skips_planned_preparation(
+    def test_default_http_read_always_uses_planned_preparation(
         self,
     ) -> None:
-        """Selecting planned code for the default path would alter legacy events."""
+        """The old disabled flag cannot bypass the Planned read boundary."""
         request = self.factory.post(
             "/chat/", data=b"{}", content_type="application/json"
         )
         conversation = object()
-        legacy_events = [
-            {"type": "text_chunk", "content": "legacy answer"},
+        planned_events = [
+            {"type": "text_chunk", "content": "planned answer"},
             {"type": "done", "usage": {"input_tokens": 1, "output_tokens": 2}},
         ]
         with (
@@ -1096,20 +1099,27 @@ class ChatViewHelperTests(SimpleTestCase):
             ),
             patch(
                 "general_manager.chat.views.prepare_planned_turn",
-                new_callable=AsyncMock,
+                new=AsyncMock(return_value=SimpleNamespace(mutation_plan=None)),
             ) as prepare,
             patch(
+                "general_manager.chat.views.iter_planned_read_events",
+                new=_iter_events_from(planned_events),
+            ),
+            patch(
+                "general_manager.chat.views._planned_catalog_summary", return_value={}
+            ),
+            patch(
                 "general_manager.chat.views._iter_provider_turn_events",
-                new=_iter_events_from(legacy_events),
+                side_effect=AssertionError("legacy read"),
             ),
         ):
             _conversation, events = async_to_sync(_execute_message_request)(
                 request, transport="http"
             )
 
-        assert events == legacy_events
+        assert events == planned_events
         assert "orchestration" not in events[-1]
-        prepare.assert_not_awaited()
+        prepare.assert_awaited_once()
 
     def test_execute_message_request_streams_planned_read_events(self) -> None:
         """Replacing the neutral iterator with the legacy loop loses task metadata."""
@@ -1247,6 +1257,12 @@ class ChatViewHelperTests(SimpleTestCase):
             },
         ]
         with (
+            patch(
+                "general_manager.chat.views._build_messages",
+                new=AsyncMock(
+                    return_value=[Message(role="user", content="create a part")]
+                ),
+            ),
             patch(
                 "general_manager.chat.views._prepare_message_request",
                 new=AsyncMock(

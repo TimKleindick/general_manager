@@ -17,6 +17,7 @@ class AnswerSenseScore:
     score: float
     checks: dict[str, bool] = field(default_factory=dict)
     issues: list[str] = field(default_factory=list)
+    abstentions: list[str] = field(default_factory=list)
 
 
 def _passing_answer_sense() -> AnswerSenseScore:
@@ -47,6 +48,7 @@ def judge_product_contract(
     strategy = _as_dict(contract.get("strategy"))
     answer_sense = judge_answer_sense(
         expected_result_values=_as_list(hard.get("results_contain")),
+        expected_answer_values=_as_list(hard.get("answer_contains")),
         tool_calls=tool_calls,
         tool_results=tool_results,
         answer_text=answer_text,
@@ -79,6 +81,11 @@ def judge_product_contract(
         )
     )
     violations.extend(answer_sense.issues)
+    violations.extend(
+        _unavailable_manager_messages(
+            _as_list(hard.get("unavailable_managers")), answer_text
+        )
+    )
 
     strategy_deviations.extend(
         _missing_tool_call_messages(
@@ -105,6 +112,7 @@ def judge_answer_sense(
     tool_calls: list[dict[str, Any]],
     tool_results: list[Any],
     answer_text: str,
+    expected_answer_values: list[Any] | None = None,
 ) -> AnswerSenseScore:
     """Rate whether the answer makes sense against the observed tool evidence."""
     expected_values = [str(item) for item in expected_result_values]
@@ -156,6 +164,21 @@ def judge_answer_sense(
             f"Answer omits required result value: {value}" for value in omitted_values
         )
 
+    result_terms = {value.casefold() for value in expected_values}
+    abstentions: list[str] = []
+    # Mixed schema/data contracts can legitimately list field names beside rows.
+    if result_terms and all(
+        str(value).casefold() in result_terms
+        for value in (expected_answer_values or [])
+    ):
+        list_messages = _answer_list_messages(tool_calls, tool_results, answer_text)
+        if list_messages is not None:
+            checks["no_unsupported_list_values"] = not list_messages
+            issues.extend(list_messages)
+            abstentions = _quantity_prose_abstentions(
+                tool_calls, tool_results, answer_text, expected_values
+            )
+
     passed_count = sum(1 for passed in checks.values() if passed)
     score = passed_count / len(checks) if checks else 1.0
     return AnswerSenseScore(
@@ -163,7 +186,40 @@ def judge_answer_sense(
         score=score,
         checks=checks,
         issues=issues,
+        abstentions=abstentions,
     )
+
+
+def _quantity_prose_abstentions(
+    tool_calls: list[dict[str, Any]],
+    tool_results: list[Any],
+    answer_text: str,
+    expected_values: list[str],
+) -> list[str]:
+    """Abstain on numeric prose outside a list contract's supported labels.
+
+    TurnRecord has no claim-to-measurement bindings. Even a matching scalar in
+    query data cannot establish a prose claim's subject, metric, unit or scope.
+    This bounded recognizer is not a general natural-language adjudicator.
+    """
+    # Detect the start, not the end, of an amount: units and exponent notation
+    # may follow immediately (7kg, .5kg, 7e3kg). This does not parse its value.
+    number = re.compile(r"(?<!\w)[+-]?\d")
+    reasons = []
+    prose = re.sub(
+        r"^(?:[ \t]*(?:[-*+] |\d+[.)] ))+", "", answer_text, flags=re.MULTILINE
+    )
+    for sentence in _answer_sentences(prose):
+        body = sentence.strip()
+        if (
+            body.strip(".*_` ").casefold()
+            in {value.casefold() for value in expected_values}
+            or _answer_list_messages(tool_calls, tool_results, sentence) == []
+        ):
+            continue
+        if number.search(body):
+            reasons.append("Unverifiable quantity prose in list answer: " + sentence)
+    return reasons
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -261,6 +317,39 @@ def _answer_messages(
     return messages
 
 
+def _unavailable_manager_messages(managers: list[Any], answer: str) -> list[str]:
+    """Reject explicit availability claims, permitting truthful named denials.
+
+    These bounded legacy checks do not replace SIWC's independent semantic Judge.
+    Naming a manager is not by itself an assertion that it is available.
+    """
+    messages = []
+    denial = r"(?:not\s+(?:available|exposed|accessible|supported|present)|unavailable|not\s+exist)"
+    for item in managers:
+        manager = re.escape(str(item))
+        target = rf"\b{manager}\b"
+        subject = rf"(?:{target}|that requested manager|the requested manager)"
+        patterns = (
+            rf"{subject}\s+(?:(?:is|was)\s+{denial}|does\s+not\s+exist)",
+            rf"\bno\s+(?:manager\s+(?:named|called)\s+)?{target}(?:\s+is\s+(?:available|exposed|accessible))?",
+            rf"{target},?\s+which\s+(?:does\s+not\s+exist|is\s+{denial})",
+            rf"\b(?:cannot|can't|do not|don't)\s+(?:access|query|find)\s+{target}",
+        )
+        remaining = answer
+        for pattern in patterns:
+            remaining = re.sub(pattern, "", remaining, flags=re.IGNORECASE)
+        assertions = (
+            rf"{target}\s+(?:(?:is|was)\s+(?:available|exposed|accessible|supported|present|not\s+unavailable)|exists?\b|contains?\b)",
+            rf"\b(?:I|we)\s+(?:found|can\s+(?:access|query))\s+{target}",
+            rf"\b(?:available|exposed)\s+managers?\s*:[^.!?\n]*{target}",
+        )
+        if any(
+            re.search(pattern, remaining, flags=re.IGNORECASE) for pattern in assertions
+        ):
+            messages.append(f"Answer must truthfully deny availability: {item}")
+    return messages
+
+
 def _answer_sense_messages(
     results_contain: list[Any],
     tool_results: list[Any],
@@ -294,6 +383,96 @@ def _has_successful_query_result(
         and len(result["data"]) > 0
         for call, result in zip(tool_calls, tool_results, strict=False)
     )
+
+
+def _answer_list_messages(
+    tool_calls: list[dict[str, Any]],
+    tool_results: list[Any],
+    answer_text: str,
+) -> list[str] | None:
+    """Check initial bare lists, not arbitrary prose or semantic claim support.
+
+    Only aligned successful query data can support listed values. A list must
+    include an observed value, and every item must be a bare label or an exact
+    observed scalar. Unrecognized syntax is outside this bounded check.
+    """
+    if len(tool_calls) != len(tool_results):
+        return None
+    values = {
+        value
+        for call, result in zip(tool_calls, tool_results, strict=True)
+        if _tool_kind(str(call.get("name", ""))) == "query"
+        and isinstance(result, dict)
+        and result.get("status", "success") == "success"
+        and not result.get("error")
+        and not result.get("errors")
+        and isinstance(result.get("data"), list)
+        for value in _scalar_values(result["data"])
+        if value.strip()
+    }
+    if not values:
+        return None
+
+    # Protect observed labels containing commas, conjunctions, or periods before
+    # parsing presentation. The marker cannot occur in the candidate answer.
+    marker = "\x00"
+    while marker in answer_text:
+        marker += "\x00"
+    pattern = "|".join(
+        re.escape(value) for value in sorted(values, key=len, reverse=True)
+    )
+    observed = re.compile(rf"(?<!\w)(?:{pattern})(?!\w)", re.IGNORECASE)
+    # Try the initial inline sentence first. Numbered-looking later prose must
+    # not suppress a list whose full observed labels are already recognized.
+    candidates: list[tuple[bool, list[str]]] = []
+    masked = observed.sub(lambda _match: marker, answer_text).strip()
+    sentences = _answer_sentences(masked)
+    if sentences and not sentences[0].endswith("?"):
+        first = sentences[0]
+        conjunction = re.search(r"\s+(?:and|und)\s+", first, re.IGNORECASE)
+        items = re.split(
+            r",\s*(?:(?:and|und)\s+)?|\s+(?:and|und)\s+",
+            first,
+            flags=re.IGNORECASE,
+        )
+        # Two comma-separated fragments can be ordinary prose ("Steel, too.").
+        if conjunction or len(items) >= 3:
+            candidates.append((False, items))
+
+    bullet = re.compile(r"^\s*(?:[-*+] |\d+[.)] )\s*(.+)$")
+    items = []
+    for line in answer_text.strip().splitlines():
+        match = bullet.match(line)
+        if match is None:
+            break
+        # Preserve numbered-list prefixes even when their numbers are also
+        # observed labels; only the item body represents a result value.
+        items.append(observed.sub(lambda _match: marker, match.group(1)))
+    candidates.append((True, items))
+
+    for is_bullet_list, items in candidates:
+        items = [item.strip(" \t*_`") for item in items]
+        # Unpunctuated bullet labels may contain multiple words. Sentence-like
+        # bullets and inline explanatory clauses remain outside this grammar.
+        items = [
+            item.strip(".")
+            if not is_bullet_list or not re.search(r"\s", item)
+            else item
+            for item in items
+        ]
+        if len(items) < 2 or marker not in items:
+            continue
+        label = r"\w+(?:[-']\w+)*"
+        if is_bullet_list:
+            label = rf"{label}(?:[ \t]+{label})*"
+        if any(item != marker and re.fullmatch(label, item) is None for item in items):
+            continue
+        return [
+            f"Answer lists unsupported result value: {item}"
+            for item in dict.fromkeys(items)
+            if item != marker
+        ]
+    return None
 
 
 def _answer_contradicts_successful_path(

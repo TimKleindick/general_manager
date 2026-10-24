@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 if TYPE_CHECKING:
@@ -36,17 +36,89 @@ class FailureDiagnostic:
 
 def classify_result(result: EvalResult) -> FailureDiagnostic | None:
     """Classify the highest-signal failure or strategy deviation for one result."""
-    if result.error:
+    if result.error == "missing_turn_answer":
+        return FailureDiagnostic(
+            case=result.case.name,
+            owner="prompt",
+            category="missing_turn_answer",
+            severity="hard",
+            failure_class="answer_grounding",
+            message=result.error,
+            next_action=(
+                "Inspect the completed response and decoded text events to distinguish "
+                "an empty model answer from an adapter decoding problem."
+            ),
+        )
+    if result.error == "turn_request_budget_exhausted":
+        return FailureDiagnostic(
+            case=result.case.name,
+            owner="harness",
+            category="turn_request_budget_exhausted",
+            severity="hard",
+            failure_class="eval_or_harness",
+            message=result.error,
+            next_action=(
+                "Inspect the tool loop and request budget before attributing the "
+                "incomplete turn to answer quality."
+            ),
+        )
+    if result.error in {
+        "invalid_or_missing_turn_expectations",
+        "invalid_result_set_expectation",
+    }:
+        return FailureDiagnostic(
+            case=result.case.name,
+            owner="dataset",
+            category="invalid_expectations",
+            severity="hard",
+            failure_class="eval_or_harness",
+            message=result.error,
+            next_action="Repair the per-turn expectations before running inference.",
+        )
+    if result.error is not None:
+        if result.failure_category == "model_task_failure":
+            return FailureDiagnostic(
+                case=result.case.name,
+                owner="prompt",
+                category="model_task_failure",
+                severity="hard",
+                failure_class="model_demo_reliability",
+                message=result.error,
+                next_action="Inspect the completed plan, model action and grounding evidence.",
+            )
         return FailureDiagnostic(
             case=result.case.name,
             owner="provider",
             category="provider_error",
             severity="hard",
             failure_class="eval_or_harness",
-            message=result.error,
+            message=result.error
+            or "Provider execution failed without diagnostic text.",
             next_action=(
                 "Verify the provider is reachable, the model is installed, and the "
                 "readiness command uses the intended base URL."
+            ),
+        )
+
+    for index, turn in enumerate(result.turn_results, start=1):
+        if not turn.passed and (diagnostic := classify_result(turn)) is not None:
+            return replace(
+                diagnostic,
+                case=result.case.name,
+                message=f"turn {index}: {diagnostic.message}",
+            )
+
+    if result.result_set_score is not None and not result.result_set_score.passed:
+        return FailureDiagnostic(
+            case=result.case.name,
+            owner="tool_schema",
+            category="wrong_query_result",
+            severity="hard",
+            failure_class="tool_or_schema_retry",
+            message=result.result_set_score.reason or "result_set_mismatch",
+            next_action=(
+                "Check the final query in this turn against the expected rows, "
+                "including extra rows, missing rows, and duplicate names."
             ),
         )
 
@@ -72,7 +144,11 @@ def classify_result(result: EvalResult) -> FailureDiagnostic | None:
             if diagnostic is not None:
                 return diagnostic
 
-    if result.tool_score is not None and not result.tool_score.passed:
+    if (
+        contract is None
+        and result.tool_score is not None
+        and not result.tool_score.passed
+    ):
         message = "; ".join(result.tool_score.mismatches)
         return FailureDiagnostic(
             case=result.case.name,

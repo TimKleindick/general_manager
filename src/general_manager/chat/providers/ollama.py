@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from copy import deepcopy
 from importlib import import_module
 from importlib.util import find_spec
-from inspect import isawaitable
 from types import MappingProxyType
 from typing import Any, Self
 from urllib.parse import urlparse
@@ -16,6 +15,8 @@ from general_manager.chat.providers._shared import (
     ChatEvent,
     DoneEvent,
     Message,
+    ProviderCompletionError,
+    close_async_resource,
     TextChunkEvent,
     ToolCallEvent,
     TokenUsage,
@@ -172,6 +173,20 @@ class OllamaProvider(BaseLLMProvider):
                 stream=True,
             )
             async for chunk in stream:
+                if chunk.get("done") is True and chunk.get("done_reason") not in {
+                    None,
+                    "stop",
+                }:
+                    # Record literal terminal usage without admitting this
+                    # rejected response or any tool calls on its final chunk.
+                    if "prompt_eval_count" in chunk or "eval_count" in chunk:
+                        yield DoneEvent(
+                            usage=TokenUsage(
+                                input_tokens=int(chunk.get("prompt_eval_count", 0)),
+                                output_tokens=int(chunk.get("eval_count", 0)),
+                            )
+                        )
+                    raise ProviderCompletionError("incomplete_provider_response")
                 message = chunk.get("message", {})
                 content = message.get("content")
                 if isinstance(content, str) and content:
@@ -202,18 +217,10 @@ class OllamaProvider(BaseLLMProvider):
                         )
                     )
                     return
+            raise ProviderCompletionError()
         finally:
-            await self._close_async_resource(stream)
-            await self._close_async_resource(getattr(client, "_client", None))
-
-    @staticmethod
-    async def _close_async_resource(resource: Any) -> None:
-        """Close a raw SDK stream or owned client when it exposes a closer."""
-        close = getattr(resource, "aclose", None)
-        if callable(close):
-            result = close()
-            if isawaitable(result):
-                await result
+            await close_async_resource(stream)
+            await close_async_resource(getattr(client, "_client", None))
 
 
 __all__ = ["OllamaBaseUrlError", "OllamaDependencyImportError", "OllamaProvider"]

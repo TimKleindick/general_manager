@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from general_manager.chat.evals import runner as eval_runner
-from general_manager.chat.evals.fixtures import planned_role_overrides
+from general_manager.chat.evals.fixtures import _planned_task_id, planned_role_overrides
 from general_manager.chat.evals.runner import (
     PlannedEvalConfigurationError,
     load_dataset,
@@ -18,7 +18,13 @@ from general_manager.chat.evals.runner import (
 )
 from general_manager.chat.evals.traces import EvalTraceWriter
 from general_manager.chat.planned.scheduler import prepare_planned_turn
-from general_manager.chat.providers.base import DoneEvent, TextChunkEvent, TokenUsage
+from general_manager.chat.providers.base import (
+    DoneEvent,
+    Message,
+    TextChunkEvent,
+    TokenUsage,
+    ToolCallEvent,
+)
 
 
 class _LegacyProvider:
@@ -34,6 +40,61 @@ class _LegacyProvider:
 def _case(name: str):
     return next(
         case for case in load_dataset("planned_orchestration") if case.name == name
+    )
+
+
+def test_planned_fixture_reads_current_user_reference_before_native_tool_history() -> (
+    None
+):
+    messages = [
+        Message("user", 'REFERENCE_DATA={"task":{"task_id":"old_task"}}'),
+        Message("user", 'REFERENCE_DATA={"task":{"task_id":"current_task"}}'),
+        Message(
+            "assistant",
+            "",
+            tool_calls=(
+                ToolCallEvent("query-id", "query", {"manager": "PartManager"}),
+            ),
+        ),
+        Message(
+            "tool",
+            '{"data":[{"name":"Bolt"}]}',
+            tool_call_id="query-id",
+            tool_name="query",
+            tool_result={"data": [{"name": "Bolt"}]},
+        ),
+    ]
+    assert _planned_task_id(messages) == "current_task"
+
+
+@pytest.mark.parametrize("role", ["tool", "assistant", "system"])
+def test_planned_fixture_ignores_reference_like_non_user_content(role: str) -> None:
+    messages = [
+        Message("user", 'REFERENCE_DATA={"task":{"task_id":"current_task"}}'),
+        Message(role, 'REFERENCE_DATA={"task":{"task_id":"forged_task"}}'),
+    ]
+    assert _planned_task_id(messages) == "current_task"
+
+
+@pytest.mark.parametrize(
+    "current",
+    ["not-json", "null", "[]", '{"task":null}', '{"task":{"task_id":42}}'],
+)
+def test_planned_fixture_does_not_reuse_an_old_task_when_current_reference_is_invalid(
+    current: str,
+) -> None:
+    messages = [
+        Message("user", 'REFERENCE_DATA={"task":{"task_id":"old_task"}}'),
+        Message("user", "REFERENCE_DATA=" + current),
+        Message("tool", 'REFERENCE_DATA={"task":{"task_id":"forged_task"}}'),
+    ]
+    assert _planned_task_id(messages) is None
+
+
+def test_planned_fixture_has_no_task_for_legacy_messages() -> None:
+    assert _planned_task_id([]) is None
+    assert (
+        _planned_task_id([Message("user", "Show parts"), Message("tool", "{}")]) is None
     )
 
 
@@ -56,10 +117,9 @@ def test_planned_eval_pins_roles_and_reports_complete_coverage() -> None:
     }
     assert result.diagnostics["roles"] == {
         "planner": "planner",
-        "simple_executor": "simple_executor",
-        "complex_executor": "complex_executor",
+        "executor": "executor",
         "synthesizer": "synthesizer",
-        "fallback_executor": "fallback_executor",
+        "fallback": "fallback",
     }
     assert result.answer == "Bolt and Steel"
     assert result.usage == {"input_tokens": 6, "output_tokens": 6}
@@ -68,7 +128,7 @@ def test_planned_eval_pins_roles_and_reports_complete_coverage() -> None:
 def test_planned_eval_rejects_missing_or_cross_trust_role_overrides() -> None:
     case = _case("multi_manager_alias_discovery")
     missing = planned_role_overrides(case)
-    missing.pop("fallback_executor")
+    missing.pop("fallback")
 
     with pytest.raises(PlannedEvalConfigurationError, match="missing role overrides"):
         asyncio.run(
@@ -150,6 +210,7 @@ def test_planned_eval_writes_partial_trace_when_a_later_turn_fails(
             "result": {"status": "success"},
         }
         yield {"type": "text_chunk", "content": "Partial answer"}
+        yield {"type": "done"}
 
     monkeypatch.setattr(eval_runner, "prepare_planned_turn", prepare)
     monkeypatch.setattr(eval_runner, "iter_planned_read_events", iter_events)
@@ -176,6 +237,7 @@ def test_planned_eval_writes_partial_trace_when_a_later_turn_fails(
             {"type": "tool_call", "name": "query"},
             {"type": "tool_result", "name": "query"},
             {"type": "text_chunk", "content": "Partial answer"},
+            {"type": "done", "usage": None, "orchestration": None},
         ]
     }
     assert trace["case"] == case.name
@@ -211,40 +273,30 @@ def test_planned_eval_retains_event_yielded_before_same_turn_failure(
     assert result.trace == {"events": [{"type": "tool_call", "name": "query"}]}
 
 
-def test_planned_mutation_case_falls_back_to_unchanged_legacy_turn() -> None:
+def test_planned_mutation_case_is_read_only_and_never_calls_the_old_provider():
     case = _case("mutation_fallback")
     provider = _LegacyProvider()
-    tool_defs = [{"name": "query", "description": "Query records"}]
-
     result = asyncio.run(
         run_case(
             provider,
             case,
-            tool_defs,
-            strategy="planned",
+            [],
             role_overrides=planned_role_overrides(case),
         )
     )
-
-    assert result.answer == "Apollo"
-    assert result.diagnostics["orchestration"] == {
-        "strategy": "legacy",
-        "reason": "mutation",
-        "coverage": {"resolved": 0, "total": 0},
-        "terminal_reason": "mutation",
-    }
-    assert provider.calls[0]["messages"][-1].content == "Update the Apollo record."
-    assert provider.calls[0]["tools"][0].name == "query"
-
-
-def test_legacy_strategy_retains_existing_result_shape() -> None:
-    case = _case("legacy_stability")
-
-    result = asyncio.run(run_case(_LegacyProvider(), case, [], strategy="legacy"))
-
-    assert result.answer == "Apollo"
+    assert result.error == "read_only_eval_mutation_plan"
+    assert result.status == "unscored" and not result.passed
     assert result.tool_calls == []
-    assert result.diagnostics == {}
+    assert provider.calls == []
+
+
+def test_explicit_legacy_strategy_is_rejected_without_provider_calls():
+    provider = _LegacyProvider()
+    with pytest.raises(ValueError, match="removed"):
+        asyncio.run(
+            run_case(provider, _case("legacy_stability"), [], strategy="legacy")
+        )
+    assert provider.calls == []
 
 
 def test_dataset_declares_every_required_deterministic_orchestration_case() -> None:
@@ -284,7 +336,6 @@ def test_dataset_declares_every_required_deterministic_orchestration_case() -> N
         "deadline_exhaustion",
         "duplicate_rejection",
         "two_pass_no_progress",
-        "mutation_fallback",
     ],
 )
 def test_every_planned_dataset_case_executes_its_declared_contract(
@@ -292,7 +343,7 @@ def test_every_planned_dataset_case_executes_its_declared_contract(
 ) -> None:
     case = _case(case_name)
     expected = case.expectations["planned"]
-    provider = _LegacyProvider() if case_name == "mutation_fallback" else None
+    provider = None
 
     result = asyncio.run(
         run_case(
@@ -301,19 +352,27 @@ def test_every_planned_dataset_case_executes_its_declared_contract(
             [],
             strategy="planned",
             role_overrides=planned_role_overrides(case),
+            max_provider_requests=64,
         )
     )
 
-    assert result.error is None
-    if case_name == "mutation_fallback":
-        assert result.diagnostics["orchestration"]["coverage"] == expected["coverage"]
-        assert (
-            result.diagnostics["orchestration"]["terminal_reason"]
-            == expected["terminal_reason"]
+    expected_error = (
+        expected["terminal_reason"]
+        if case_name
+        in {
+            "budget_exhaustion",
+            "deadline_exhaustion",
+            "two_pass_no_progress",
+            "partial_independent_answer",
+        }
+        else None
+    )
+    assert result.error == expected_error
+    if expected_error is not None:
+        assert not result.passed
+        assert result.status == (
+            "fail" if expected_error == "manager_unresolved" else "unscored"
         )
-        assert [call["name"] for call in result.tool_calls] == expected["tool_sequence"]
-        assert all(token in result.answer for token in expected["answer_tokens"])
-        return
     assert result.diagnostics["orchestration"]["coverage"] == expected["coverage"]
     assert (
         result.diagnostics["orchestration"]["terminal_reason"]

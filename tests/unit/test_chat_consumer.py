@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 import unittest
+import pytest
 from unittest.mock import AsyncMock, patch
 
 from django.contrib.auth.models import AnonymousUser
@@ -27,6 +29,42 @@ from general_manager.chat.providers.base import (
     ToolCallEvent,
 )
 from general_manager.chat.rate_limits import enforce_chat_rate_limit
+
+
+@pytest.fixture(autouse=True)
+def _require_explicit_planned_test_provider(monkeypatch):
+    """Keep migrated unit tests from contacting an unconfigured model endpoint."""
+    from general_manager.chat.planned import config
+
+    original = config.import_string
+
+    required_message = "Use an explicit offline Planned provider in this test."
+
+    def resolve(path):
+        if path.startswith("general_manager.chat.providers"):
+            raise AssertionError(required_message)
+        return original(path)
+
+    monkeypatch.setattr(config, "import_string", resolve)
+
+
+async def _receive_prevalidated_mutation(consumer, payload):
+    """Exercise retained write-loop behavior after an explicit mutation handoff.
+
+    These tests pin write continuation mechanics, not read classification. The
+    separate migration tests run genuine Planned reads through each transport.
+    """
+    with (
+        patch(
+            "general_manager.chat.consumer.prepare_planned_turn",
+            new=AsyncMock(return_value=SimpleNamespace(mutation_plan=object())),
+        ),
+        patch.object(consumer, "_planned_catalog_summary", return_value={}),
+    ):
+        await consumer.receive_json(payload)
+        pending = getattr(consumer, "_provider_task", None)
+        if pending is not None:
+            await pending
 
 
 EXECUTE_TOOL_EVENT_LOOP_ERROR = "execute_chat_tool ran in the event loop"
@@ -398,7 +436,7 @@ class ChatConsumerConnectTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_connect_closes_and_emits_error_when_provider_import_fails(self) -> None:
+    def test_connect_does_not_construct_unused_mutation_provider(self) -> None:
         consumer = ChatConsumer()
         user = AnonymousUser()
         consumer.scope = {
@@ -416,7 +454,7 @@ class ChatConsumerConnectTests(unittest.TestCase):
                 patch(
                     "general_manager.chat.consumer.import_provider",
                     side_effect=original_error,
-                ),
+                ) as unused_provider,
                 patch.object(consumer, "close", new_callable=AsyncMock) as mock_close,
                 patch.object(consumer, "accept", new_callable=AsyncMock) as mock_accept,
                 patch.object(
@@ -424,16 +462,19 @@ class ChatConsumerConnectTests(unittest.TestCase):
                 ) as mock_send_json,
                 patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
             ):
-                await consumer.connect()
+                with patch.object(
+                    consumer,
+                    "_get_persistent_conversation",
+                    new=AsyncMock(return_value=object()),
+                ):
+                    await consumer.connect()
 
-            mock_close.assert_called_once_with(code=1011)
-            mock_accept.assert_not_called()
+            mock_close.assert_not_called()
+            mock_accept.assert_called_once_with()
             mock_send_json.assert_not_called()
-            chat_error.assert_called_once_with(
-                user=user,
-                error=original_error,
-                context={"transport": "websocket", "phase": "connect"},
-            )
+            chat_error.assert_not_called()
+            unused_provider.assert_not_called()
+            assert consumer.provider is None
 
         asyncio.run(run())
 
@@ -517,6 +558,208 @@ class ChatConsumerConnectTests(unittest.TestCase):
         asyncio.run(run())
 
 
+@pytest.mark.parametrize("message_type", ["message", "confirm"])
+@pytest.mark.parametrize("decision", ["allow", "deny", "error"])
+def test_websocket_renews_chat_admission_before_new_work(message_type, decision):
+    consumer = ChatConsumer()
+    consumer.scope = {
+        "user": AnonymousUser(),
+        "session": _Session("existing-key"),
+    }
+    permission_calls = []
+    current_decision = "allow"
+    original_error = RuntimeError("private admission failure")
+
+    def permission(user, scope):
+        assert user is consumer.scope["user"]
+        assert scope is consumer.scope
+        permission_calls.append(current_decision)
+        if current_decision == "error":
+            raise original_error
+        return current_decision == "allow"
+
+    async def run():
+        nonlocal current_decision
+        with (
+            patch(
+                "general_manager.chat.consumer.get_chat_permission",
+                return_value=permission,
+            ),
+            patch.object(consumer, "accept", new=AsyncMock()),
+            patch.object(consumer, "close", new=AsyncMock()) as close,
+            patch.object(consumer, "send_json", new=AsyncMock()) as send,
+            patch.object(
+                consumer,
+                "_get_persistent_conversation",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(consumer, "_record_message", new=AsyncMock()) as record,
+            patch.object(consumer, "_load_history", new=AsyncMock(return_value=[])),
+            patch.object(
+                consumer, "_stream_message_turn", new=AsyncMock(return_value=False)
+            ) as message_turn,
+            patch.object(
+                consumer, "_stream_provider_turn", new=AsyncMock()
+            ) as continuation,
+            patch.object(
+                consumer,
+                "_claim_durable_pending_confirmation",
+                new=AsyncMock(return_value=True),
+            ) as claim,
+            patch(
+                "general_manager.chat.consumer.execute_confirmed_chat_mutation",
+                return_value={"status": "executed", "data": {}},
+            ) as mutate,
+            patch(
+                "general_manager.chat.consumer.enforce_chat_rate_limit",
+                return_value=None,
+            ) as rate_limit,
+            patch("general_manager.chat.consumer.emit_chat_error") as chat_error,
+        ):
+            await consumer.connect()
+            current_decision = decision
+            payload = {"type": "message", "text": "Read data after connection"}
+            if message_type == "confirm":
+                consumer._pending_confirmation = {
+                    "id": "confirm-admission",
+                    "mutation": "createPart",
+                    "input": {"name": "Bolt"},
+                    "messages": [],
+                    "history": [],
+                    "durable": True,
+                    "expires_at": timezone.now() + timedelta(seconds=30),
+                }
+                payload = {
+                    "type": "confirm",
+                    "confirmation_id": "confirm-admission",
+                    "confirmed": True,
+                }
+            await consumer.receive_json(payload)
+
+            assert permission_calls == ["allow", decision]
+            if decision == "allow":
+                close.assert_not_awaited()
+                if message_type == "message":
+                    message_turn.assert_awaited_once()
+                    mutate.assert_not_called()
+                else:
+                    claim.assert_awaited_once()
+                    mutate.assert_called_once()
+                    continuation.assert_awaited_once()
+            else:
+                rate_limit.assert_not_called()
+                record.assert_not_awaited()
+                message_turn.assert_not_awaited()
+                claim.assert_not_awaited()
+                mutate.assert_not_called()
+                continuation.assert_not_awaited()
+                if decision == "deny":
+                    close.assert_awaited_once_with(code=4403)
+                else:
+                    assert chat_error.call_args.kwargs["error"] is original_error
+                    send.assert_awaited_once_with(
+                        {
+                            "type": "error",
+                            "message": "Chat request failed.",
+                            "code": "chat_error",
+                        }
+                    )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("action", ["reject", "timeout"])
+def test_revoked_websocket_cancels_confirmation_without_provider_resume(action):
+    consumer = ChatConsumer()
+    consumer.scope = {
+        "user": AnonymousUser(),
+        "session": _Session("existing-key"),
+    }
+    allowed = True
+    permission_calls = []
+
+    def permission(_user, _scope):
+        permission_calls.append(allowed)
+        return allowed
+
+    async def run():
+        nonlocal allowed
+        with (
+            patch(
+                "general_manager.chat.consumer.get_chat_permission",
+                return_value=permission,
+            ),
+            patch.object(consumer, "accept", new=AsyncMock()),
+            patch.object(consumer, "close", new=AsyncMock()) as close,
+            patch.object(consumer, "send_json", new=AsyncMock()) as send,
+            patch.object(
+                consumer,
+                "_get_persistent_conversation",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(consumer, "_record_message", new=AsyncMock()) as record,
+            patch.object(
+                consumer,
+                "_claim_durable_pending_confirmation",
+                new=AsyncMock(return_value=True),
+            ) as claim,
+            patch(
+                "general_manager.chat.consumer.execute_confirmed_chat_mutation"
+            ) as mutate,
+        ):
+            await consumer.connect()
+            allowed = False
+            consumer.provider = _ConfirmResumeProvider()
+            consumer._pending_confirmation = {
+                "id": "cancel-admission",
+                "mutation": "createPart",
+                "input": {"name": "Bolt"},
+                "messages": [],
+                "history": [],
+                "durable": True,
+                "expires_at": timezone.now() + timedelta(seconds=30),
+            }
+            consumer._confirmation_waiter = asyncio.get_running_loop().create_future()
+            if action == "reject":
+                await consumer.receive_json(
+                    {
+                        "type": "confirm",
+                        "confirmation_id": "cancel-admission",
+                        "confirmed": False,
+                    }
+                )
+            else:
+                await consumer._await_confirmation_timeout(
+                    confirmation_id="cancel-admission", timeout_seconds=0
+                )
+
+            assert permission_calls == [True, False]
+            assert consumer.provider.calls == []
+            mutate.assert_not_called()
+            claim.assert_awaited_once()
+            assert consumer._pending_confirmation is None
+            assert consumer._confirmation_waiter is None
+            assert consumer._confirmation_timeout_task is None
+            result = {
+                "status": "cancelled",
+                "reason": "user_rejected"
+                if action == "reject"
+                else "confirmation_timed_out",
+            }
+            assert record.await_args.kwargs["tool_result"] == result
+            send.assert_awaited_once_with(
+                {
+                    "type": "tool_result",
+                    "id": "cancel-admission",
+                    "name": "mutate",
+                    "result": result,
+                }
+            )
+            close.assert_awaited_once_with(code=4403)
+
+    asyncio.run(run())
+
+
 class ChatConsumerMessageTests(unittest.TestCase):
     def test_provider_iterator_closes_a_stream_after_done(self) -> None:
         provider = _ClosableDoneProvider()
@@ -542,7 +785,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
             is False
         )
 
-    def test_receive_json_streams_text_and_done_events(self) -> None:
+    def test_mutation_continuation_streams_text_and_done_events(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
             "user": AnonymousUser(),
@@ -562,7 +805,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value="system prompt text",
                 ),
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
                 assert mock_send_json.await_args_list[0].args[0] == {
                     "type": "text_chunk",
                     "content": "echo:hello",
@@ -580,41 +825,42 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_default_strategy_skips_planned_preparation(self) -> None:
-        """Routing the default websocket turn through planning changes its contract."""
+    def test_default_websocket_read_cannot_use_legacy_loop(self) -> None:
         consumer = ChatConsumer()
-        consumer.scope = {
-            "user": AnonymousUser(),
-            "session": _Session("existing-key"),
-        }
+        consumer.scope = {"user": AnonymousUser(), "session": _Session("existing-key")}
         consumer.session_key = "existing-key"
         consumer.provider = _Provider()
         consumer.channel_name = "chat.test"
 
-        async def run() -> None:
+        async def read(*args, **kwargs):
+            yield {"type": "text_chunk", "content": "planned"}
+            yield {"type": "done", "orchestration": {"status": "complete"}}
+
+        async def run():
             with (
-                patch.object(consumer, "send_json", new_callable=AsyncMock) as send,
-                patch(
-                    "general_manager.chat.consumer.get_planned_chat_settings",
-                    return_value=SimpleNamespace(enabled=False),
-                ),
+                patch.object(consumer, "send_json", new=AsyncMock()) as send,
                 patch(
                     "general_manager.chat.consumer.prepare_planned_turn",
-                    new_callable=AsyncMock,
+                    new=AsyncMock(return_value=SimpleNamespace(mutation_plan=None)),
                 ) as prepare,
+                patch.object(consumer, "_planned_catalog_summary", return_value={}),
                 patch(
-                    "general_manager.chat.consumer.build_system_prompt",
-                    return_value="system prompt text",
+                    "general_manager.chat.consumer.iter_planned_read_events", new=read
+                ),
+                patch.object(
+                    consumer,
+                    "_stream_provider_turn",
+                    new=AsyncMock(side_effect=AssertionError("legacy read")),
                 ),
             ):
                 await consumer.receive_json({"type": "message", "text": "hello"})
-
-            assert [call.args[0]["type"] for call in send.await_args_list] == [
-                "text_chunk",
-                "done",
-            ]
-            assert "orchestration" not in send.await_args_list[-1].args[0]
-            prepare.assert_not_awaited()
+                await consumer._provider_task
+                prepare.assert_awaited_once()
+                assert [call.args[0]["type"] for call in send.await_args_list] == [
+                    "text_chunk",
+                    "done",
+                ]
+                assert consumer.provider.calls == []
 
         asyncio.run(run())
 
@@ -628,7 +874,13 @@ class ChatConsumerMessageTests(unittest.TestCase):
         consumer.session_key = "existing-key"
         consumer.provider = _Provider()
         consumer.channel_name = "chat.test"
-        planned_turn = SimpleNamespace(mutation_plan=None)
+        planned_turn = SimpleNamespace(
+            mutation_plan=None,
+            completed_task_context={
+                "objective": "private-context-marker",
+                "completion_criteria": ["private-evidence-id"],
+            },
+        )
 
         async def planned_events(*_args: object, **_kwargs: object):
             yield {"type": "tool_call", "task_id": "task_1", "id": "call_1"}
@@ -677,6 +929,10 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 "done",
             ]
             assert all("task_id" in event for event in events[:2])
+            assert "private-context-marker" not in json.dumps(events)
+            assert "private-evidence-id" not in json.dumps(events)
+            assert "completed_task_context" not in json.dumps(events)
+            assert events[2] == {"type": "text_chunk", "content": "planned synthesis"}
             assert events[-1]["orchestration"]["status"] == "complete"
 
         asyncio.run(run())
@@ -945,7 +1201,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_errors_use_public_message(self) -> None:
+    def test_mutation_continuation_errors_use_public_message(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
             "user": AnonymousUser(),
@@ -965,7 +1221,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value="system prompt text",
                 ),
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
 
             assert mock_send_json.await_args_list[-1].args[0] == {
                 "type": "error",
@@ -975,7 +1233,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_timeout_errors_report_the_deadline_public_reason(
+    def test_mutation_continuation_timeout_errors_report_the_deadline_public_reason(
         self,
     ) -> None:
         consumer = ChatConsumer()
@@ -997,7 +1255,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value="system prompt text",
                 ),
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
 
             assert mock_send_json.await_args_list[-1].args[0] == {
                 "type": "error",
@@ -1112,7 +1372,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_records_token_usage_without_double_counting_request(
+    def test_mutation_continuation_records_token_usage_without_double_counting_request(
         self,
     ) -> None:
         consumer = ChatConsumer()
@@ -1138,7 +1398,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value=None,
                 ) as limit,
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
 
             assert limit.call_count == 3
             assert limit.call_args_list[0].kwargs == {}
@@ -1157,7 +1419,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_rejects_next_message_after_token_budget_reached(
+    def test_mutation_continuation_rejects_next_message_after_token_budget_reached(
         self,
     ) -> None:
         cache.clear()
@@ -1192,7 +1454,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value="system prompt text",
                 ),
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
                 assert len(consumer.provider.calls) == 1
                 first_call_messages = consumer.provider.calls[0]["messages"]
                 assert first_call_messages[-1].content == "hello"
@@ -1202,7 +1466,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 }
 
                 mock_send_json.reset_mock()
-                await consumer.receive_json({"type": "message", "text": "again"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "again"}
+                )
 
                 mock_send_json.assert_awaited_once_with(
                     {
@@ -1312,7 +1578,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_executes_tool_calls_and_resumes_provider(self) -> None:
+    def test_mutation_continuation_executes_tool_calls_and_resumes_provider(
+        self,
+    ) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
             "user": AnonymousUser(),
@@ -1336,7 +1604,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value=[{"manager": "PartManager"}],
                 ) as execute_chat_tool,
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
 
                 assert mock_send_json.await_args_list[0].args[0] == {
                     "type": "tool_call",
@@ -1384,7 +1654,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_retains_every_call_from_one_completion(self) -> None:
+    def test_mutation_continuation_retains_every_call_from_one_completion(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
             "user": AnonymousUser(),
@@ -1411,7 +1681,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     ],
                 ) as execute_tool,
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
 
             assert execute_tool.call_count == 2
             provider_messages = consumer.provider.calls[1]["messages"]
@@ -1449,7 +1721,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_rejects_mutation_batches_before_any_action(self) -> None:
+    def test_mutation_continuation_rejects_mutation_batches_before_any_action(
+        self,
+    ) -> None:
         batches = [
             [
                 ToolCallEvent(
@@ -1501,7 +1775,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     "general_manager.chat.models.create_pending_confirmation"
                 ) as create_pending,
             ):
-                await consumer.receive_json({"type": "message", "text": "update"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "update"}
+                )
 
             assert [call.args[0] for call in send_json.await_args_list] == [
                 {
@@ -1517,7 +1793,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
             with self.subTest(batch=[event.id for event in batch]):
                 asyncio.run(run(batch))
 
-    def test_receive_json_rejects_batch_exceeding_retry_budget_before_actions(
+    def test_mutation_continuation_rejects_batch_exceeding_retry_budget_before_actions(
         self,
     ) -> None:
         consumer = ChatConsumer()
@@ -1553,7 +1829,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     side_effect=[None, None, None],
                 ) as rate_limit,
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
 
             assert [call.args[0] for call in send_json.await_args_list] == [
                 {
@@ -1655,7 +1933,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
                 }
             )
 
-    def test_receive_json_stops_after_maximum_tool_retries(self) -> None:
+    def test_mutation_continuation_stops_after_maximum_tool_retries(self) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
             "user": AnonymousUser(),
@@ -1683,7 +1961,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value={"max_retries_per_message": 2},
                 ),
             ):
-                await consumer.receive_json({"type": "message", "text": "hello"})
+                await _receive_prevalidated_mutation(
+                    consumer, {"type": "message", "text": "hello"}
+                )
                 assert mock_send_json.await_args_list[-1].args[0] == {
                     "type": "error",
                     "message": "Chat tool retry limit exceeded.",
@@ -1693,7 +1973,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_recovers_missing_tool_answer_when_setting_enabled(
+    def test_mutation_continuation_recovers_missing_tool_answer_when_setting_enabled(
         self,
     ) -> None:
         consumer = ChatConsumer()
@@ -1722,11 +2002,12 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value="system prompt text",
                 ),
             ):
-                await consumer.receive_json(
+                await _receive_prevalidated_mutation(
+                    consumer,
                     {
                         "type": "message",
                         "text": "Which materials have density above 7?",
-                    }
+                    },
                 )
 
             sent_messages = [call.args[0] for call in mock_send_json.await_args_list]
@@ -1753,7 +2034,9 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_recovers_empty_response_after_tool_result(self) -> None:
+    def test_mutation_continuation_recovers_empty_response_after_tool_result(
+        self,
+    ) -> None:
         consumer = ChatConsumer()
         consumer.scope = {
             "user": AnonymousUser(),
@@ -1784,11 +2067,12 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     return_value=["parts"],
                 ),
             ):
-                await consumer.receive_json(
+                await _receive_prevalidated_mutation(
+                    consumer,
                     {
                         "type": "message",
                         "text": "What projects contain parts with cobalt?",
-                    }
+                    },
                 )
 
             sent_messages = [call.args[0] for call in mock_send_json.await_args_list]
@@ -1810,7 +2094,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_recovers_path_only_record_answer_by_requiring_query(
+    def test_mutation_continuation_recovers_path_only_record_answer_by_requiring_query(
         self,
     ) -> None:
         consumer = ChatConsumer()
@@ -1856,14 +2140,15 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     side_effect=execute_tool,
                 ),
             ):
-                await consumer.receive_json(
+                await _receive_prevalidated_mutation(
+                    consumer,
                     {
                         "type": "message",
                         "text": (
                             "Find records in SyntheticManager08 related to the first "
                             "SyntheticManager01 item."
                         ),
-                    }
+                    },
                 )
 
             sent_messages = [call.args[0] for call in mock_send_json.await_args_list]
@@ -1887,7 +2172,7 @@ class ChatConsumerMessageTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_receive_json_does_not_recover_after_empty_find_path_result(
+    def test_mutation_continuation_does_not_recover_after_empty_find_path_result(
         self,
     ) -> None:
         consumer = ChatConsumer()
@@ -1933,13 +2218,14 @@ class ChatConsumerMessageTests(unittest.TestCase):
                     side_effect=execute_tool,
                 ),
             ):
-                await consumer.receive_json(
+                await _receive_prevalidated_mutation(
+                    consumer,
                     {
                         "type": "message",
                         "text": (
                             "Find records in TargetManager related to SourceManager."
                         ),
-                    }
+                    },
                 )
 
             sent_messages = [call.args[0] for call in mock_send_json.await_args_list]

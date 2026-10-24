@@ -13,6 +13,7 @@ from collections.abc import Callable, Generator, Iterable, Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from typing import (
+    Any,
     TYPE_CHECKING,
     Literal,
     cast,
@@ -48,6 +49,10 @@ from general_manager.search.registry import (
     validate_filter_keys,
 )
 from general_manager.utils.filter_parser import create_filter_function
+from general_manager.utils.executable_contract import (
+    executable_matches,
+    executable_signature,
+)
 from general_manager.api.graphql_errors import (
     MeasurementScalar,
     PageInfo,
@@ -692,6 +697,9 @@ def _get_filter_relation_info(
     }
 
 
+_COMMON_FILTER_RELATION_INFO = _get_filter_relation_info
+
+
 def get_relation_filter_option(
     attribute_type: object,
     attribute_name: str,
@@ -743,14 +751,25 @@ def get_relation_filter_option(
             f"RelationFilterTypeDepth{remaining_depth - 1}"
         )
         if relation_type_name not in graphql_filter_type_registry:
-            graphql_filter_type_registry[relation_type_name] = type(
+            relation_filter = type(
                 relation_type_name,
                 (graphene.InputObjectType,),
                 {
                     "any": graphene.InputField(nested_type),
                     "none": graphene.InputField(nested_type),
+                    "_general_manager_filter_owner": manager_type,
                 },
             )
+            from general_manager.api.graphql_filter_contract import (
+                register_filter_input,
+            )
+
+            # Collections declare no direct predicate, but their generated codec
+            # must be pinned for the enclosing filter to remain attestable.
+            register_filter_input(
+                relation_filter, manager_type, {}, filter_source_signature(manager_type)
+            )
+            graphql_filter_type_registry[relation_type_name] = relation_filter
         return (
             attribute_name,
             graphene.InputField(graphql_filter_type_registry[relation_type_name]),
@@ -804,6 +823,7 @@ def create_filter_options(
         return graphql_filter_type_registry[graphene_filter_type_name]
 
     filter_fields: dict[str, GrapheneFieldType] = {}
+    filter_contracts: dict[str, dict[str, str]] = {}
     for attr_name, attr_info in field_type.Interface.get_attribute_types().items():
         # Native constructor selections do not add a new GraphQL filter language.
         input_field = getattr(field_type.Interface, "input_fields", {}).get(attr_name)
@@ -831,20 +851,34 @@ def create_filter_options(
             if relation_option is not None:
                 key, value = relation_option
                 filter_fields[key] = value
+                # Only singular relations with the same executable lookup prove
+                # an output relation path. Collection/custom lookups fail closed.
+                if (
+                    effective_attr_info.get("relation_kind") == "direct"
+                    and effective_attr_info.get("filter_lookup") == attr_name
+                ):
+                    filter_contracts[key] = {
+                        "source": "interface_filter",
+                        "field": attr_name,
+                        "operator": "relation",
+                        "manager": manager_type.__name__,
+                    }
             continue
-        filter_fields = {
-            **filter_fields,
-            **{
-                k: v
-                for k, v in get_filter_options(
-                    cast(type, attr_type),
-                    attr_name,
-                    map_field_to_graphene_read,
-                    effective_attr_info,
-                )
-                if v is not None
-            },
-        }
+        for key, value in get_filter_options(
+            cast(type, attr_type),
+            attr_name,
+            map_field_to_graphene_read,
+            effective_attr_info,
+        ):
+            if value is not None:
+                filter_fields[key] = value
+                filter_contracts[key] = {
+                    "source": "interface_filter",
+                    "field": attr_name,
+                    "operator": key[len(attr_name) + 2 :]
+                    if key != attr_name
+                    else "exact",
+                }
     for prop_name, prop in field_type.Interface.get_graph_ql_properties().items():
         if not prop.filterable:
             continue
@@ -858,27 +892,112 @@ def create_filter_options(
                 field_name=prop_name,
             )
             prop_info["is_identifier"] = True
-        filter_fields = {
-            **filter_fields,
-            **{
-                k: v
-                for k, v in get_filter_options(
-                    prop_type, prop_name, map_field_to_graphene_read, prop_info
-                )
-                if v is not None
-            },
-        }
+        for key, value in get_filter_options(
+            prop_type, prop_name, map_field_to_graphene_read, prop_info
+        ):
+            if value is not None:
+                filter_fields[key] = value
+                # A custom property replacing a generated attribute cannot
+                # inherit that attribute's executable predicate declaration.
+                filter_contracts.pop(key, None)
 
     if not filter_fields:
         return None
 
+    # Preserve source identity for consumers that restrict manager exposure. This
+    # metadata is not a GraphQL field and does not alter public filter execution.
     filter_class = type(
         graphene_filter_type_name,
         (graphene.InputObjectType,),
-        filter_fields,
+        {
+            **filter_fields,
+            "_general_manager_filter_owner": field_type,
+            "_general_manager_filter_contracts": filter_contracts,
+        },
+    )
+    from general_manager.api.graphql_filter_contract import register_filter_input
+
+    register_filter_input(
+        filter_class, field_type, filter_contracts, filter_source_signature(field_type)
     )
     graphql_filter_type_registry[graphene_filter_type_name] = filter_class
     return filter_class
+
+
+def _filter_identity_inputs(field_type: type[GeneralManager]) -> dict[str, Any]:
+    """Collect constructor inputs used by the common identity filter path."""
+    inputs = getattr(field_type.Interface, "input_fields", {})
+    if not isinstance(inputs, Mapping):
+        return {}
+    names = {"id"}
+    names.update(
+        name
+        for name, info in field_type.Interface.get_attribute_types().items()
+        if info.get("is_identifier")
+    )
+    return {name: inputs[name] for name in sorted(names) if name in inputs}
+
+
+def filter_source_signature(field_type: type[GeneralManager]) -> object:
+    """Pin the shared normalizer's actual attribute/relation/ID semantics."""
+    from general_manager.manager.input import Input, InputDomain
+
+    attributes = field_type.Interface.get_attribute_types()
+
+    def token(value: object) -> object:
+        if isinstance(value, type):
+            return ("type", id(value))
+        if value is None or type(value) in (str, int, float, bool):
+            return (type(value), value)
+        return ("unsupported", id(value))
+
+    fields = tuple(
+        (
+            name,
+            tuple(
+                (key, token(info.get(key)))
+                for key in (
+                    "type",
+                    "relation_kind",
+                    "filter_lookup",
+                    "graphql_scalar",
+                    "is_identifier",
+                    "is_primary_key",
+                )
+            ),
+        )
+        for name, original in attributes.items()
+        for info in (_get_filter_relation_info(field_type, name, original),)
+    )
+    # Domain/custom normalization cannot establish raw constructor ID equality.
+    input_bindings = tuple(
+        (
+            name,
+            type(identifier),
+            identifier.type,
+            getattr(identifier.cast, "__func__", identifier.cast),
+            getattr(identifier.normalize, "__func__", identifier.normalize),
+            identifier.normalizer,
+            isinstance(identifier.possible_values, InputDomain),
+            Input.cast,
+            Input.normalize,
+        )
+        for name, identifier in _filter_identity_inputs(field_type).items()
+    )
+    converter_bindings = tuple(
+        (
+            name,
+            getattr(converter, "__self__", None),
+            getattr(converter, "__func__", converter),
+        )
+        for name, info in attributes.items()
+        if info.get("is_identifier")
+        for converter in (_identity_filter_converter(field_type, name),)
+    )
+    return fields, input_bindings, converter_bindings
+
+
+_COMMON_FILTER_SOURCE_SIGNATURE = filter_source_signature
 
 
 def normalize_id_filter_value(
@@ -926,27 +1045,7 @@ def normalize_id_filter_value(
             return [_cast_identity_scalar(scalar_input.cast, item) for item in value]
         return _cast_identity_scalar(scalar_input.cast, value)
 
-    metadata = interface.get_attribute_types().get(attribute_name, {})
-    if not metadata.get("is_identifier"):
-        return value
-    input_fields = getattr(interface, "input_fields", {})
-    input_field = input_fields.get(attribute_name)
-    model = getattr(interface, "_model", None)
-    converter: Callable[[object], object] | None = None
-    if isinstance(model, type) and issubclass(model, models.Model):
-        try:
-            model_field = model._meta.get_field(attribute_name)
-        except FieldDoesNotExist:
-            return value
-        if model_field.primary_key:
-            # ORM constructors expose the actual PK under their public id input,
-            # even when the model column has another name.
-            input_field = input_fields.get("id")
-        if input_field is None:
-            target_field = getattr(model_field, "target_field", model_field)
-            converter = target_field.to_python
-    if input_field is not None:
-        converter = input_field.cast
+    converter = _identity_filter_converter(field_type, attribute_name)
     if converter is None:
         return value
 
@@ -957,6 +1056,41 @@ def normalize_id_filter_value(
     return _cast_identity_scalar(converter, value)
 
 
+def _identity_filter_converter(
+    field_type: type[GeneralManager], attribute_name: str
+) -> Callable[[object], object] | None:
+    """Select the actual identity converter without invoking it.
+
+    Execution and predicate attestation share this choice. Backend-specific
+    conversion retains its runtime behavior but does not declare equality proof.
+    """
+    interface = field_type.Interface
+    metadata: Mapping[str, object] = interface.get_attribute_types().get(
+        attribute_name, {}
+    )
+    if not metadata.get("is_identifier"):
+        return None
+    input_fields = getattr(interface, "input_fields", {})
+    input_field = input_fields.get(attribute_name)
+    model = getattr(interface, "_model", None)
+    converter: Callable[[object], object] | None = None
+    if isinstance(model, type) and issubclass(model, models.Model):
+        try:
+            model_field = model._meta.get_field(attribute_name)
+        except FieldDoesNotExist:
+            return None
+        if model_field.primary_key:
+            # ORM constructors expose the actual PK under their public id input,
+            # even when the model column has another name.
+            input_field = input_fields.get("id")
+        if input_field is None:
+            target_field = getattr(model_field, "target_field", model_field)
+            converter = target_field.to_python
+    if input_field is not None:
+        converter = input_field.cast
+    return converter
+
+
 def _cast_identity_scalar(
     converter: Callable[[object], object], value: object
 ) -> object:
@@ -964,6 +1098,9 @@ def _cast_identity_scalar(
     if value is not None and not isinstance(value, UUID):
         GraphQLID.parse_value(value)
     return converter(value)
+
+
+_COMMON_NORMALIZE_ID_FILTER_VALUE = normalize_id_filter_value
 
 
 def normalize_filter_input(
@@ -1048,6 +1185,30 @@ def normalize_filter_input(
 
 
 # ---------------------------------------------------------------------------
+_COMMON_FILTER_NORMALIZER = normalize_filter_input
+_COMMON_ID_SCALAR = GraphQLID
+_COMMON_FILTER_EXECUTABLES = tuple(
+    (name, function, executable_signature(function))
+    for name, function in (
+        ("normalize_filter_input", _COMMON_FILTER_NORMALIZER),
+        ("normalize_id_filter_value", _COMMON_NORMALIZE_ID_FILTER_VALUE),
+        ("_cast_identity_scalar", _cast_identity_scalar),
+        ("_get_filter_relation_info", _COMMON_FILTER_RELATION_INFO),
+        ("filter_source_signature", _COMMON_FILTER_SOURCE_SIGNATURE),
+        ("_filter_identity_inputs", _filter_identity_inputs),
+        ("_identity_filter_converter", _identity_filter_converter),
+    )
+)
+
+
+def common_filter_execution_valid() -> bool:
+    """Revalidate the original common normalizer's concrete executable helpers."""
+    return GraphQLID is _COMMON_ID_SCALAR and all(
+        globals().get(name) is function and executable_matches(function, signature)
+        for name, function, signature in _COMMON_FILTER_EXECUTABLES
+    )
+
+
 # Top-level search query registration
 # ---------------------------------------------------------------------------
 
