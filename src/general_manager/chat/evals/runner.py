@@ -1152,6 +1152,11 @@ def run_eval_suite_sync(
 # ---------------------------------------------------------------------------
 
 
+def dimension_results(results: list[EvalResult]) -> list[EvalResult]:
+    """Include turn scores for dimensions; overall results remain case-based."""
+    return [item for result in results for item in [result, *result.turn_results]]
+
+
 def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
     """Format a summary report and return it as a string."""
     if not results:
@@ -1159,9 +1164,7 @@ def print_report(results: list[EvalResult], *, verbose: bool = False) -> str:
     lines: list[str] = []
     total = len(results)
     passed = sum(1 for r in results if r.passed)
-    scored_results = [
-        item for result in results for item in [result, *result.turn_results]
-    ]
+    scored_results = dimension_results(results)
     contract_pass = sum(
         1
         for r in scored_results
@@ -1358,7 +1361,11 @@ def print_compare_report(
                 n_pass = sum(1 for r in results if r.passed)
                 n_total = len(results)
             else:
-                scored = [score for r in results if (score := extractor(r)) is not None]
+                scored = [
+                    score
+                    for r in dimension_results(results)
+                    if (score := extractor(r)) is not None
+                ]
                 n_pass = sum(1 for s in scored if s.passed)
                 n_total = len(scored)
             row += f" {_pct(n_pass, n_total):>14}"

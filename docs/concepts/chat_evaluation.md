@@ -65,6 +65,11 @@ never drop unscored cases to improve the pass rate. An empty selection is not a
 readiness records `run_status=empty`. Report a stopped run's not-executed cases
 separately rather than crediting historical results.
 
+Dimension totals include separately scored turns and any case-level score in
+the individual report, comparison and readiness summary. Overall PASS, FAIL and
+UNSCORED counts remain one outcome per selected case. Report formatting does not
+rescore or rewrite historical artifacts.
+
 Stable public error wording alone cannot establish the technical origin of a
 failure. Current runtime audit origins and matching task/turn evidence distinguish
 scheduler/provider failures from a model declaring a block. A model cannot obtain
