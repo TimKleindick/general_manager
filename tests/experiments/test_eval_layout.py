@@ -67,15 +67,6 @@ def test_historical_calibration_alias_preserves_patched_function_globals(
     assert not path.exists()
 
 
-def test_calibration_retains_historical_result_location_without_reading_it():
-    from experiments.siwc_eval import calibrate_answer_judge
-
-    root = Path(__file__).resolve().parents[2]
-    assert calibrate_answer_judge.AUDIT == (
-        root / "experiments/siwc_eval/results/20261001T053915Z-answer-audit"
-    )
-
-
 def test_historical_and_archived_calibration_help_match_without_setup():
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)

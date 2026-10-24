@@ -31,6 +31,7 @@ def test_open_outlook_accepts_suitable_basis_and_horizon_without_relabeling(
     case_id, topics
 ):
     contract = expected(case_id)
+    assert contract["facts"]["clarification_topics"] == ["criterion", "horizon"]
     rule = next(
         c
         for c in contract["dimensions"]["Q"]["checks"]
@@ -70,6 +71,7 @@ def test_open_outlook_rejects_missing_wrong_or_invalid_decisions(case_id, topics
     contract = expected(case_id)
     observation, judgment = control(contract)
     observation["facts"]["clarification_topics"] = topics
+    before = deepcopy(observation)
     result = score(contract, observation, judgment)
     check = next(
         c
@@ -77,11 +79,13 @@ def test_open_outlook_rejects_missing_wrong_or_invalid_decisions(case_id, topics
         if c["field"] == "clarification_topics"
     )
     assert check["status"] == "fail" and not result["passed"]
+    assert observation == before
 
 
 @pytest.mark.parametrize("case_id", DEFINED_ANALYSES)
 def test_defined_analysis_metric_remains_a_separate_required_decision(case_id):
     contract = expected(case_id)
+    assert contract["facts"]["clarification_topics"] == ["metric", "horizon"]
     rule = next(
         c
         for c in contract["dimensions"]["Q"]["checks"]
@@ -98,13 +102,16 @@ def test_defined_analysis_metric_remains_a_separate_required_decision(case_id):
     assert not score(contract, observation, judgment)["passed"]
 
 
+@pytest.mark.parametrize("case_id", OUTLOOK_CASES)
 @pytest.mark.parametrize("topics", [["criterion", "horizon"], ["metric", "horizon"]])
 @pytest.mark.parametrize(
     "problem",
     ["unsuitable", "missing_judgment", "premature_result", "unvalidated_extraction"],
 )
-def test_topic_groups_cannot_bypass_independent_behavior_checks(topics, problem):
-    contract = expected("E019")
+def test_topic_groups_cannot_bypass_independent_behavior_checks(
+    case_id, topics, problem
+):
+    contract = expected(case_id)
     observation, judgment = control(contract)
     observation["facts"]["clarification_topics"] = topics
     if problem == "unsuitable":
@@ -165,6 +172,7 @@ def test_generic_outlook_dispatch_uses_context_contract_and_never_case_id():
     case = next(c for c in catalog.load_catalog() if c["id"] == "E019")
     case["id"] = "E555"
     contract = oracle.expected_turn(case, 0)
+    assert contract["facts"]["clarification_topics"] == ["criterion", "horizon"]
     rule = next(
         c
         for c in contract["dimensions"]["Q"]["checks"]
@@ -182,3 +190,16 @@ def test_generic_outlook_dispatch_uses_context_contract_and_never_case_id():
         "metric",
         "horizon",
     ]
+
+
+def test_versioned_topics_preserve_frozen_catalog_and_disclose_all_instances():
+    assert (
+        catalog.catalog_sha256()
+        == "d105613e4560b63e6bf69181d61ce395a28feb82f91b51b6afa6c30eed0b8c11"
+    )
+    assert catalog.REFERENCE_VERSION == "1.17"
+    corrections = [c for c in catalog.reference_corrections() if c["version"] == "1.9"]
+    assert {c["case_id"] for c in corrections} == set(OUTLOOK_CASES)
+    for correction in corrections:
+        assert correction["before"] == ["metric", "horizon"]
+        assert correction["after"] == ["criterion", "horizon"]
