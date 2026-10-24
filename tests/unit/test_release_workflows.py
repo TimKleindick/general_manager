@@ -87,12 +87,36 @@ def test_quality_workflow_has_reusable_least_privilege_triggers() -> None:
     }
     assert workflow["permissions"] == {"contents": "read"}
     assert set(workflow["jobs"]) == {
+        "monitoring-runtime",
         "test",
         "database-pr-gates",
         "database-release",
         "lint-and-mypy",
         "docs",
     }
+
+
+def test_monitoring_runtime_job_requires_docker_and_read_only_checkout() -> None:
+    workflow = load_workflow("quality.yml")
+    job = workflow["jobs"]["monitoring-runtime"]
+
+    assert job.get("permissions", workflow["permissions"]) == {"contents": "read"}
+    assert job["runs-on"] == "ubuntu-latest"
+    assert job["timeout-minutes"] == "10"
+    assert "secrets" not in job
+    assert "if" not in job
+    assert job.get("continue-on-error", "false") == "false"
+    assert action_step(job, "actions/checkout@v4")["with"] == {
+        "persist-credentials": "false"
+    }
+    run_steps = [step for step in job["steps"] if "run" in step]
+    assert [step["run"] for step in run_steps] == [
+        "docker info",
+        "python3 tests/packaging/smoke_example_monitoring.py -v",
+    ]
+    for step in job["steps"]:
+        assert "if" not in step
+        assert step.get("continue-on-error", "false") == "false"
 
 
 def test_readme_build_badge_tracks_the_main_push_workflow() -> None:
