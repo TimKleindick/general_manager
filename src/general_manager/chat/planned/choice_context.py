@@ -569,13 +569,13 @@ def validate_choices(
         "user_sources": user_quote_sources(messages),
         "choices": decisions,
         "clarification_requests": requests,
+        "query_witness_record_selector_allowed": not any(
+            question["topic"] == "record_selector" for question in questions
+        ),
         **(
             {
                 "definition_source_sha256": _digest(configured_context),
                 "definition_bindings": definitions,
-                "query_witness_record_selector_allowed": not any(
-                    question["topic"] == "record_selector" for question in questions
-                ),
             }
             if configured_context
             else {}

@@ -729,10 +729,7 @@ async def synthesize_answer(
                 provider_failures += 1
             elif isinstance(exc, ProviderRoundTimeoutError):
                 deadline_failures += 1
-            if (
-                isinstance(exc, (ProviderStreamError, ProviderRoundTimeoutError))
-                and not exc.usage_observed
-            ):
+            if not exc.usage_observed:
                 continue
             if len(attempt_usages) == before_usage:
                 await record_usage(exc.usage)

@@ -43,6 +43,7 @@ class ReadinessSummary:
     unscored: int = 0
     selection_manifest: dict[str, Any] | None = None
     run_status: str = "completed"
+    fingerprint_contract: str | None = None
 
     @property
     def pass_rate(self) -> float:
@@ -76,6 +77,15 @@ def compare_to_baseline(
             pass_rate_delta=round(delta, 6),
             messages=[
                 "Evaluation contracts differ; establish a new baseline without rewriting the historical report."
+            ],
+            comparable=False,
+        )
+    if current.fingerprint_contract != baseline.fingerprint_contract:
+        return BaselineComparison(
+            regressed=False,
+            pass_rate_delta=round(delta, 6),
+            messages=[
+                "Fingerprint contracts differ; establish a new baseline without rewriting the historical report."
             ],
             comparable=False,
         )

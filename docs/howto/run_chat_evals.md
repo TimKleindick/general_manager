@@ -114,6 +114,15 @@ Do not exclude UNSCORED results or silently replace a failed follow-up with an
 earlier successful turn. Comparisons across evaluation contracts or different
 case definitions need a new explicitly established baseline.
 
+Both source CLIs use fingerprint contract `chat-run-fingerprint/2`. Its prompt
+hash includes the existing system prompt plus the native planner, executor and
+synthesis instructions, their conditional and repair variants, and active schema
+transport instructions. The scoring contract remains `chat-evaluation/5`.
+Historical fingerprints remain unchanged; summaries without the new fingerprint
+contract cannot serve as baselines for new native runs. Establish a new baseline
+instead of rewriting historical artifacts. Within the same fingerprint contract,
+comparisons across provider, model and prompt hashes remain supported.
+
 The production stage defaults are 90 seconds for planning/evidence and 30 for
 synthesis. Configure roles and domain metadata using
 [the configuration guide](configure_chat.md); verify the application with

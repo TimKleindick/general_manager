@@ -110,6 +110,7 @@ def build_summary(
         selection_manifest=deepcopy(manifest),
         run_status="completed" if results else "empty",
         evaluation_contract=EVALUATION_CONTRACT,
+        fingerprint_contract=run_metadata.get("fingerprint_contract"),
         failed=sum(result.status == "fail" for result in results),
         unscored=sum(result.status == "unscored" for result in results),
         run_hash=str(run_metadata["run_hash"]),
