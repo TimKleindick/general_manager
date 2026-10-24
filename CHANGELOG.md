@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.86.13 (2026-10-24)
+
+### Bug Fixes
+
+- Require authentication for example monitoring endpoints
+  ([`423fc3d`](https://github.com/TimKleindick/general_manager/commit/423fc3dc977062514937be1de06ab4472ea5fe1c))
+
+### Testing
+
+- Distinguish monitoring upstreams in runtime regression
+  ([`d944d2d`](https://github.com/TimKleindick/general_manager/commit/d944d2d2d7e30d5237be3832dc87e944d6a5363f))
+
+- Exercise example monitoring authentication in CI
+  ([`947abab`](https://github.com/TimKleindick/general_manager/commit/947abab1f8f49857949ec4369964cf5c54ae9a21))
+
+- Include monitoring runtime job in workflow contract
+  ([`3e602b8`](https://github.com/TimKleindick/general_manager/commit/3e602b8a1a08645e047da150f3274c09bde620af))
+
+
 ## v0.86.12 (2026-10-23)
 
 ### Bug Fixes
