@@ -107,7 +107,11 @@ async function uploadAvatar(profileId, file) {
       .filter(({name}) => name.toLowerCase() !== "content-length")
       .map(({name, value}) => [name, value]),
   );
-  const transfer = await fetch(instructions.uploadUrl, {
+  const applicationUrl = new URL(GRAPHQL_URL, window.location.href);
+  const uploadUrl = instructions.transport === "PROXY"
+    ? new URL(instructions.uploadUrl, applicationUrl).href
+    : instructions.uploadUrl;
+  const transfer = await fetch(uploadUrl, {
     method: instructions.method,
     credentials: instructions.transport === "PROXY" ? APPLICATION_CREDENTIALS : "omit",
     headers: instructions.transport === "PROXY"
@@ -145,6 +149,8 @@ application clients must set `GRAPHQL_URL` to the application endpoint and
 proxy requests. Configure credentialed CORS for the specific client origin and
 the application's trusted CSRF origin/token handling; populate
 `APPLICATION_CSRF_HEADERS` with the required CSRF header from that integration.
+Root-relative proxy URLs are resolved against the configured application URL,
+so the transfer uses the API origin even when the frontend is hosted elsewhere.
 Direct transfers keep `credentials: "omit"` and receive no application CSRF
 headers.
 
