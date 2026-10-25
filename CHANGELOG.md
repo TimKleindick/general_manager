@@ -2,6 +2,218 @@
 
 <!-- version list -->
 
+## v0.87.0 (2026-10-25)
+
+### Bug Fixes
+
+- Bind analysis choices to configured definitions
+  ([`775f98a`](https://github.com/TimKleindick/general_manager/commit/775f98a81a1c3ac1b615cf0762122b0f09a188a3))
+
+- Bound chat arithmetic and patch vulnerable dependencies
+  ([`8919b1f`](https://github.com/TimKleindick/general_manager/commit/8919b1f6498c3bee66941f978b37aaef360f40cf))
+
+- Clarify recommendation comparison extraction
+  ([`2f35d6d`](https://github.com/TimKleindick/general_manager/commit/2f35d6debc202c214e9e1b6d829e9c055397339e))
+
+- Clarify source indices and ranked prose extraction
+  ([`21b0b5a`](https://github.com/TimKleindick/general_manager/commit/21b0b5af709e9ab3a9cbff34904a63885a606bd8))
+
+- Compare equivalent named forecast scenario bounds
+  ([`0ff5798`](https://github.com/TimKleindick/general_manager/commit/0ff57989013513ec116b1b075c1f5a1a1db5cec2))
+
+- Preserve category lookup progress and interruption evidence
+  ([`a0e551d`](https://github.com/TimKleindick/general_manager/commit/a0e551de579c25f7e2668e9d3c88ec36006acbf5))
+
+- Preserve chat usage provenance and bind native prompts
+  ([`665450c`](https://github.com/TimKleindick/general_manager/commit/665450c6dd6a763595309331c85a737972e7618f))
+
+- Preserve planner provider failure provenance
+  ([`34f8020`](https://github.com/TimKleindick/general_manager/commit/34f8020eda51fa55f44a902f9afd3c4e1133956b))
+
+- Register collection filter codecs for category bindings
+  ([`51ee9a4`](https://github.com/TimKleindick/general_manager/commit/51ee9a4587792e58ae3797b39605877eb50f12d4))
+
+- Separate winner claims from comparison evidence
+  ([`d976067`](https://github.com/TimKleindick/general_manager/commit/d9760675acda5de4f2dfd14961eb3fd5c4c31724))
+
+- Supersede partial category query feedback with complete successors
+  ([`e7e7ae5`](https://github.com/TimKleindick/general_manager/commit/e7e7ae58be1b96f3697b914d175015ff977660c6))
+
+- Version extraction contracts and clarify category feedback
+  ([`03558a1`](https://github.com/TimKleindick/general_manager/commit/03558a11db00826eeb60ee9fce45d4e0ba4c04b5))
+
+- **chat**: Bind complete eval stream and feedback history
+  ([`0f925e1`](https://github.com/TimKleindick/general_manager/commit/0f925e147517943e8ea187d57bce5ae30f3a566c))
+
+- **chat**: Bind eval cohorts and terminal provider stops
+  ([`b1835ad`](https://github.com/TimKleindick/general_manager/commit/b1835adf0d308693d9f4f9dfcd55e3a720cc369c))
+
+- **chat**: Bind lossless synthesis references
+  ([`c28dc5b`](https://github.com/TimKleindick/general_manager/commit/c28dc5b3b373ef81432b2b051924cae56600a97b))
+
+- **chat**: Bind selective schema work and open-choice review
+  ([`c4b4ed1`](https://github.com/TimKleindick/general_manager/commit/c4b4ed194bb9324041357dd50c0a2291d7708b66))
+
+- **chat**: Certify exact native getter modes
+  ([`634c2fe`](https://github.com/TimKleindick/general_manager/commit/634c2fee8f5aa38f25a6e200a5846ab629feb98f))
+
+- **chat**: Enforce runtime admission and preserve evidence contracts
+  ([`b92dd3e`](https://github.com/TimKleindick/general_manager/commit/b92dd3e94a7894bdba42591d1660e5e2376b3d07))
+
+- **chat**: Exclude unmodeled recursive grouped outputs
+  ([`c2e3b29`](https://github.com/TimKleindick/general_manager/commit/c2e3b29c63003065a0886093abf23a1d7c6e83c4))
+
+- **chat**: Ground forecast provenance and executor progress feedback
+  ([`98755ab`](https://github.com/TimKleindick/general_manager/commit/98755abe0300c9dba01c394a9bb3379f7e83384c))
+
+- **chat**: Harden evidence bindings and compact eval transport
+  ([`c1f1653`](https://github.com/TimKleindick/general_manager/commit/c1f1653bceb6d9305da1ee611a7c0691b7ae88ef))
+
+- **chat**: Report incompatible schema requirement links
+  ([`beb192c`](https://github.com/TimKleindick/general_manager/commit/beb192c379f77f3fc20379f81a5327b98cc240ee))
+
+- **chat**: Restore evaluated long role instructions
+  ([`b72de64`](https://github.com/TimKleindick/general_manager/commit/b72de64756be36f74fb9b4166777359566dc4e05))
+
+- **chat**: Retain nested SQL budgets and fail closed on setup errors
+  ([`237fdf7`](https://github.com/TimKleindick/general_manager/commit/237fdf7ad21f77dde3bc283bbb210b288af2dbd9))
+
+- **chat**: Scope SQL budgets and targeted schema capture
+  ([`eaacb09`](https://github.com/TimKleindick/general_manager/commit/eaacb09cdc3a5db615e59b975ec9470edb8be1ea))
+
+- **chat**: Settle observed quota bookings during stage cleanup
+  ([`3290d40`](https://github.com/TimKleindick/general_manager/commit/3290d40e466259658919d766186c516b6a377617))
+
+- **chat**: Share repeated reference value strings
+  ([`b16d39e`](https://github.com/TimKleindick/general_manager/commit/b16d39e2e1abb855adcf319b428c324c98f26df2))
+
+- **chat**: Unify completion and evaluation contracts
+  ([`e88bd1a`](https://github.com/TimKleindick/general_manager/commit/e88bd1ab72e718165e643cebb0391cc36fa8d35d))
+
+- **eval**: Abstain on unverifiable additional quantities
+  ([`eb0f498`](https://github.com/TimKleindick/general_manager/commit/eb0f498256b3c10aff5b84801fc061fcf8646fe2))
+
+- **eval**: Accept verified equivalent metric source routes
+  ([`fd90bed`](https://github.com/TimKleindick/general_manager/commit/fd90bed491279de0abefd3395d9feb5d253b8b58))
+
+- **eval**: Align judge shapes and evidence-bound exclusions
+  ([`571a0cd`](https://github.com/TimKleindick/general_manager/commit/571a0cd2ced54e8e09b5073e36582c990ae272f8))
+
+- **eval**: Align recommendation scope and supplier identities
+  ([`abdb75a`](https://github.com/TimKleindick/general_manager/commit/abdb75adc56cb19dbe7b57b6349145e615d19327))
+
+- **eval**: Bind equivalent FX inputs to independent rates
+  ([`3adb86a`](https://github.com/TimKleindick/general_manager/commit/3adb86a2f81281040faa3f396a47b935d7d941a9))
+
+- **eval**: Bind positive targets and shared cycle state
+  ([`fa512e3`](https://github.com/TimKleindick/general_manager/commit/fa512e338491c807b3ffff87793ccf123503acd5))
+
+- **eval**: Scope equivalent sources to metric projections
+  ([`7327f99`](https://github.com/TimKleindick/general_manager/commit/7327f99bc30894204ca71232b7eca19dcd9fa11e))
+
+- **eval**: Version exclusion and cost-summary semantics
+  ([`0106dbf`](https://github.com/TimKleindick/general_manager/commit/0106dbfcb91403524d034fcad7e55c090e4ac68e))
+
+### Chores
+
+- Remove obsolete chat evaluation work notes
+  ([`222583c`](https://github.com/TimKleindick/general_manager/commit/222583cb5e91629b6a9bdff167aafbfbc373f876))
+
+### Documentation
+
+- Require checking existing responsibilities before implementation
+  ([`0c36e0f`](https://github.com/TimKleindick/general_manager/commit/0c36e0f6e9086292c3dc1e907bcd7cfad28acefb))
+
+- **chat**: Distinguish timeout enforcement by execution path
+  ([`fbd6569`](https://github.com/TimKleindick/general_manager/commit/fbd6569bcc9d9dbe112fc69fe6cb866ccdee11b6))
+
+- **chat**: Organize user and integrator documentation
+  ([`fae4076`](https://github.com/TimKleindick/general_manager/commit/fae4076aa9634122763ef2e26b65b6d66661d16f))
+
+### Features
+
+- Strengthen planned chat schema discovery and execution
+  ([`d58ded2`](https://github.com/TimKleindick/general_manager/commit/d58ded21dcab163220206529e2f3377a3dd2cd58))
+
+- Support explicit eval requests and optional first messages
+  ([`4ffe105`](https://github.com/TimKleindick/general_manager/commit/4ffe1058f973d63e4fed20d9a660e7eb7c8c0572))
+
+### Performance Improvements
+
+- **chat**: Avoid copying replaced schema subtrees
+  ([`fc90849`](https://github.com/TimKleindick/general_manager/commit/fc908491cc2e3e365e00f251a8af9bdfb347064f))
+
+- **chat**: Avoid copying schema projection trees replaced by rewrites
+  ([`d0ba8e1`](https://github.com/TimKleindick/general_manager/commit/d0ba8e139ce318d8d3bf396921f3d58b193c4366))
+
+- **chat**: Avoid repeated comparisons of identical code
+  ([`e59b03a`](https://github.com/TimKleindick/general_manager/commit/e59b03a86bb503dd4317ed89cd57070784f44c1a))
+
+- **chat**: Retain fresh proofs with cheaper scalar checks
+  ([`66d8ca6`](https://github.com/TimKleindick/general_manager/commit/66d8ca61d00a3d3086eaa33f51890091ea7f4ae0))
+
+- **chat**: Reuse captured GraphQL field definitions
+  ([`4385736`](https://github.com/TimKleindick/general_manager/commit/4385736632b15f078facd0c3ae8676439782801f))
+
+- **chat**: Reuse compiled contracts without repeated index exports
+  ([`0573207`](https://github.com/TimKleindick/general_manager/commit/05732073c543433e57668fda6f6144323c31fae0))
+
+- **chat**: Reuse per-pass pooling eligibility
+  ([`32777da`](https://github.com/TimKleindick/general_manager/commit/32777da150d0e358c01e1e5105a27aa008a1d5a3))
+
+- **chat**: Reuse projection validation and string pooling work
+  ([`73fbc1a`](https://github.com/TimKleindick/general_manager/commit/73fbc1a60fa8371f2d983ad3aa559019e27a92bb))
+
+- **eval**: Reuse repeated trace text redaction per export
+  ([`2ac87a1`](https://github.com/TimKleindick/general_manager/commit/2ac87a1ee26da4f716dd4bf7a1b3fe1561997b78))
+
+### Refactoring
+
+- **chat**: Clarify and compact planned role prompts
+  ([`ab14e95`](https://github.com/TimKleindick/general_manager/commit/ab14e95a008b9c37b06bf134fc0478a3adcba4a4))
+
+- **chat**: Remove legacy eval execution
+  ([`9b955ef`](https://github.com/TimKleindick/general_manager/commit/9b955effe4c777ef9a44e33272c662dc54075013))
+
+- **eval**: Group internal helpers and archive calibration
+  ([`7f3b721`](https://github.com/TimKleindick/general_manager/commit/7f3b7215a4e7847a1b334d95ab2fea44e7b8197a))
+
+### Testing
+
+- Consolidate clarification regressions and drop stale assertions
+  ([`88611f6`](https://github.com/TimKleindick/general_manager/commit/88611f668c638b5110d977e99f57a1c886bb50fd))
+
+- Expose early eval interruption setup failures
+  ([`14df12f`](https://github.com/TimKleindick/general_manager/commit/14df12f02e4535daa91fbd0a30461dc63c63742b))
+
+- Initialize real schema for interruption regression
+  ([`5ce28f9`](https://github.com/TimKleindick/general_manager/commit/5ce28f94d629eaa51600933b4c7dcea507a97018))
+
+- Remove local snapshot dependencies from schema regressions
+  ([`26486aa`](https://github.com/TimKleindick/general_manager/commit/26486aa269174bf7064fd2e0d9867377e42034a0))
+
+- Synchronize iterator cancellation before closing
+  ([`390c765`](https://github.com/TimKleindick/general_manager/commit/390c76526d09ccae2a4d862365c6ef4355786cb4))
+
+- **chat**: Bound CI schema probe separately from stage budgets
+  ([`1573a03`](https://github.com/TimKleindick/general_manager/commit/1573a03289b1d406a9a41b3b23f918b167763cd2))
+
+- **chat**: Decouple scheduler probes from startup latency
+  ([`08feb74`](https://github.com/TimKleindick/general_manager/commit/08feb744341bf9e31f5ab14b540e5ec521f6af3c))
+
+- **eval**: Bind scenario compatibility to real reference 1.17
+  ([`af828da`](https://github.com/TimKleindick/general_manager/commit/af828da2f119b80495b20aad3c1612bdd9aa2643))
+
+- **eval**: Expose E100 phases without relaxing parity guard
+  ([`f67b029`](https://github.com/TimKleindick/general_manager/commit/f67b0296673a82a5fdf04ab17cb6d3e2c24fe9d0))
+
+- **eval**: Update dynamic scripted helper import
+  ([`a055281`](https://github.com/TimKleindick/general_manager/commit/a055281360e020c27fff0646c9bbf9429f36b1d8))
+
+- **eval**: Validate full native parity before compact child receipt
+  ([`3a1700c`](https://github.com/TimKleindick/general_manager/commit/3a1700c7fa840c333d9b2920d6853cabaa730489))
+
+
 ## v0.86.14 (2026-10-24)
 
 ### Bug Fixes
