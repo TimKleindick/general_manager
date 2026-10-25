@@ -67,8 +67,10 @@ applies the request user's read policy before local ordering, counting, and
 slicing, and always resolves finite pagination. Omitted controls mean page 1 and
 size 10; configure positive `REMOTE_API_DEFAULT_PAGE_SIZE` and
 `REMOTE_API_MAX_PAGE_SIZE` settings when needed (the maximum defaults to 100).
-Oversized, non-positive, and boolean page sizes return HTTP 400 before query
-execution. Only readable rows contribute to `total_count`; incomplete upstream
+Non-null `page` and `page_size` values must be positive integers; boolean values
+are rejected. Omitted or null controls use the defaults. Invalid controls or a
+`page_size` above the maximum return HTTP 400 before query execution.
+Only readable rows contribute to `total_count`; incomplete upstream
 responses requiring per-instance checks omit it. `ordering` may be one field
 name or a list of field names; a leading `-` sorts that field descending, and
 multi-field ordering is passed once as one complete bucket sort call. A nonempty

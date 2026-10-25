@@ -30,8 +30,10 @@ Every query defaults to page 1 with 10 items. Set
 `GENERAL_MANAGER["REMOTE_API_DEFAULT_PAGE_SIZE"]` and
 `GENERAL_MANAGER["REMOTE_API_MAX_PAGE_SIZE"]` to positive integers to change the
 server default and maximum (100 by default); the default cannot exceed the
-maximum. Explicit oversized, non-integer, or non-positive page sizes fail with
-HTTP 400 (`invalid_request`) before executing the query. Clients that previously
+maximum. Non-null `page` and `page_size` values must be positive integers;
+boolean values are rejected. Omitted or null controls use the defaults. Invalid
+controls or a `page_size` above the maximum fail with HTTP 400 (`invalid_request`)
+before executing the query. Clients that previously
 omitted pagination must now request subsequent pages to read more than the
 default page. Response metadata always reports the effective page and size.
 
