@@ -15,6 +15,12 @@ import {
 // than the server's upload policy, or use a reviewed streaming hash library.
 const MAX_CLIENT_HASH_BYTES = 25_000_000;
 
+// Use an absolute application URL and "include" for cross-origin deployments.
+const GRAPHQL_URL = "/graphql";
+const APPLICATION_CREDENTIALS = "same-origin";
+// Supply the application's normal CSRF header/token when required.
+const APPLICATION_CSRF_HEADERS = {};
+
 const PUBLIC_UPLOAD_CODES = new Set([
   "UNAUTHENTICATED",
   "PERMISSION_DENIED",
@@ -57,10 +63,10 @@ async function sha256Hex(file) {
 }
 
 async function graphql(query, variables) {
-  const response = await fetch("/graphql", {
+  const response = await fetch(GRAPHQL_URL, {
     method: "POST",
-    credentials: "same-origin",
-    headers: {"Content-Type": "application/json"},
+    credentials: APPLICATION_CREDENTIALS,
+    headers: {"Content-Type": "application/json", ...APPLICATION_CSRF_HEADERS},
     body: JSON.stringify({query, variables}),
   });
   const payload = await response.json();
@@ -103,8 +109,10 @@ async function uploadAvatar(profileId, file) {
   );
   const transfer = await fetch(instructions.uploadUrl, {
     method: instructions.method,
-    credentials: instructions.transport === "PROXY" ? "same-origin" : "omit",
-    headers,
+    credentials: instructions.transport === "PROXY" ? APPLICATION_CREDENTIALS : "omit",
+    headers: instructions.transport === "PROXY"
+      ? {...APPLICATION_CSRF_HEADERS, ...headers}
+      : headers,
     body: file,
   });
   if (!transfer.ok) {
@@ -132,8 +140,13 @@ the authenticated application upload endpoint; keep the returned
 `Authorization: GMUpload ...` header and the authenticated session. Do not send
 that credential to S3. The proxy enforces the S3 single-`PUT` ceiling of
 5,368,709,120 bytes even when the global upload limit is larger. Cross-origin
-application clients must use their normal credentialed CORS/CSRF configuration
-and `credentials: "include"` for session cookies.
+application clients must set `GRAPHQL_URL` to the application endpoint and
+`APPLICATION_CREDENTIALS` to `"include"` for session cookies on both GraphQL and
+proxy requests. Configure credentialed CORS for the specific client origin and
+the application's trusted CSRF origin/token handling; populate
+`APPLICATION_CSRF_HEADERS` with the required CSRF header from that integration.
+Direct transfers keep `credentials: "omit"` and receive no application CSRF
+headers.
 
 The `isPublicCode` allowlist treats the stable upload codes as a client
 contract, so this recipe can show actionable upload failures without trusting

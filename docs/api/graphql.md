@@ -1186,10 +1186,12 @@ be empty or JSON objects. `POST <base>/<resource>/query` accepts optional
 `filters`, `excludes`, `ordering`, `page`, and `page_size`. It starts with
 `manager_cls.all()`, applies the manager's row read policy before
 local ordering, counting, and slicing, and always resolves finite pagination:
-omitted controls mean page 1 and size 10. `REMOTE_API_DEFAULT_PAGE_SIZE` and
-`REMOTE_API_MAX_PAGE_SIZE` are positive integer settings (the maximum defaults
-to 100); an oversized, non-positive, or boolean page size returns HTTP 400
-before execution. Only readable rows contribute to local `total_count`, and an
+omitted or null controls mean page 1 and size 10. Non-null `page` and `page_size`
+values must be positive integers; boolean values are rejected.
+`REMOTE_API_DEFAULT_PAGE_SIZE` and `REMOTE_API_MAX_PAGE_SIZE` are positive
+integer settings (the maximum defaults to 100). Invalid controls or a
+`page_size` above the maximum return HTTP 400 before execution. Only readable
+rows contribute to local `total_count`, and an
 incomplete upstream result requiring per-instance authorization omits the
 count. Request-backed managers with multiple permission alternatives reject
 global pagination or ordering controls that cannot be proven complete.

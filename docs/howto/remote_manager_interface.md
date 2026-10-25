@@ -86,8 +86,10 @@ Every RemoteAPI query is finite: omitted controls mean `page=1` and
 `page_size=10`. Configure positive
 `GENERAL_MANAGER["REMOTE_API_DEFAULT_PAGE_SIZE"]` and
 `GENERAL_MANAGER["REMOTE_API_MAX_PAGE_SIZE"]` values when the defaults need to
-change; the default cannot exceed the maximum, and an oversized, non-positive,
-or non-integer request returns HTTP 400 before execution. Request later pages
+change; the default cannot exceed the maximum. Non-null `page` and `page_size`
+values must be positive integers; boolean values are rejected. Omitted or null
+controls use the defaults. Invalid controls or a `page_size` above the maximum
+return HTTP 400 before execution. Request later pages
 explicitly when more rows are needed.
 
 Read permissions are applied before local ordering, counting, and slicing. An
