@@ -5,6 +5,7 @@ from typing import ClassVar
 
 from django.contrib.auth.models import AnonymousUser
 from django.test import override_settings
+from general_manager.api.graphql_query_permissions import QueryFieldPermissionError
 
 from general_manager.api.graphql import GraphQL
 from general_manager.api.property import graph_ql_property
@@ -41,8 +42,30 @@ class TestGraphQLSearchScopeSecurity(GeneralManagerTransactionTestCase):
             def secret(self) -> str:
                 return "ordinary" if self.key == 1 else "needle-private"
 
+        class TypedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                key = Input(int, possible_values=[1])
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
+                def check_permission(self, action, attribute):
+                    return attribute != "type"
+
+            class SearchConfig:
+                indexes: ClassVar[list] = [IndexConfig(name="global", fields=["label"])]
+
+            @graph_ql_property
+            def label(self) -> str:
+                return "visible"
+
+            @graph_ql_property
+            def type(self) -> str:
+                return "protected"
+
+        cls.TypedCalculation = TypedCalculation
         cls.Calculation = ScopedCalculation
-        cls.general_manager_classes = [ScopedCalculation]
+        cls.general_manager_classes = [ScopedCalculation, TypedCalculation]
         super().setUpClass()
 
     @override_settings(DEBUG=False, GENERAL_MANAGER_VALIDATE_INPUT_VALUES=False)
@@ -76,3 +99,48 @@ class TestGraphQLSearchScopeSecurity(GeneralManagerTransactionTestCase):
                     assert [item.key for item in result["results"]] == expected
         finally:
             configure_search_backend(previous_backend)
+
+    def test_synthetic_type_filter_preserves_native_backend_result(self):
+        previous_backend = backend_registry._backend
+        backend = DevSearchBackend()
+        configure_search_backend(backend)
+        try:
+            SearchIndexer(backend).index_instance(self.Calculation(key=1))
+            resolver = GraphQL._query_fields["search"].resolver
+            info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+            for field in ("type", "type__exact"):
+                with self.subTest(field=field):
+                    result = resolver(
+                        None,
+                        info,
+                        query="",
+                        types=["ScopedCalculation"],
+                        filters=[{"field": field, "value": "ScopedCalculation"}],
+                    )
+                    # DevSearchBackend applies filters to document.data; it
+                    # does not project the envelope type into that mapping.
+                    # Preserve its native empty result rather than rejecting
+                    # the valid filter during manager-field authorization.
+                    assert result["total"] == 0
+                    assert result["results"] == []
+        finally:
+            configure_search_backend(previous_backend)
+
+    def test_real_type_field_still_requires_permission_for_each_manager(self):
+        resolver = GraphQL._query_fields["search"].resolver
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        for types in (
+            ["TypedCalculation"],
+            ["ScopedCalculation", "TypedCalculation"],
+        ):
+            with self.subTest(types=types):
+                with self.assertRaisesRegex(
+                    QueryFieldPermissionError, "Permission denied"
+                ):
+                    resolver(
+                        None,
+                        info,
+                        query="",
+                        types=types,
+                        filters=[{"field": "type", "value": "TypedCalculation"}],
+                    )
