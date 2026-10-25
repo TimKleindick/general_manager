@@ -1475,6 +1475,22 @@ def register_search_query(
                 candidates = list(
                     authorized_source_candidates(source_candidates, permission_plan)
                 )
+                # The index envelope exposes a synthetic manager-type filter.
+                # A real manager attribute with that name still needs permission.
+                if not any(
+                    "type" in fields
+                    for fields in (
+                        manager_class.Interface.get_attribute_types(),
+                        manager_class.Interface.get_graph_ql_properties(),
+                        manager_class.Interface.get_attributes(),
+                        manager_class.Interface.input_fields,
+                    )
+                ):
+                    operand_paths = {
+                        path
+                        for path in operand_paths
+                        if path.split("__", 1)[0] != "type"
+                    }
                 authorize_query_fields(candidates, info, operand_paths)
                 # Search indexes may contain explicitly indexed calculations or
                 # newly inserted rows outside this authorized native domain.
