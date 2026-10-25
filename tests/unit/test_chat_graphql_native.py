@@ -496,3 +496,28 @@ def test_unknown_total_count_is_conservative_not_a_tool_failure(
     assert result["total_count"] is None
     assert result["has_more"] is None
     assert result["complete"] is False
+
+
+@pytest.mark.parametrize("requested_size", [None, 1000])
+@override_settings(
+    GENERAL_MANAGER={
+        "CHAT": {"max_results": 200},
+        "GRAPHQL_DEFAULT_PAGE_SIZE": 1,
+        "GRAPHQL_MAX_PAGE_SIZE": 2,
+    }
+)
+def test_graphql_server_cap_applies_to_compiled_nested_pages(
+    native_schema, requested_size
+):
+    selection = {
+        "field": "materialsList",
+        "fields": [{"items": ["code"]}, {"pageInfo": ["totalCount"]}],
+    }
+    if requested_size is not None:
+        selection["arguments"] = {"pageSize": requested_size}
+    result = query(manager="ProjectCommercial", filters={}, fields=[selection])
+    assert result["data"][0]["materialsList"]["items"] == [
+        {"code": "M0"},
+        {"code": "M1"},
+    ]
+    assert result["complete"] is False

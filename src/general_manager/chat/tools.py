@@ -604,14 +604,7 @@ def query(
             "Specify pageSize when using a native page greater than one."
         )
     page_offset = (native_page - 1) * (requested_page_size or 0)
-    compiler = ReadCompiler(
-        native_schema,
-        max_results
-        if isinstance(max_results, int)
-        and not isinstance(max_results, bool)
-        and max_results > 0
-        else None,
-    )
+    compiler = ReadCompiler(native_schema, max_page_size)
     query_text, variables = compiler.document(
         list_field_name,
         native_arguments,
