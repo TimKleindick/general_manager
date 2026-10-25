@@ -2,6 +2,42 @@
 
 <!-- version list -->
 
+## v0.87.1 (2026-10-25)
+
+### Bug Fixes
+
+- Align query guards with native chat pagination
+  ([`15ad8c0`](https://github.com/TimKleindick/general_manager/commit/15ad8c0bbbbe643e2d12710b976386cd564731c2))
+
+- Authorize GraphQL query operands and bound query work
+  ([`e4c4e18`](https://github.com/TimKleindick/general_manager/commit/e4c4e1857217e6e8ab102c8dfcdb99ffd73cc370))
+
+- Bind search hits to authorized scope and refresh event permissions
+  ([`1777d11`](https://github.com/TimKleindick/general_manager/commit/1777d1196c678c19dd7658ce71dd1e2a9e5f2b30))
+
+- Preserve synthetic search type filters
+  ([`9c20580`](https://github.com/TimKleindick/general_manager/commit/9c20580e7d5e5e47f70977589445530c554fee77))
+
+### Documentation
+
+- Clarify pagination validation and upload credentials
+  ([`14d21d3`](https://github.com/TimKleindick/general_manager/commit/14d21d32d3109a91bcbdbd7fc317b8436010fb04))
+
+- Document recent public API changes
+  ([`e220663`](https://github.com/TimKleindick/general_manager/commit/e220663b570be748bf7ca157df7a827ed9a4ae80))
+
+- Resolve proxy upload URLs against the application origin
+  ([`4b8cda9`](https://github.com/TimKleindick/general_manager/commit/4b8cda92c5f52526da60d4ed6cb1c61bf58cbc33))
+
+### Testing
+
+- Align historical reads with detail authorization contract
+  ([`5a8287d`](https://github.com/TimKleindick/general_manager/commit/5a8287dccb0b2f473db32de2370e79d66a1da882))
+
+- Synchronize subscription replacement timeout cleanup
+  ([`e9e6284`](https://github.com/TimKleindick/general_manager/commit/e9e62849c44d99e9d65fceacdf2e765dd4161757))
+
+
 ## v0.87.0 (2026-10-25)
 
 ### Bug Fixes
