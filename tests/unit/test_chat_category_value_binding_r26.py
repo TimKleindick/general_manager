@@ -29,6 +29,7 @@ from general_manager.utils.filter_parser import create_filter_function
 from tests.unit.test_chat_planned_scheduler import _task
 from tests.unit.test_chat_planned_tool_feedback import _record_rounds, _runner
 from tests.unit import test_chat_graphql_native as native_tools
+from tests.utils.manager_rows import materialized_manager
 from tests.utils.simple_manager_interface import BaseTestInterface, SimpleBucket
 
 
@@ -94,7 +95,8 @@ def category_schema(request, monkeypatch):
         def filter(cls, **kwargs):
             calls.append(kwargs)
             return InventoryRows(
-                cls._parent_class, [SimpleNamespace(**row) for row in rows]
+                cls._parent_class,
+                [materialized_manager(cls._parent_class, row) for row in rows],
             ).filter(**kwargs)
 
     class Inventory(GeneralManager):

@@ -41,6 +41,7 @@ from general_manager.interface.unit_contract import FieldUnitContract
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from tests.unit.test_chat_planned_tool_feedback import _runner, _record_rounds
+from tests.utils.manager_rows import materialized_manager
 from tests.utils.simple_manager_interface import BaseTestInterface
 
 
@@ -201,7 +202,10 @@ def public_population(monkeypatch, request):
         def all(cls):
             return PopulationBucket(
                 cls._parent_class,
-                [SimpleNamespace(**row) for row in rows[cls._parent_class.__name__]],
+                [
+                    materialized_manager(cls._parent_class, row)
+                    for row in rows[cls._parent_class.__name__]
+                ],
             )
 
         @classmethod
