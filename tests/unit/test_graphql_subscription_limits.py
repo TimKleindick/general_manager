@@ -204,6 +204,15 @@ class SubscriptionLimitTests(TestCase):
                     self.closed = True
 
             source = Source()
+            closing = asyncio.Event()
+            wait_for = asyncio.wait_for
+
+            async def expire_during_cleanup(task, timeout):
+                self.assertEqual(timeout, 0.01)
+                await closing.wait()
+                # Exercise setup expiry after the first cancellation reached
+                # cleanup; two cancellations before delivery can coalesce.
+                return await wait_for(task, timeout=0)
 
             async def setup(*_args):
                 return source
@@ -212,6 +221,7 @@ class SubscriptionLimitTests(TestCase):
                 try:
                     await asyncio.Event().wait()
                 finally:
+                    closing.set()
                     await asyncio.Event().wait()
 
             consumer = self.consumer()
@@ -219,6 +229,10 @@ class SubscriptionLimitTests(TestCase):
             consumer.active_subscriptions["first"] = old
             await asyncio.sleep(0)
             with (
+                patch(
+                    "general_manager.api.graphql_subscription_consumer.asyncio.wait_for",
+                    side_effect=expire_during_cleanup,
+                ),
                 patch.object(
                     GraphQLSubscriptionConsumer, "subscription_setup_timeout", 0.01
                 ),
@@ -227,9 +241,7 @@ class SubscriptionLimitTests(TestCase):
                     return_value=self.schema(setup),
                 ),
             ):
-                await asyncio.wait_for(
-                    consumer._handle_subscribe(self.message("first")), 0.2
-                )
+                await wait_for(consumer._handle_subscribe(self.message("first")), 0.2)
                 self.assertTrue(source.closed)
                 self.assertEqual(consumer.active_subscriptions, {})
                 self.assertTrue(old.cancelled())
