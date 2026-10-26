@@ -218,6 +218,21 @@ filters prefilter hits, exclude mappings and unfilterable rules are resolved by
 the later permission pass, and aggregate authorization logging occurs only when
 that pass requires an instance check.
 
+Search authorization is also an identity boundary. For each selected manager,
+the resolver first enumerates the field-authorized native source domain and
+keeps those source instances keyed by normalized identification. A backend hit
+contributes to `results` or `total` only when its type and identification match
+that authorized source snapshot; stale, out-of-domain, and unexpected-type hits
+are ignored. Search documents therefore cannot grant access to an object merely
+because an identification was indexed, and the resolver does not instantiate a
+new manager from an arbitrary hit before authorization. An incomplete remote
+source page is an error rather than permission to return an unbounded result.
+
+The generated `type` filter is a manager-type selector, not a manager field for
+operand authorization. It is removed from the permission operand check when a
+manager does not expose an actual field named `type`; a real exposed `type`
+field remains subject to its normal field permission.
+
 ## GraphQL search API
 
 When GraphQL is auto-created, a global `search` query is added. It accepts:
@@ -239,15 +254,15 @@ Results are returned as a union of manager GraphQL types:
 
 Omitted `page` defaults to `1` and omitted `pageSize` defaults to `10`.
 Explicit `0` or negative pagination values are rejected as GraphQL
-`BAD_USER_INPUT` errors. The resolver searches each selected manager type,
-instantiates managers from hit identification, then applies read permission
-filters and any required per-instance read checks before counting and returning
-results. Manager search order follows GraphQL's manager registry order filtered
-to managers with search config. When `types` is supplied, unknown manager class
-names are ignored. Malformed hit identification that raises `TypeError`,
-`ValueError`, or `KeyError` while constructing the manager is skipped. Invalid
-configured filter keys are reported as GraphQL errors. Backend lookup/search
-errors, other manager construction errors, permission errors, and sort
+`BAD_USER_INPUT` errors. The resolver enumerates the field-authorized source
+domain for each selected manager, matches backend hits to those canonical
+instances by normalized identification, and then applies any required
+per-instance read checks before counting and returning results. Manager search
+order follows GraphQL's manager registry order filtered to managers with search
+config. When `types` is supplied, unknown manager class names are ignored.
+Malformed or out-of-domain hit identification is skipped rather than hydrated.
+Invalid configured filter keys are reported as GraphQL errors. Backend
+lookup/search errors, source-authorization errors, permission errors, and sort
 comparison errors propagate. `orderBy` uses the configured sortable-field union
 for its enum, then validates every requested term against each selected type and
 index before backend fetching. Local retained-window and final comparison use

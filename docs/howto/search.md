@@ -328,6 +328,17 @@ Use `totalMode: "exact"` when a request requires an exact count or an explicit
 limit error even if the deployment default is bounded. It cannot disable the
 server scan limit. Invalid `totalMode` values are GraphQL user-input errors.
 
+Search results stay inside the authorized native source domain. The resolver
+checks the requested filter operands, enumerates the field-authorized source
+instances, and matches indexed hits to those canonical instances by normalized
+identification. Stale documents, documents from another permission scope, and
+unexpected manager types are ignored for both `results` and `total`; an indexed
+identification cannot grant access by itself. If a remote source cannot return a
+complete authorized page, the search fails instead of treating the incomplete
+page as the full domain. The generated `type` filter selects manager types and
+does not require permission on a manager field unless that manager really
+exposes a field named `type`.
+
 ## Step 5: Async indexing (optional)
 
 Enable async updates via Celery:
