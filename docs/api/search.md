@@ -202,7 +202,7 @@ search(
 ): SearchResult
 ```
 
-The result exposes `results`, `total`, `totalIsExact`, `pageInfo`, and `took_ms`.
+The result exposes `results`, `total`, `totalIsExact`, `pageInfo`, and `tookMs`.
 Omitted `index`, `page`, and `pageSize` use `global`, `1`, and `10`; non-positive
 `page` or `pageSize` values are `BAD_USER_INPUT`. `totalMode` is `exact` by
 default for compatibility or `bounded` when selected per request or by
@@ -219,11 +219,15 @@ fields; its `SearchOrderBy` input uses the generated sortable-field enum and
 Authorization is performed against the current field-authorized native source
 domain before backend hits are hydrated. A hit contributes only when its type
 and normalized identification match a canonical authorized source instance;
-stale, out-of-domain, malformed, and unexpected-type hits are skipped. An
-incomplete remote source page is an error. The synthetic `type` filter is
+hits with missing or out-of-domain identities, malformed identification, or
+unexpected types are skipped. This checks native identity membership; indexed
+text and filter values can remain stale until reindexing. An incomplete remote
+source page is an error. The synthetic `type` filter is
 removed from operand authorization unless the manager exposes an actual field
-named `type`; an actual field remains permission-checked. Invalid configured
-filter keys and invalid ordering terms are GraphQL errors. Backend, source
+named `type`; an actual field remains permission-checked. The `types` argument
+selects manager classes, while `type` filter matching retains the selected
+backend's native semantics. Invalid configured filter keys and invalid ordering
+terms are GraphQL errors. Backend, source
 authorization, permission, and sort errors propagate.
 
 DevSearch honors explicit groups without changing its existing scalar/list

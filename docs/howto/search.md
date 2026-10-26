@@ -331,13 +331,16 @@ server scan limit. Invalid `totalMode` values are GraphQL user-input errors.
 Search results stay inside the authorized native source domain. The resolver
 checks the requested filter operands, enumerates the field-authorized source
 instances, and matches indexed hits to those canonical instances by normalized
-identification. Stale documents, documents from another permission scope, and
+identification. Documents with missing or out-of-scope identities and
 unexpected manager types are ignored for both `results` and `total`; an indexed
 identification cannot grant access by itself. If a remote source cannot return a
 complete authorized page, the search fails instead of treating the incomplete
-page as the full domain. The generated `type` filter selects manager types and
-does not require permission on a manager field unless that manager really
-exposes a field named `type`.
+page as the full domain. The identity check does not refresh indexed content;
+older text or filter values for a still-authorized identity can keep matching
+until reindexing. Use the `types` argument to select manager classes. Synthetic
+`type` filter keys retain the selected backend's matching semantics and are
+excluded from operand permission checks unless that manager really exposes a
+field named `type`.
 
 ## Step 5: Async indexing (optional)
 

@@ -212,7 +212,7 @@ entirely: GraphQL does not call the search backend for it or add backend timing
 to the response. A manager with
 `allow_all` still queries the backend with the user's filters, but adds no
 permission filter group and does not run per-hit instance checks. Its reported
-`took_ms` retains the normal response semantics.
+`tookMs` retains the normal response semantics.
 Conditional mapping and `None` callbacks retain the existing behavior: mapping
 filters prefilter hits, exclude mappings and unfilterable rules are resolved by
 the later permission pass, and aggregate authorization logging occurs only when
@@ -222,16 +222,22 @@ Search authorization is also an identity boundary. For each selected manager,
 the resolver first enumerates the field-authorized native source domain and
 keeps those source instances keyed by normalized identification. A backend hit
 contributes to `results` or `total` only when its type and identification match
-that authorized source snapshot; stale, out-of-domain, and unexpected-type hits
-are ignored. Search documents therefore cannot grant access to an object merely
-because an identification was indexed, and the resolver does not instantiate a
-new manager from an arbitrary hit before authorization. An incomplete remote
+that authorized source snapshot; hits with missing or out-of-domain identities
+and unexpected types are ignored. Search documents therefore cannot grant access
+to an object merely because an identification was indexed, and the resolver does
+not instantiate a new manager from an arbitrary hit before authorization. An incomplete remote
 source page is an error rather than permission to return an unbounded result.
+Identity membership does not verify indexed text or filter freshness: an older
+indexed match for a still-authorized instance can remain until reindexing,
+while the returned instance comes from the current source snapshot.
 
-The generated `type` filter is a manager-type selector, not a manager field for
-operand authorization. It is removed from the permission operand check when a
-manager does not expose an actual field named `type`; a real exposed `type`
-field remains subject to its normal field permission.
+The `types` argument selects manager classes. Synthetic `type` filter keys are
+forwarded to the backend and retain its native filter semantics. For example,
+DevSearch compares filter keys with document data and does not inject the
+envelope's manager type into that data. A synthetic `type` key is removed from
+the permission operand check when a manager does not expose an actual field
+named `type`; a real exposed `type` field remains subject to its normal field
+permission.
 
 ## GraphQL search API
 
@@ -250,7 +256,7 @@ Results are returned as a union of manager GraphQL types:
 - `totalIsExact`: nullable boolean field. `true` means `total` is the exact
   post-permission count; `false` means bounded mode stopped scanning before it
   could prove no more backend hits remain, so `total` is a lower bound.
-- `took_ms`: nullable integer field containing accumulated backend search time in milliseconds when reported.
+- `tookMs`: nullable integer field containing accumulated backend search time in milliseconds when reported.
 
 Omitted `page` defaults to `1` and omitted `pageSize` defaults to `10`.
 Explicit `0` or negative pagination values are rejected as GraphQL
