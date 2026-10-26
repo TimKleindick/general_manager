@@ -218,9 +218,10 @@ filters prefilter hits, exclude mappings and unfilterable rules are resolved by
 the later permission pass, and aggregate authorization logging occurs only when
 that pass requires an instance check.
 
-Search authorization is also an identity boundary. For each selected manager,
-the resolver first enumerates the field-authorized native source domain and
-keeps those source instances keyed by normalized identification. A backend hit
+Search authorization is also an identity boundary. For each selected manager
+that is not statically denied (`deny_all`), the resolver first enumerates the
+field-authorized native source domain and keeps those source instances keyed by
+normalized identification. A backend hit
 contributes to `results` or `total` only when its type and identification match
 that authorized source snapshot; hits with missing or out-of-domain identities
 and unexpected types are ignored. Search documents therefore cannot grant access
