@@ -210,7 +210,9 @@ default for compatibility or `bounded` when selected per request or by
 `SEARCH_SCAN_LIMIT_EXCEEDED` rather than returning a partial exact total when
 the server-owned `GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT` is exhausted. Bounded mode
 returns the authorized count found within that budget and sets `totalIsExact` to
-`false` when exhaustion was not observed.
+`false` when the scan budget is exhausted before backend exhaustion can be
+proved. It remains `true` when all backend scans finish before reaching the
+budget.
 
 `orderBy` is present when the registered searchable managers expose sortable
 fields; its `SearchOrderBy` input uses the generated sortable-field enum and
