@@ -91,11 +91,13 @@ semantics remain unchanged. See the [search guide](../howto/search.md#step-4-que
 
 Search is still permission-scoped after the backend lookup. The resolver
 enumerates the authorized native source instances and matches hits to those
-instances by normalized identification, so stale or out-of-scope index records
-cannot appear in `results` or inflate `total`. No client-side filtering is a
-replacement for this server check. The synthetic `type` filter selects manager
-types; it is not treated as a field permission unless the selected manager
-actually exposes a field named `type`.
+instances by normalized identification, so missing or out-of-scope identities
+cannot appear in `results` or inflate `total`. Indexed text and filter values
+can still match older content until reindexing; returned objects come from the
+authorized source snapshot. No client-side filtering is a replacement for this
+server check. Use `types` to select manager classes. Synthetic `type` filter
+keys retain backend matching semantics and are excluded from operand permission
+checks unless the selected manager actually exposes a field named `type`.
 
 ## Paginated listings
 
