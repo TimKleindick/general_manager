@@ -894,6 +894,23 @@ resolution; the calculation helper does not persist it itself.
 
 ::: general_manager.chat.planned.calculations.calculate_evidence
 
+### Unit declarations
+
+`Interface.field_unit_contracts` accepts immutable declarations from
+`FieldUnitContract`. The declarations are validated against the existing
+interface attributes when the executable schema is built; they describe
+dimensions and do not provide values or conversion data.
+
+::: general_manager.interface.unit_contract.FieldUnitContract
+
+`FieldUnitContract.fixed_quantity(*, unit: str, label: str) -> FieldUnitContract`
+declares a known fixed quantity unit for a numeric interface attribute that has
+no sibling unit field. `unit` must be a supported non-offset unit and `label`
+must be non-empty; invalid or unknown units, offset units, or empty labels raise
+`ValueError` during construction. Applying the contract to a missing or
+non-numeric target attribute is rejected during executable schema validation.
+The returned contract is immutable and takes effect after the schema is rebuilt.
+
 ### Planned orchestration helpers
 
 The lower-level planned modules are transport-neutral and are useful when an

@@ -89,6 +89,14 @@ string keys such as `"007"` remain strings. Native property filters require the
 explicit identity declaration shown above; backend collection membership
 semantics remain unchanged. See the [search guide](../howto/search.md#step-4-query-via-graphql).
 
+Search is still permission-scoped after the backend lookup. The resolver
+enumerates the authorized native source instances and matches hits to those
+instances by normalized identification, so stale or out-of-scope index records
+cannot appear in `results` or inflate `total`. No client-side filtering is a
+replacement for this server check. The synthetic `type` filter selects manager
+types; it is not treated as a field permission unless the selected manager
+actually exposes a field named `type`.
+
 ## Paginated listings
 
 ```graphql

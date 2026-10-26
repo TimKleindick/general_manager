@@ -109,6 +109,31 @@ applies. Do not use a prompt to supply invented record values or bypass native
 permission/confirmation checks. Custom planners must support the contextual
 envelope when definitions or previous runtime questions require it.
 
+## Declare fixed units for planned calculations
+
+When a numeric field has a known unit but no sibling unit attribute, declare a
+fixed unit on the existing interface. The numeric attribute must exist on the
+interface; the declaration supplies dimension authority, not a value or a
+conversion query:
+
+```python
+from general_manager.interface.unit_contract import FieldUnitContract
+
+Interface.field_unit_contracts = {
+    "pieces": FieldUnitContract.fixed_quantity(
+        unit="count",
+        label="pieces",
+    ),
+}
+```
+
+Use `FieldUnitContract.quantity(...)` when rows provide a real sibling unit
+field, and `FieldUnitContract.factor(...)` for a numeric conversion factor.
+Unknown or offset units and empty labels are rejected with `ValueError`.
+Rebuild the executable schema after changing the declaration. See [evidence and
+calculations](../concepts/chat_evidence.md#declaring-units-and-conversion-authority)
+and the [unit declaration API](../api/chat.md#unit-declarations).
+
 ## Set operational limits
 
 ```python

@@ -184,6 +184,48 @@ declared names that are also filterable. Other backends receive original
 `filterable_fields` and can consume or ignore the additional native contracts.
 Document and filter metadata must agree on the native kind.
 
+## Generated GraphQL search authorization
+
+When at least one registered manager has search configuration, GraphQL adds a
+global `search` field with the following public contract:
+
+```graphql
+search(
+  query: String!
+  index: String
+  types: [String]
+  filters: JSONString
+  orderBy: [SearchOrderBy!]
+  totalMode: String
+  page: Int
+  pageSize: Int
+): SearchResult
+```
+
+The result exposes `results`, `total`, `totalIsExact`, `pageInfo`, and `took_ms`.
+Omitted `index`, `page`, and `pageSize` use `global`, `1`, and `10`; non-positive
+`page` or `pageSize` values are `BAD_USER_INPUT`. `totalMode` is `exact` by
+default for compatibility or `bounded` when selected per request or by
+`GENERAL_MANAGER["GRAPHQL_SEARCH_TOTAL_MODE"]`. Exact mode raises
+`SEARCH_SCAN_LIMIT_EXCEEDED` rather than returning a partial exact total when
+the server-owned `GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT` is exhausted. Bounded mode
+returns the authorized count found within that budget and sets `totalIsExact` to
+`false` when exhaustion was not observed.
+
+`orderBy` is present when the registered searchable managers expose sortable
+fields; its `SearchOrderBy` input uses the generated sortable-field enum and
+`ASC`/`DESC` directions.
+
+Authorization is performed against the current field-authorized native source
+domain before backend hits are hydrated. A hit contributes only when its type
+and normalized identification match a canonical authorized source instance;
+stale, out-of-domain, malformed, and unexpected-type hits are skipped. An
+incomplete remote source page is an error. The synthetic `type` filter is
+removed from operand authorization unless the manager exposes an actual field
+named `type`; an actual field remains permission-checked. Invalid configured
+filter keys and invalid ordering terms are GraphQL errors. Backend, source
+authorization, permission, and sort errors propagate.
+
 DevSearch honors explicit groups without changing its existing scalar/list
 comparison rules; plain mappings keep raw comparisons. Meilisearch binds plain
 structured filters to registered index/manager contracts, and explicit groups

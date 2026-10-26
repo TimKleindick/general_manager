@@ -145,8 +145,17 @@ field_unit_contracts = {
     "mass_per_piece": FieldUnitContract.factor(
         source_unit="count", target_unit="g",
     ),
+    "pieces": FieldUnitContract.fixed_quantity(
+        unit="count", label="pieces",
+    ),
 }
 ```
+
+Use `fixed_quantity` when the numeric attribute has a known unit but no sibling
+unit field. The label is explanatory metadata; it does not provide a value or
+authorize a conversion. The named numeric attribute must exist on the
+interface, and the executable schema must be rebuilt after changing the
+declaration.
 
 Rebuild the executable schema after changing declarations. This metadata states
 dimensions; it does not supply values, identities or a conversion query.
