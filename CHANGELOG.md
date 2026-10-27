@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.87.2 (2026-10-27)
+
+### Bug Fixes
+
+- Remediate open Dependabot security alerts
+  ([`7318002`](https://github.com/TimKleindick/general_manager/commit/7318002c571436f3a7218db2e019fec62058852d))
+
+### Documentation
+
+- Clarify search identity and backend matching contracts
+  ([`64fd0e5`](https://github.com/TimKleindick/general_manager/commit/64fd0e5e95671feefe5df42eace200a29a6b5c3e))
+
+- Disambiguate bounded search total exactness
+  ([`9db93ba`](https://github.com/TimKleindick/general_manager/commit/9db93baed563912fb6ef942ef6726388072040fe))
+
+- Document recent public API changes
+  ([`a1f4dbb`](https://github.com/TimKleindick/general_manager/commit/a1f4dbb5b1bfb10bb87732ffbd376208039b3d10))
+
+- Qualify search source enumeration for static denial
+  ([`9cf649c`](https://github.com/TimKleindick/general_manager/commit/9cf649cb5774ae2a20a187c7c4f24748b7da8601))
+
+
 ## v0.87.1 (2026-10-25)
 
 ### Bug Fixes
