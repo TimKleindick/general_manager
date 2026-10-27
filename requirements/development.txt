@@ -26,8 +26,8 @@ mkdocs-minify-plugin==0.8.0
 mkdocs-section-index==0.3.10
 mkdocstrings==0.30.1
 mkdocstrings-python==1.18.2
-pymdown-extensions==10.21.3  # Keep the highlighter API compatible with mkdocstrings.
-black==26.3.1
+pymdown-extensions==11.0.1
+black==26.10.1
 
 # Redis cache and Channels backends used by the bulk throughput benchmark.
 django-redis==7.0.0
