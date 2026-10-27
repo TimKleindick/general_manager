@@ -46,19 +46,21 @@ def test_dependency_metadata_keeps_security_patched_versions() -> None:
     with (repository_root / "pyproject.toml").open("rb") as pyproject_file:
         pyproject = tomllib.load(pyproject_file)
 
-    assert "setuptools>=83.0.0" in pyproject["build-system"]["requires"]
-    assert "Django>=5.2.16" in pyproject["project"]["dependencies"]
-    assert "GitPython>=3.1.58" in pyproject["project"]["dependencies"]
+    assert "setuptools>=84.1.0" in pyproject["build-system"]["requires"]
+    assert "Django>=5.2.17" in pyproject["project"]["dependencies"]
+    assert "GitPython>=3.2.1" in pyproject["project"]["dependencies"]
+    assert "filelock>=4.2.1,<5" in pyproject["project"]["dependencies"]
     assert "graphql-core>=3.2.13" in pyproject["project"]["dependencies"]
     assert "sqlparse>=0.6.0" in pyproject["project"]["dependencies"]
 
     base_requirements = (repository_root / "requirements" / "base.txt").read_text(
         encoding="utf-8"
     )
-    assert "Django==5.2.16\n" in base_requirements
-    assert "GitPython==3.1.58\n" in base_requirements
+    assert "Django==5.2.17\n" in base_requirements
+    assert "GitPython==3.2.1\n" in base_requirements
     assert "graphql-core==3.2.13\n" in base_requirements
-    assert "setuptools==83.0.0\n" in base_requirements
+    assert "setuptools==84.1.0\n" in base_requirements
+    assert "filelock==4.2.1\n" in base_requirements
     assert "sqlparse==0.6.0\n" in base_requirements
 
     development_requirements = (
@@ -69,7 +71,23 @@ def test_dependency_metadata_keeps_security_patched_versions() -> None:
     ).read_text(encoding="utf-8")
     assert "-r base.txt\n" in development_requirements
     assert "-r base.txt\n" in production_requirements
+    assert "-r chat-eval.txt\n" in development_requirements
     assert "mkdocs-material==9.7.7\n" in development_requirements
+    assert "pymdown-extensions==11.0.1\n" in development_requirements
+    assert "black==26.10.1\n" in development_requirements
+
+    chat_eval_requirements = (
+        repository_root / "requirements" / "chat-eval.txt"
+    ).read_text(encoding="utf-8")
+    assert "PyJWT[crypto]==2.15.0\n" in chat_eval_requirements
+
+    example_path = (
+        repository_root / "example_project" / "outer_rim_logistics" / "pyproject.toml"
+    )
+    with example_path.open("rb") as example_file:
+        example = tomllib.load(example_file)
+    assert "setuptools>=84.1.0" in example["build-system"]["requires"]
+    assert "Django>=5.2.17" in example["project"]["dependencies"]
 
 
 def _write_wheel(
