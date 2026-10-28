@@ -39,6 +39,7 @@ class ManagerHistoryQuery(Generic[ManagerT]):
         search_date: datetime | None = None,
         timeline: models.QuerySet[models.Model] | None = None,
     ) -> None:
+        """Capture the query's date and keep its unfiltered entity timeline."""
         self.raw = raw
         self._manager_class = manager_class
         self._search_date = resolve_search_date(search_date)
@@ -55,12 +56,18 @@ class ManagerHistoryQuery(Generic[ManagerT]):
         )
 
     def _dated_query(self) -> models.QuerySet[models.Model]:
+        """Limit candidate audit rows to the resolved explicit or ambient date."""
         snapshot = resolve_search_date(self._search_date)
         if snapshot is None:
             return self.raw
         return self.raw.filter(history_date__lte=snapshot)
 
     def _materialize(self, row: models.Model) -> ManagerT:
+        """Resolve a real version interval and construct under its snapshot.
+
+        Tombstones are audit-only. A datetime cannot select a zero-duration
+        interval, and an explicit date must fall inside the selected version.
+        """
         audit = cast(Any, row)
         model = cast(Any, self._manager_class.Interface)._model
         if audit.history_type == "-":
@@ -110,10 +117,12 @@ class ManagerHistoryQuery(Generic[ManagerT]):
         return self._clone(self.raw.reverse())
 
     def first(self) -> ManagerT | None:
+        """Return the first selected version as a manager, or None."""
         row = self._dated_query().first()
         return None if row is None else self._materialize(row)
 
     def last(self) -> ManagerT | None:
+        """Return the last selected version as a manager, or None."""
         row = self._dated_query().last()
         return None if row is None else self._materialize(row)
 
@@ -143,6 +152,7 @@ class ManagerHistoryQuery(Generic[ManagerT]):
         )
 
     def __iter__(self) -> Iterator[ManagerT]:
+        """Materialize each selected audit version with its effective snapshot."""
         for row in self._dated_query():
             yield self._materialize(row)
 
@@ -159,6 +169,7 @@ class ManagerHistoryQuery(Generic[ManagerT]):
     def __getitem__(self, key: slice) -> list[ManagerT]: ...
 
     def __getitem__(self, key: int | slice) -> ManagerT | list[ManagerT]:
+        """Materialize an indexed version or an eager list for a slice."""
         if isinstance(key, int):
             return self._materialize(self._dated_query()[key])
         return [self._materialize(row) for row in self._dated_query()[key]]

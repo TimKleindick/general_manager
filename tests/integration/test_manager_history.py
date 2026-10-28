@@ -34,11 +34,27 @@ def history_version_visible(instance, _user, _config):
 class TestManagerHistory(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        """Build real historical models with plain and custom properties."""
+
         class HistoryParent(GeneralManager):
             class Interface(DatabaseInterface):
                 name = models.CharField(max_length=50)
 
+        class ParentProperty(property):
+            def __get__(self, instance, owner=None):
+                """Re-query once inside fget and once in custom descriptor work."""
+                if instance is None:
+                    return self
+                return (
+                    super().__get__(instance, owner),
+                    HistoryParent(instance.parent_id).name,
+                )
+
         class HistoryProperties:
+            @ParentProperty
+            def inherited_custom_parent(self):
+                return HistoryParent(self.parent_id).name
+
             @property
             def inherited_parent(self):
                 return HistoryParent(self.parent_id).name
@@ -72,6 +88,10 @@ class TestManagerHistory(GeneralManagerTransactionTestCase):
 
             @property
             def requeried_parent(self) -> str:
+                return HistoryParent(self.parent_id).name
+
+            @ParentProperty
+            def custom_parent(self):
                 return HistoryParent(self.parent_id).name
 
             @property
@@ -138,6 +158,7 @@ class TestManagerHistory(GeneralManagerTransactionTestCase):
         self.assertEqual(nested._effective_search_date, self.cutoff)
 
     def test_filtered_history_uses_successor_from_complete_timeline(self):
+        """Filtering versions cannot shift the selected version's closing date."""
         historical = self.record.history.filter(name="Old record").get()
         self.assertEqual(historical._effective_search_date, self.cutoff)
         self.assertEqual(historical.name, "Old record")
@@ -187,6 +208,7 @@ class TestManagerHistory(GeneralManagerTransactionTestCase):
         )
 
     def test_query_selection_methods_and_dated_slices_keep_manager_results(self):
+        """Selection and slicing retain manager results and exact dated reads."""
         history = self.record.history
         self.assertEqual(history.all().reverse().first().name, "Old record")
         self.assertEqual(history.exclude(name="New record").last().name, "Old record")
@@ -228,7 +250,24 @@ class TestManagerHistory(GeneralManagerTransactionTestCase):
         self.assertNotIn("inherited_parent", values)
         self.assertEqual(asyncio.run(values["deferred_snapshot"]), self.explicit)
 
+    def test_custom_property_getter_and_descriptor_share_the_history_snapshot(self):
+        self.parent.update(name="Latest parent", ignore_permission=True)
+        historical = self.record.history.order_by("history_date", "history_id").first()
+        self.assertEqual(historical.custom_parent, ("Middle parent", "Middle parent"))
+        self.assertEqual(
+            historical.inherited_custom_parent, ("Middle parent", "Middle parent")
+        )
+        self.assertEqual(self.record.custom_parent, ("Latest parent", "Latest parent"))
+        self.assertIsNone(current_as_of_date())
+
+    def test_custom_property_conflicts_before_its_descriptor_executes(self):
+        historical = self.Record(self.record.id, search_date=self.explicit)
+        with as_of(self.cutoff), self.assertRaises(HistoricalContextConflictError):
+            _ = historical.custom_parent
+        self.assertIsNone(current_as_of_date())
+
     def test_generator_properties_fail_closed_before_their_bodies_run(self):
+        """Reject raw deferred bodies before any dependent read can escape."""
         historical = self.Record(self.record.id, search_date=self.explicit)
         entered = []
 
@@ -279,6 +318,7 @@ class TestManagerHistory(GeneralManagerTransactionTestCase):
         self.assertIsNone(current_as_of_date())
 
     def test_current_generator_property_keeps_its_original_protocol(self):
+        """Current generator properties preserve send, throw and close behavior."""
         closed = []
 
         def receiver(manager) -> Iterator[object]:
@@ -367,6 +407,7 @@ class TestManagerHistory(GeneralManagerTransactionTestCase):
     def test_historical_mutations_fail_before_signals_and_direct_interface_dispatch(
         self,
     ):
+        """Bound historical writes fail before signals or backend dispatch."""
         historical = self.Record(self.record.id, search_date=self.explicit)
         events = []
 

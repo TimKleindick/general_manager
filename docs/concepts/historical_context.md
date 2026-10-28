@@ -79,7 +79,8 @@ application writes through Django are outside the context's mutation guard.
 
 ORM managers selected through `manager.history` keep the original manager class.
 A closed version defaults to one microsecond before its next update, and an
-open version captures now once. Ordinary properties and GraphQL properties
+open version captures now once. Ordinary properties and GraphQL properties,
+including custom subclasses with their own descriptor behavior,
 evaluate GM queries under that bound snapshot, including cache lookups and lazy
 query construction. Application properties that call raw Django querysets or
 external APIs must provide their own historical implementation; GM's context

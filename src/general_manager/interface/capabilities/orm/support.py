@@ -330,6 +330,7 @@ class OrmReadCapability(BaseCapability):
         _ensure_ambient_history_supported(interface_cls, search_date)
 
         def _perform() -> models.Model:
+            """Load live or dated detail, rejecting absent and deleted versions."""
             model_cls = interface_cls._model
             support = get_support_capability(interface_cls)
             only_active = not is_soft_delete_enabled(interface_cls)
