@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from functools import partial, wraps
+from inspect import getattr_static
 from types import FunctionType, MethodType
 import threading
 from _thread import RLock as RLockType
@@ -69,6 +70,75 @@ def _historical_property_getter(
             return _bind_property_result(getter(instance), snapshot)
 
     return resolve
+
+
+def _bind_custom_property_lookups(manager_class: type[GeneralManager]) -> None:
+    """Bind custom descriptors without cloning their state or changing the MRO.
+
+    A property's subclass can implement work outside ``fget`` or require its
+    own constructor arguments. Keep that descriptor intact and scope its full
+    instance lookup instead. Only these classes need a lookup hook; ordinary
+    managers retain Python's default lookup and the common GraphQL fast path.
+    """
+    from general_manager.api.property import GraphQLProperty
+
+    seen: set[str] = set()
+    custom_names: set[str] = set()
+    lookup: object = _MANAGER_CLASS_STATE_MISSING
+    inherited_hook = False
+    local_lookup = vars(manager_class).get(
+        "__getattribute__", _MANAGER_CLASS_STATE_MISSING
+    )
+    for owner in manager_class.__mro__:
+        namespace = vars(owner)
+        for name, attribute in namespace.items():
+            if name not in seen:
+                seen.add(name)
+                if isinstance(attribute, property) and type(attribute) not in {
+                    property,
+                    GraphQLProperty,
+                }:
+                    custom_names.add(name)
+        if lookup is not _MANAGER_CLASS_STATE_MISSING:
+            continue
+        candidate = namespace.get("__getattribute__", _MANAGER_CLASS_STATE_MISSING)
+        binding = namespace.get("_gm_custom_property_lookup")
+        if isinstance(binding, tuple) and candidate is binding[0]:
+            inherited_hook = True
+            # Purely injected hooks must not shadow a later mixin's lookup.
+            # An explicit user lookup stays at its original MRO position.
+            candidate = binding[1]
+        if candidate is not _MANAGER_CLASS_STATE_MISSING:
+            lookup = candidate
+    if not custom_names and not inherited_hook:
+        return
+    type.__setattr__(
+        manager_class, "_gm_custom_property_names", frozenset(custom_names)
+    )
+    original = cast(Callable[[object, str], object], lookup)
+    installed = original
+    if custom_names:
+
+        @wraps(original)
+        def resolve(instance: object, name: str) -> object:
+            """Scope complete custom-property reads and preserve other lookups."""
+            names = type.__getattribute__(type(instance), "_gm_custom_property_names")
+            if name not in names:
+                return original(instance, name)
+            descriptor = getattr_static(type(instance), name, None)
+            if not isinstance(descriptor, property) or type(descriptor) in {
+                property,
+                GraphQLProperty,
+            }:
+                return original(instance, name)
+            with _property_as_of(instance) as snapshot:
+                return _bind_property_result(original(instance, name), snapshot)
+
+        installed = resolve
+    type.__setattr__(manager_class, "__getattribute__", installed)
+    type.__setattr__(
+        manager_class, "_gm_custom_property_lookup", (installed, local_lookup)
+    )
 
 
 def _attribute_source_key(source: object) -> object:
@@ -803,6 +873,7 @@ class GeneralManagerMeta(type):
                 type.__setattr__(
                     new_class, "_gm_inherited_property_aliases", inherited_aliases
                 )
+            _bind_custom_property_lookups(new_class)
             type.__setattr__(
                 new_class,
                 "_gm_uses_default_identification_dependency_active",
