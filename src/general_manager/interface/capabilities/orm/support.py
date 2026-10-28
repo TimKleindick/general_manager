@@ -387,6 +387,8 @@ class OrmReadCapability(BaseCapability):
                         ) from error
                     raise
                 if historical is not None:
+                    if getattr(historical, "history_type", None) == "-":
+                        raise model_cls.DoesNotExist
                     return historical
                 if missing_error is not None:
                     raise missing_error

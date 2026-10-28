@@ -413,7 +413,7 @@ class RemoteManagerInterfaceIntegrationTests(GeneralManagerTransactionTestCase):
         self.assertEqual(response.status_code, 200)
         updated = self.Project(id=self.project.id)
         self.assertEqual(updated.name, "Edited")
-        latest = updated.history.order_by("-history_date").first()
+        latest = updated.history.raw.order_by("-history_date").first()
         self.assertIsNotNone(latest)
         self.assertEqual(latest.history_user_id, user.pk)
         self.assertEqual(latest.history_change_reason, "remote review regression")

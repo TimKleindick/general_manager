@@ -126,6 +126,10 @@ except HistoricalReadNotSupportedError:
 Historical contexts are read-only. `GeneralManager.create()`, `update()`, and
 `delete()` and their direct interface equivalents raise
 `HistoricalMutationError`, even when permission checks are otherwise skipped.
+An explicitly dated manager also rejects `update()` and `delete()` after the
+context exits. `manager.history.first()` returns a frozen instance of the
+original manager class; use `manager.history.raw.first()` when you need the
+underlying audit record and metadata.
 
 See the [historical execution concept](../concepts/historical_context.md), the
 [snapshot cookbook](../examples/historical_queries.md), and the

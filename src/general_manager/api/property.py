@@ -11,6 +11,12 @@ from functools import wraps
 import sys
 from typing import Callable, Literal, TypeVar, cast, get_type_hints, overload
 
+from general_manager.as_of import (
+    _bind_property_result,
+    _ensure_property_supported,
+    _property_as_of,
+)
+
 T = TypeVar("T", bound=Callable[..., object])
 GraphQLPropertyCache = Literal["dependency", "run", "timeout", "none"]
 _TYPE_HINT_UNRESOLVED = object()
@@ -148,15 +154,12 @@ class GraphQLProperty(property):
         @wraps(fget)
         def resolver(instance: object) -> object:
             """Resolve the property through the selected cached wrapper."""
-            ensure_as_of_compatible = getattr(
-                instance, "_ensure_as_of_compatible", None
-            )
-            if callable(ensure_as_of_compatible):
-                ensure_as_of_compatible()
-            cached_fget = self._cached_fget
-            if cached_fget is None:
-                cached_fget = self._get_cached_fget()
-            return cached_fget(instance)
+            with _property_as_of(instance) as snapshot:
+                _ensure_property_supported(self._raw_fget, snapshot)
+                cached_fget = self._cached_fget
+                if cached_fget is None:
+                    cached_fget = self._get_cached_fget()
+                return _bind_property_result(cached_fget(instance), snapshot)
 
         super().__init__(resolver, doc=doc)
         self.is_graphql_resolver = True

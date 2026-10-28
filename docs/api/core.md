@@ -112,8 +112,11 @@ bucket's single-item behavior. `GeneralManager.all()` returns
 `Interface.filter()` as a bucket of the concrete manager class.
 
 `manager.history` delegates to the configured history capability's
-`get_history_queryset_for_manager(Interface, manager)` and returns that queryset
-object. Missing history capability support raises `HistoryNotSupportedError`.
+`get_history_queryset_for_manager(Interface, manager)` and returns its result.
+The ORM capability returns a manager-valued query adapter: selected objects use
+the original manager class and one fixed historical snapshot. Its `.raw`
+attribute exposes the Django audit queryset. Other capability handlers retain
+their own result contract. Missing history support raises `HistoryNotSupportedError`.
 Late descriptor fallback calls
 `GeneralManagerMeta.ensure_attributes_initialized(cls, name)`; when it returns
 true, the attribute is read normally, and otherwise `AttributeError(name)` is

@@ -142,17 +142,17 @@ for the complete configuration and rollback workflow.
   [`DatabaseInterface` atomic write contract](db_based_interface.md#atomic-writes),
   including its upload-aware and transaction-aware cache behavior.
 - `update()` refreshes the current manager in place and returns that same manager instance. Reassigning the return value is optional now, so `customer.update(name="New")` immediately makes `customer.name` reflect the saved value.
-- `history` exposes the audit trail queryset for the wrapped legacy row, scoped to the current object's ID. Use it when you want raw historical entries rather than a manager snapshot.
+- `history` selects historical instances of the original manager class, scoped to the wrapped legacy row. Use `history.raw` for Django audit records and metadata; the [database history contract](db_based_interface.md) describes snapshot defaults and the compatibility change.
 - `delete()` invalidates the current manager instance for subsequent field reads. This applies to both hard deletes and soft deletes on models with `is_active`; the row may still exist for `include_inactive=True` lookups, but the deleted manager object itself should be treated as spent.
 
 - Pass many-to-many identifiers with the `<relation>_id_list` convention or provide GeneralManager instances; the interface normalises and applies them as part of the same create or update transaction as the main record.
 - Foreign key assignments accept manager instances or raw IDs.
-- `filter`, `exclude`, and `all` return manager instances backed by the legacy rows. Use `search_date=...` on `filter()`/`exclude()` or `ManagerInterface(search_date=...)` when you want a point-in-time manager view instead of raw history records.
+- `filter`, `exclude`, and `all` return manager instances backed by the legacy rows. Use `search_date=...` on `filter()`/`exclude()` or the manager constructor for an exact point-in-time view.
 
 ```python
 customer.update(name="Acme International", history_comment="rename")
 assert customer.name == "Acme International"
-assert customer.history.order_by("-history_date").first().history_change_reason == "rename"
+assert customer.history.raw.order_by("-history_date").first().history_change_reason == "rename"
 
 customer.delete(history_comment="manual block")
 # `customer` is now invalid for attribute reads even when the row was soft-deleted.

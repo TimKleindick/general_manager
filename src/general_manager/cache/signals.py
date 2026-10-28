@@ -119,7 +119,7 @@ def data_change(
         Returns:
             R: The result returned by the wrapped function.
         """
-        reject_historical_mutation()
+        reject_historical_mutation(args[0] if args else None)
 
         from general_manager.cache.dependency_index import (
             begin_dependency_data_change,

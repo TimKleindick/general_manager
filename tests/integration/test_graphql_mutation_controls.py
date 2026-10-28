@@ -163,6 +163,6 @@ class GraphQLMutationControlsTest(GeneralManagerTransactionTestCase):
                 )
                 self.assertTrue(result["success"])
                 record = result["ProtectedControlRecord"]
-                history = record.history.order_by("-history_date").first()
+                history = record.history.raw.order_by("-history_date").first()
                 self.assertEqual(history.history_user_id, self.admin.pk)
                 self.assertEqual(history.history_change_reason, "Reviewed")

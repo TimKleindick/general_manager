@@ -16,9 +16,11 @@ from general_manager.interface.utils.database_interface_protocols import (
 )
 
 from .support import get_support_capability
+from .history_query import ManagerHistoryQuery
 
 if TYPE_CHECKING:  # pragma: no cover
     from general_manager.interface.orm_interface import OrmInterfaceBase
+    from general_manager.manager.general_manager import GeneralManager
 
 
 class HistoryNotSupportedError(RuntimeError):
@@ -175,6 +177,8 @@ class OrmHistoryCapability(BaseCapability):
         pk_filter: dict[str, object] | None
         if isinstance(instance, SupportsHistory):
             history_manager = instance.history
+            if isinstance(history_manager, ManagerHistoryQuery):
+                history_manager = cast(SupportsHistoryQuery, history_manager.raw)
             pk_filter = self._get_instance_pk_filter(instance)
         else:
             pk_filter = self._get_model_pk_filter(interface_cls, instance)
@@ -198,36 +202,52 @@ class OrmHistoryCapability(BaseCapability):
         self,
         interface_cls: type["OrmInterfaceBase[models.Model]"],
         manager: object,
-    ) -> models.QuerySet[models.Model]:
+    ) -> ManagerHistoryQuery[GeneralManager]:
         """
-        Return the history queryset scoped to the manager instance's primary key.
+        Return manager-valued history scoped to the original object's key.
 
-        The target identifier is derived from ``manager.pk``, then
-        ``manager.id``, then mapping-like ``manager.identification["id"]``. The
+        The target identifier prefers mapping-like ``manager.identification["id"]``,
+        then falls back to ``manager.pk`` or ``manager.id``. The
         lookup key defaults to ``"id"`` and uses the interface model primary-key
         field name when it is available as a string. A configured database alias
-        is applied before the filtered queryset is returned.
+        is applied before the query is wrapped. Object results are the original
+        manager class at a fixed snapshot; ``.raw`` retains audit rows.
 
         Parameters:
             interface_cls: ORM interface whose underlying model provides the history manager.
             manager: Manager-like object exposing ``pk``, ``id``, or ``identification["id"]`` for the target row.
 
         Returns:
-            History queryset limited to records for the target object.
+            Manager-valued history with raw audit access for the target object.
 
         Raises:
             HistoryNotSupportedError: If the interface does not expose a history manager or the manager cannot be scoped to a primary key.
         """
         if not hasattr(interface_cls._model, "history"):
             raise HistoryNotSupportedError(interface_cls.__name__)
-        pk_filter = self._get_model_pk_filter(interface_cls, manager)
+        from general_manager.manager.general_manager import GeneralManager
+
+        identification = getattr(manager, "identification", None)
+        pk_filter: dict[str, object] | None
+        if isinstance(identification, Mapping) and identification.get("id") is not None:
+            pk_field = interface_cls._model._meta.pk
+            pk_filter = {pk_field.name if pk_field else "id": identification["id"]}
+        else:
+            pk_filter = self._get_model_pk_filter(interface_cls, manager)
         if pk_filter is None:
             raise HistoryNotSupportedError(interface_cls.__name__)
         history_manager = cast(SupportsHistory, interface_cls._model).history
         history_manager = self._apply_database_alias(interface_cls, history_manager)
-        return cast(
-            models.QuerySet[models.Model],
-            history_manager.filter(**pk_filter),
+        manager_class = (
+            type(manager)
+            if isinstance(manager, GeneralManager)
+            else interface_cls._parent_class
+        )
+        snapshot = getattr(manager, "_effective_search_date", None)
+        return ManagerHistoryQuery(
+            cast(models.QuerySet[models.Model], history_manager.filter(**pk_filter)),
+            manager_class,
+            search_date=snapshot if isinstance(snapshot, datetime) else None,
         )
 
     def get_historical_queryset(

@@ -18,6 +18,11 @@ from weakref import WeakKeyDictionary, ref
 
 from django.apps import apps
 
+from general_manager.as_of import (
+    _bind_property_result,
+    _ensure_property_supported,
+    _property_as_of,
+)
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface.base_interface import InterfaceBase
 from general_manager.logging import get_logger
@@ -50,6 +55,20 @@ _MANAGER_CLASS_STATE_MISSING = object()
 _ATTRIBUTE_DESCRIPTOR_BINDINGS: WeakKeyDictionary[
     object, tuple[object, object, str, object, object, object, object]
 ] = WeakKeyDictionary()
+
+
+def _historical_property_getter(
+    getter: Callable[..., object],
+) -> Callable[[object], object]:
+    """Keep dependent manager reads inside a plain property's snapshot."""
+
+    @wraps(getter)
+    def resolve(instance: object) -> object:
+        with _property_as_of(instance) as snapshot:
+            _ensure_property_supported(getter, snapshot)
+            return _bind_property_result(getter(instance), snapshot)
+
+    return resolve
 
 
 def _attribute_source_key(source: object) -> object:
@@ -718,6 +737,15 @@ class GeneralManagerMeta(type):
             attrs: dict[str, object],
         ) -> type["GeneralManager"]:
             """Helper to instantiate the class via the default ``type.__new__``."""
+            if bases:
+                for attribute_name, attribute in tuple(attrs.items()):
+                    if type(attribute) is property and attribute.fget is not None:
+                        attrs[attribute_name] = property(
+                            _historical_property_getter(attribute.fget),
+                            attribute.fset,
+                            attribute.fdel,
+                            attribute.__doc__,
+                        )
             uses_default_identification_dependency_active = (
                 name == "GeneralManager"
                 or (
@@ -738,6 +766,43 @@ class GeneralManagerMeta(type):
                 type["GeneralManager"],
                 type.__new__(mcs, name, bases, attrs),
             )
+            seen = set(vars(new_class)) | {"_gm_inherited_property_aliases"}
+            inherited_aliases: dict[str, object] = {}
+            shadowed_by_alias: set[str] = set()
+            for owner in new_class.__mro__[1:]:
+                owner_aliases = vars(owner).get("_gm_inherited_property_aliases", {})
+                for attribute_name, attribute in vars(owner).items():
+                    if attribute_name in seen:
+                        continue
+                    if (
+                        owner_aliases.get(attribute_name, _MANAGER_CLASS_STATE_MISSING)
+                        is attribute
+                    ):
+                        shadowed_by_alias.add(attribute_name)
+                        continue
+                    seen.add(attribute_name)
+                    if (
+                        not isinstance(owner, GeneralManagerMeta)
+                        and type(attribute) is property
+                        and attribute.fget is not None
+                    ):
+                        bound_property = property(
+                            _historical_property_getter(attribute.fget),
+                            attribute.fset,
+                            attribute.fdel,
+                            attribute.__doc__,
+                        )
+                        type.__setattr__(new_class, attribute_name, bound_property)
+                        inherited_aliases[attribute_name] = bound_property
+                    elif attribute_name in shadowed_by_alias:
+                        # A synthetic wrapper on an earlier base must not hide
+                        # the actual MRO winner, including non-property values.
+                        type.__setattr__(new_class, attribute_name, attribute)
+                        inherited_aliases[attribute_name] = attribute
+            if inherited_aliases:
+                type.__setattr__(
+                    new_class, "_gm_inherited_property_aliases", inherited_aliases
+                )
             type.__setattr__(
                 new_class,
                 "_gm_uses_default_identification_dependency_active",

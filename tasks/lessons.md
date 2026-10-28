@@ -1,5 +1,9 @@
 # Lessons
 
+- Trigger: Returning manager instances from audit history selection. Action: derive the successor from the complete entity timeline, keep the original entity key separate from the audit key, and retain explicit raw audit access for actor/reason assertions. Verification: cover filtered history, interval boundaries, timestamp ties, deletion, and existing mutation audit consumers.
+
+- Trigger: Binding historical dates during property evaluation. Action: capture ambient dates before lazy values escape, preserve the original MRO when wrapping inherited properties, and fail closed for raw iterator properties before invoking generator bodies. Verification: cover context exit, mixin and constant overrides, cached re-queries, materialized values, and unchanged current iterator behavior.
+
 - Trigger: Adding identity-aware search transport for a lossy provider. Action: carry explicit native types alongside document/filter values, isolate provider equality tokens from business fields, and update settings-only commands plus reconciliation fingerprints. Preserve raw Dev scalar/list grammar and final native permission gates. Verification: reproduce adjacent large IDs against real providers, then check authenticated conditional counts, stale/mixed reindexing, shared type scopes, and all supported database suites.
 
 - Trigger: Adding identity semantics to native GraphQLType fields. Action: consume explicit dataclass field metadata at schema assembly and carry it through strict nullability mapping, while leaving native frozen values and unmarked business scalars intact. Verification: execute scalar/list/optional identity queries above the GraphQL Int limit, a public manager-property cookbook, invalid metadata cases, and existing property/search identity regressions.
