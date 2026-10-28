@@ -1,6 +1,6 @@
 # Lessons
 
-- Trigger: Returning manager instances from audit history selection. Action: derive the successor from the complete entity timeline, keep the original entity key separate from the audit key, and retain explicit raw audit access for actor/reason assertions. Verification: cover filtered history, interval boundaries, timestamp ties, deletion, and existing mutation audit consumers.
+- Trigger: Returning manager instances from audit history selection. Action: derive the successor from the complete entity timeline, keep the original entity key separate from the audit key, construct under the bound context to preserve id-only constructors, and retain explicit raw audit access for actor/reason assertions. Verification: cover custom constructors, filtered history, interval boundaries, timestamp ties, deletion, and existing mutation audit consumers.
 
 - Trigger: Binding historical dates during property evaluation. Action: capture ambient dates before lazy values escape, preserve the original MRO when wrapping inherited properties, and fail closed for raw iterator properties before invoking generator bodies. Verification: cover context exit, mixin and constant overrides, cached re-queries, materialized values, and unchanged current iterator behavior.
 

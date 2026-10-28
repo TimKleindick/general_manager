@@ -87,8 +87,21 @@ class TestManagerHistory(GeneralManagerTransactionTestCase):
                 type(self).cache_calls += 1
                 return HistoryParent(self.parent_id).name
 
+        class IdOnlyHistoryRecord(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=50)
+
+            def __init__(self, id):
+                self.constructed_at = current_as_of_date()
+                super().__init__(id)
+
         cls.Parent, cls.Record = HistoryParent, HistoryRecord
-        cls.general_manager_classes = [HistoryParent, HistoryRecord]
+        cls.IdOnly = IdOnlyHistoryRecord
+        cls.general_manager_classes = [
+            HistoryParent,
+            HistoryRecord,
+            IdOnlyHistoryRecord,
+        ]
         super().setUpClass()
 
     def setUp(self):
@@ -131,6 +144,36 @@ class TestManagerHistory(GeneralManagerTransactionTestCase):
         self.assertTrue(all(type(item) is self.Record for item in self.record.history))
         self.assertIs(type(self.record.history[0]), self.Record)
         self.assertEqual(len(list(self.record.history[:1])), 1)
+
+    def test_id_only_constructor_preserves_closed_and_open_snapshots(self):
+        current = self.IdOnly.create(name="Old custom", ignore_permission=True)
+        current.update(name="New custom", ignore_permission=True)
+        closing = current.history.raw.first().history_date - timedelta(microseconds=1)
+        historical = current.history.order_by("history_date", "history_id").first()
+        self.assertIs(type(historical), self.IdOnly)
+        self.assertEqual(historical.name, "Old custom")
+        self.assertEqual(historical.constructed_at, closing)
+        self.assertEqual(historical._effective_search_date, closing)
+        latest = current.history.first()
+        self.assertEqual(latest.name, "New custom")
+        self.assertIsNotNone(latest._effective_search_date)
+        self.assertEqual(latest.constructed_at, latest._effective_search_date)
+        self.assertIsNone(current_as_of_date())
+
+    def test_id_only_constructor_preserves_explicit_date_and_rejects_conflict(self):
+        current = self.IdOnly.create(name="Old explicit", ignore_permission=True)
+        record_id = current.id
+        snapshot = timezone.now()
+        current.update(name="New explicit", ignore_permission=True)
+        with as_of(snapshot):
+            dated = self.IdOnly(record_id)
+            self.assertEqual(dated.history.first().constructed_at, snapshot)
+        historical = dated.history.first()
+        self.assertEqual(historical.name, "Old explicit")
+        self.assertEqual(historical._effective_search_date, snapshot)
+        self.assertEqual(historical.constructed_at, snapshot)
+        with as_of(timezone.now()), self.assertRaises(HistoricalContextConflictError):
+            dated.history.first()
 
     def test_raw_audit_and_scalar_projections_remain_available(self):
         history = self.record.history

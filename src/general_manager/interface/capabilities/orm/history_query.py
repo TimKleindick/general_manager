@@ -9,7 +9,11 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 from django.db import models
 from django.utils import timezone
 
-from general_manager.as_of import HistoricalContextConflictError, resolve_search_date
+from general_manager.as_of import (
+    HistoricalContextConflictError,
+    as_of,
+    resolve_search_date,
+)
 
 if TYPE_CHECKING:
     from general_manager.manager.general_manager import GeneralManager
@@ -87,7 +91,8 @@ class ManagerHistoryQuery(Generic[ManagerT]):
             raise HistoricalContextConflictError
         # A historical row's pk is its history_id, not the original entity id.
         original_pk = getattr(row, model._meta.pk.attname)
-        return self._manager_class(original_pk, search_date=snapshot)
+        with as_of(snapshot):
+            return self._manager_class(original_pk)
 
     def all(self) -> ManagerHistoryQuery[ManagerT]:
         return self._clone(self.raw.all())
