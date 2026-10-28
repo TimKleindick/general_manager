@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.87.3 (2026-10-28)
+
+### Bug Fixes
+
+- Bind custom historical property descriptors
+  ([`99e424e`](https://github.com/TimKleindick/general_manager/commit/99e424e8217bed2bc5437979fb160b3e6d4fe1a9))
+
+- Keep historical managers on a consistent snapshot
+  ([`a2ce576`](https://github.com/TimKleindick/general_manager/commit/a2ce576d945d4849c51a7822cc37e847def3f03d))
+
+- Preserve custom constructors in historical reads
+  ([`a8f2c40`](https://github.com/TimKleindick/general_manager/commit/a8f2c400e6afe41416a21b6683264bfcb9c0eaa5))
+
+
 ## v0.87.2 (2026-10-27)
 
 ### Bug Fixes
