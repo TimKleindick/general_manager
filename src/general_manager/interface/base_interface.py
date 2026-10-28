@@ -105,7 +105,7 @@ def _guard_mutation_callable(
 
         @wraps(mutation)
         async def async_guarded(*args: object, **kwargs: object) -> object:
-            reject_historical_mutation()
+            reject_historical_mutation(args[0] if args else None)
             awaitable = cast(Awaitable[object], mutation(*args, **kwargs))
             return await awaitable
 
@@ -114,7 +114,7 @@ def _guard_mutation_callable(
 
     @wraps(mutation)
     def sync_guarded(*args: object, **kwargs: object) -> object:
-        reject_historical_mutation()
+        reject_historical_mutation(args[0] if args else None)
         return mutation(*args, **kwargs)
 
     setattr(sync_guarded, _HISTORICAL_MUTATION_GUARD_MARKER, True)
@@ -1266,7 +1266,7 @@ class InterfaceBase(ABC):
         Raises:
             NotImplementedError: If this interface does not provide an update capability.
         """
-        reject_historical_mutation()
+        reject_historical_mutation(self)
         observer = self.get_capability_handler("observability")
 
         def _invoke() -> object:
@@ -1311,7 +1311,7 @@ class InterfaceBase(ABC):
         Raises:
             NotImplementedError: If the interface does not provide a delete capability.
         """
-        reject_historical_mutation()
+        reject_historical_mutation(self)
         observer = self.get_capability_handler("observability")
 
         def _invoke() -> object:

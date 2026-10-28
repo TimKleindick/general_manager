@@ -450,7 +450,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 
     @property
     def history(self) -> object:
-        """Return the history queryset scoped to this manager instance."""
+        """Return scoped history; ORM results are managers with ``.raw`` audit access."""
         from general_manager.interface.capabilities.orm import HistoryNotSupportedError
 
         history_handler = self.Interface.get_capability_handler("history")
@@ -565,10 +565,15 @@ class GeneralManager(metaclass=GeneralManagerMeta):
                 yield key, value(self._interface)
                 continue
             yield key, value
+        inherited_aliases = vars(self.__class__).get(
+            "_gm_inherited_property_aliases", {}
+        )
         for name, value in self.__class__.__dict__.items():
             if name == "history":
                 continue
             if getattr(value, "_general_manager_generated_relation", False):
+                continue
+            if inherited_aliases.get(name, _EFFECTIVE_SEARCH_DATE_MISSING) is value:
                 continue
             if isinstance(value, (GraphQLProperty, property)):
                 yield name, getattr(self, name)
@@ -664,7 +669,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         Raises:
             PermissionError: If the permission check fails when `ignore_permission` is False.
         """
-        reject_historical_mutation()
+        reject_historical_mutation(self)
         self._ensure_manager_not_invalidated()
         if not ignore_permission:
             self.Permission.check_update_permission(kwargs, self, creator_id)
@@ -710,7 +715,7 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         Raises:
             PermissionError: If permission validation fails.
         """
-        reject_historical_mutation()
+        reject_historical_mutation(self)
         self._ensure_manager_not_invalidated()
         if not ignore_permission:
             self.Permission.check_delete_permission(self, creator_id)

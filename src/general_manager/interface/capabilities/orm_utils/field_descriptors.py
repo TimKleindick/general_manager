@@ -337,6 +337,11 @@ class _FieldDescriptorBuilder:
                         if target_field is not None and target_field.primary_key
                         else None
                     ),
+                    historical_lookup=(
+                        (target_field.name, raw_id_name)
+                        if target_field is not None and not target_field.primary_key
+                        else None
+                    ),
                 )
                 relation_type = cast(type[object], general_manager_class)
             else:
@@ -389,7 +394,12 @@ class _FieldDescriptorBuilder:
             )
             if general_manager_class:
                 accessor = _general_manager_accessor(
-                    accessor_name, general_manager_class
+                    accessor_name,
+                    general_manager_class,
+                    historical_lookup=(
+                        relation.field.attname,
+                        relation.field.target_field.attname,
+                    ),
                 )
                 relation_type = cast(type[object], general_manager_class)
             else:
@@ -853,6 +863,7 @@ def _general_manager_accessor(
     manager_class: type[object],
     *,
     raw_id_name: str | None = None,
+    historical_lookup: tuple[str, str] | None = None,
 ) -> DescriptorAccessor:
     """
     Create an accessor that resolves a related object's manager from an interface.
@@ -867,6 +878,8 @@ def _general_manager_accessor(
         field_name (str): Name of the attribute on the underlying model that holds the related object.
         manager_class (type): Class used to hydrate or construct the related manager.
         raw_id_name (str | None): Optional raw foreign-key attribute name used to avoid loading the relation.
+        historical_lookup: Target filter lookup and source attribute used to
+            resolve dated relations without consulting live Django relations.
 
     Returns:
         DescriptorAccessor: A callable that, given a OrmInterfaceBase, returns the manager instance for the related object, or `None` if the related attribute is `None`.
@@ -923,8 +936,16 @@ def _general_manager_accessor(
         Returns:
             The related manager instance, or `None` if the related object is `None`.
         """
+        search_date = getattr(self, "_search_date", None)
+        if search_date is not None and historical_lookup is not None:
+            lookup_name, source_attribute = historical_lookup
+            source_value = getattr(self._instance, source_attribute)
+            if source_value is None:
+                return None
+            return manager_type.filter(
+                **{lookup_name: source_value}, search_date=search_date
+            ).first()
         if raw_id_name is not None:
-            search_date = getattr(self, "_search_date", None)
             raw_id = getattr(self._instance, raw_id_name, None)
             if raw_id is None:
                 return None
@@ -949,7 +970,6 @@ def _general_manager_accessor(
             return None
         if related is None:
             return None
-        search_date = getattr(self, "_search_date", None)
         if search_date is not None:
             return manager_type(related.pk, search_date=search_date)
         trusted_hydrate = getattr(manager_type, "_from_trusted_orm_instance", None)

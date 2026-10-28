@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Mapping,
+)
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, date, datetime, time
+from inspect import isasyncgenfunction, isawaitable, isgeneratorfunction, unwrap
+from typing import cast
 
 from django.utils import timezone
 
@@ -94,11 +102,16 @@ def as_of_cache_fingerprint() -> str | None:
     return None if active is None else search_date_cache_fingerprint(active)
 
 
-def reject_historical_mutation() -> None:
-    """Reject mutations while an operation-scoped historical date is active."""
+def reject_historical_mutation(bound: object | None = None) -> None:
+    """Reject mutations in a historical operation or through a dated object."""
     active = current_as_of_date()
     if active is not None:
         raise HistoricalMutationError(active)
+    state = getattr(bound, "__dict__", None)
+    if isinstance(state, Mapping):
+        snapshot = state.get("_effective_search_date", state.get("_search_date"))
+        if isinstance(snapshot, datetime):
+            raise HistoricalMutationError(snapshot)
 
 
 def ensure_as_of_read_supported(interface_cls: type[object]) -> None:
@@ -126,6 +139,50 @@ def resolve_search_date(explicit: SearchDateInput | None) -> datetime | None:
     if active is not None and not _represents_same_instant(active, normalized):
         raise HistoricalContextConflictError
     return normalized
+
+
+@contextmanager
+def _property_as_of(instance: object) -> Iterator[datetime | None]:
+    """Evaluate a manager property and its cache under the bound snapshot."""
+    ensure = getattr(instance, "_ensure_as_of_compatible", None)
+    if callable(ensure):
+        ensure()
+    state = getattr(instance, "__dict__", {})
+    snapshot = state.get("_effective_search_date")
+    if isinstance(snapshot, datetime):
+        with as_of(snapshot):
+            yield snapshot
+    else:
+        yield current_as_of_date()
+
+
+def _bind_property_result(value: object, snapshot: datetime | None) -> object:
+    """Bind awaitables and reject iterator bodies that can escape the scope."""
+    if snapshot is None:
+        return value
+    if isinstance(value, (Iterator, AsyncIterator)):
+        close = getattr(value, "close", None)
+        if callable(close):
+            close()
+        raise HistoricalReadNotSupportedError()
+    if isawaitable(value):
+        return _await_as_of(cast(Awaitable[object], value), snapshot)
+    return value
+
+
+def _ensure_property_supported(
+    getter: Callable[..., object], snapshot: datetime | None
+) -> None:
+    """Reject generator properties before constructing deferred bodies."""
+    if snapshot is not None and (
+        isgeneratorfunction(unwrap(getter)) or isasyncgenfunction(unwrap(getter))
+    ):
+        raise HistoricalReadNotSupportedError()
+
+
+async def _await_as_of(value: Awaitable[object], snapshot: datetime) -> object:
+    with as_of(snapshot):
+        return _bind_property_result(await value, snapshot)
 
 
 @contextmanager

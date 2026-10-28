@@ -141,15 +141,46 @@ For a task-oriented rollback pattern, see
 The [existing-model cookbook](../../examples/existing_model_interface.md#route-atomic-writes-and-history-to-another-database)
 contains a directly usable multi-database example.
 
-History-capable managers expose `manager.history` as the audit trail for that object's ID. The returned queryset lets you inspect or filter raw history entries directly:
+History-capable managers expose `manager.history` for that object's ID. Object
+selection returns the original manager class, including its ordinary and
+GraphQL properties. Ordering remains newest first:
 
 ```python
-material.history.all()
-material.history.filter(history_change_reason__icontains="import")
-material.history.order_by("-history_date").first()
+latest_version = material.history.first()
+imported_version = material.history.filter(
+    history_change_reason__icontains="import"
+).first()
+
+# Explicit raw audit access retains Django history records and metadata.
+latest_audit = material.history.raw.first()
+reason = latest_audit.history_change_reason
 ```
 
-Use `search_date=...` when you want the manager itself, or a bucket of managers, to resolve as a point-in-time snapshot instead of returning raw history rows. For example, pass `search_date=...` to `filter()` or `exclude()` so the query resolves to historical manager state across many rows.
+For a version created on 20 October and replaced on 27 October, the default
+snapshot is one microsecond before the 27 October update. Related managers and
+property queries use that same instant. The latest open version captures the
+current time once; its related reads stay frozen even after later updates.
+An explicit `search_date` on the source manager is preserved, and history
+selection excludes entries later than that date. Selecting a version whose
+interval does not contain the explicit date raises `HistoricalContextConflictError`.
+
+**Compatibility change:** history object results used to be raw Django records.
+Move audit metadata, Django-specific query operations, or audit writes to
+`manager.history.raw`. The manager view supports `all`, `filter`, `exclude`,
+`order_by`, `reverse`, `first`, `last`, `get`, `latest`, `earliest`, `count`,
+`exists`, iteration, indexing and slicing. Slicing returns a list of managers;
+`values` and `values_list` retain scalar projections. A tombstone cannot become
+a readable manager and raises the underlying model's `DoesNotExist`; inspect it
+through `.raw`. Equal-timestamp versions keep the greatest-history-ID winner;
+earlier tied entries have no datetime interval and raise
+`HistoricalContextConflictError` when materialized. They remain available in
+raw audit history.
+
+Use `search_date=...` on manager constructors, `filter()` or `exclude()` to query
+a point-in-time state across objects. All historical manager instances reject
+`update()` and `delete()`, including direct interface calls. See
+[historical queries](../../howto/historical_queries.md) for operation contexts
+and the limits of history completeness.
 
 Reverse-relation filters accept snake_case roots for multi-word related models. For example, if `ChangeRequestFeasibility` points at `ChangeRequest`, prefer `ChangeRequest.filter(change_request_feasibility__id=...)`. The legacy Django-native reverse query root (for example `changerequestfeasibility__id`) remains supported for compatibility. This translation applies to relation roots, not bucket-style `_list` attribute names.
 

@@ -70,10 +70,28 @@ materialize IDs because Django cannot execute a cross-database subquery.
 
 ## Read-only and cache-isolated
 
-An active historical context is read-only. GeneralManager and direct interface
+An active historical context is read-only. Managers and interfaces bound to an
+explicit historical date also reject updates and deletes outside that context.
+GeneralManager and direct interface
 `create`, `update`, and `delete` entry points raise `HistoricalMutationError`
 before permission checks, transports, signals, or database writes. Direct
 application writes through Django are outside the context's mutation guard.
+
+ORM managers selected through `manager.history` keep the original manager class.
+A closed version defaults to one microsecond before its next update, and an
+open version captures now once. Ordinary properties and GraphQL properties
+evaluate GM queries under that bound snapshot, including cache lookups and lazy
+query construction. Application properties that call raw Django querysets or
+external APIs must provide their own historical implementation; GM's context
+cannot rewrite those calls. See the
+[history compatibility contract](interfaces/db_based_interface.md) for raw audit
+access, deletions and equal timestamps.
+
+Properties returning raw iterators or async iterators raise
+`HistoricalReadNotSupportedError` in historical reads. Return a materialized
+value (for example, `list(...)` inside the property) or a GM bucket instead.
+Awaitable properties retain the snapshot while awaited. Current iterator-valued
+properties retain their original behavior.
 
 Current, date-A, and date-B values use separate cache identities. Historical
 instants are canonicalized to UTC, and the effective date namespaces run,

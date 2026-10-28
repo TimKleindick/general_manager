@@ -155,7 +155,7 @@ class NoopUpdateTests(GeneralManagerTransactionTestCase):
                 )
                 self.assertGreater(self.record.history.count(), count)
                 self.assertEqual(
-                    self.record.history.first().history_user_id, self.user.pk
+                    self.record.history.raw.first().history_user_id, self.user.pk
                 )
                 count = self.record.history.count()
                 self.record.update(
@@ -169,7 +169,7 @@ class NoopUpdateTests(GeneralManagerTransactionTestCase):
         )
 
     def test_explicit_comment_records_an_intentional_audit_entry(self):
-        original = self.record.history.first()
+        original = self.record.history.raw.first()
         count = self.record.history.count()
         self.record.update(
             name="Stable",
@@ -179,7 +179,7 @@ class NoopUpdateTests(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(self.record.history.count(), count + 1)
         self.assertEqual(
-            self.record.history.first().history_change_reason, "Manually verified"
+            self.record.history.raw.first().history_change_reason, "Manually verified"
         )
         original.refresh_from_db()
         self.assertIsNone(original.history_change_reason)
