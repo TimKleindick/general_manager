@@ -141,7 +141,7 @@ audit-only operations, use `.raw` instead. See the
 and [history query reference](../api/core.md#orm-manager-history).
 
 For a property that reads related managers, use ordinary or GraphQL properties;
-their GM reads use the manager's snapshot, including custom property descriptor
+their GM reads use the manager's snapshot, including custom property subclass
 lookups. Return a materialized collection instead of a raw iterator. Dated
 non-primary-key foreign keys and reverse one-to-one relations also resolve at
 the snapshot and return `None` when no relation exists then.

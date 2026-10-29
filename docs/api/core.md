@@ -151,8 +151,9 @@ Materializing a deletion row raises the underlying model's `DoesNotExist`.
 Other Django query and constructor errors propagate. For audit metadata or
 Django operations not listed above, use `.raw`.
 
-Historical manager properties, including GraphQL and custom property
-descriptors, evaluate GM reads under the bound snapshot. Historical raw
+Historical `property` and `GraphQLProperty` descriptors, including their custom
+subclasses, evaluate GM reads under the bound snapshot. Other descriptor types
+must establish their own historical context. Historical raw
 iterator or async iterator results raise `HistoricalReadNotSupportedError`;
 awaitables retain the snapshot when awaited. Updates and deletes on a dated
 manager or its interface raise `HistoricalMutationError`, even after an
