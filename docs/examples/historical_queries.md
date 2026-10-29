@@ -36,6 +36,49 @@ and a date before the object's creation does not fall forward to the current
 row. `historical_lookup_buffer_seconds` is retained only so existing interface
 classes continue to import; changing it does not restore live-row fallback.
 
+## Inspect a manager's history
+
+Given an existing history-enabled `Project` with a `name` and an `owner`,
+select an older version and inspect its audit record separately:
+
+```python
+from myapp.managers import Project
+
+project = Project(id=42)
+history = project.history.order_by("history_date", "history_id")
+oldest = history.first()
+if oldest is not None:
+    print(oldest.name, oldest.owner.name)  # Both use the version's snapshot.
+
+audit = history.raw.first()
+if audit is not None:
+    print(audit.history_date, audit.history_change_reason)
+```
+
+The selected manager is read-only and keeps its snapshot after the selection.
+The example assumes the oldest record is a readable version and that the owner
+existed at that instant. `.raw` provides Django audit rows, including deletion
+records, and is not restricted by an ambient or explicit snapshot date. Use
+`history.filter(...)` before selecting to narrow audit fields; the version's
+closing instant still comes from the complete entity timeline. For edge cases
+and the supported methods, see the [history query reference](../api/core.md#orm-manager-history).
+
+To expose related data through a property, add a mixin like this to the
+application's `Project` manager. It also works on a manager selected from
+`project.history`:
+
+```python
+class ProjectHistoryFields:
+    @property
+    def owner_name(self):
+        return self.owner.name
+```
+
+The relation uses the selected snapshot, including for foreign keys targeting
+a non-primary-key field. Reverse one-to-one lookups use the historical
+membership as well. Materialize iterator results inside a property before
+returning them; a raw iterator cannot escape a historical read.
+
 ## Equivalent GraphQL request
 
 ```graphql

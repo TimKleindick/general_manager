@@ -52,6 +52,9 @@ Historical behavior is deliberately explicit and fail-closed:
 Historical relation traversal retains the source snapshot. For many-to-many
 fields, both membership and target rows must have usable history; a missing
 history path fails closed instead of returning current relation data.
+Historical foreign keys targeting a non-primary-key field and reverse
+one-to-one relations resolve their target at that snapshot as well. A missing
+relation returns `None` rather than falling forward to a later live relation.
 
 ## History completeness
 
@@ -82,7 +85,9 @@ A closed version defaults to one microsecond before its next update, and an
 open version captures now once. Ordinary properties and GraphQL properties,
 including custom subclasses with their own descriptor behavior,
 evaluate GM queries under that bound snapshot, including cache lookups and lazy
-query construction. Application properties that call raw Django querysets or
+query construction. History selection invokes the original manager constructor
+with the entity's ID under that snapshot, so custom ID-only constructors remain
+usable. Application properties that call raw Django querysets or
 external APIs must provide their own historical implementation; GM's context
 cannot rewrite those calls. See the
 [history compatibility contract](interfaces/db_based_interface.md) for raw audit
