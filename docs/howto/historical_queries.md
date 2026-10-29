@@ -131,6 +131,21 @@ context exits. `manager.history.first()` returns a frozen instance of the
 original manager class; use `manager.history.raw.first()` when you need the
 underlying audit record and metadata.
 
+To inspect a particular version, filter on history fields, then select a
+manager. Its relations and GM property queries use the selected version's
+snapshot. For a dated source manager, selection is limited to audit rows at or
+before its date; selecting a row whose validity interval does not contain that
+date raises `HistoricalContextConflictError`. For deletion records or other
+audit-only operations, use `.raw` instead. See the
+[history recipe](../examples/historical_queries.md#inspect-a-managers-history)
+and [history query reference](../api/core.md#orm-manager-history).
+
+For a property that reads related managers, use ordinary or GraphQL properties;
+their GM reads use the manager's snapshot, including custom property descriptor
+lookups. Return a materialized collection instead of a raw iterator. Dated
+non-primary-key foreign keys and reverse one-to-one relations also resolve at
+the snapshot and return `None` when no relation exists then.
+
 See the [historical execution concept](../concepts/historical_context.md), the
 [snapshot cookbook](../examples/historical_queries.md), and the
 [API reference](../api/historical_context.md) for the complete contract.

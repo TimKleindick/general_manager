@@ -117,6 +117,51 @@ The ORM capability returns a manager-valued query adapter: selected objects use
 the original manager class and one fixed historical snapshot. Its `.raw`
 attribute exposes the Django audit queryset. Other capability handlers retain
 their own result contract. Missing history support raises `HistoryNotSupportedError`.
+
+## ORM manager history
+
+For ORM-backed managers, `manager.history` returns a `ManagerHistoryQuery` for
+the original entity. Prior to 0.87.3 object selection returned Django audit
+rows; use `.raw` to retain that behavior. `.raw` is the underlying, shaped
+audit queryset, including deletion and zero-duration records, and is not limited
+by the query's snapshot date. The adapter is obtained through `history`; its
+constructor is not a package-level public import.
+
+| Operation | Parameters and result |
+| --- | --- |
+| `all()`, `reverse()` | Return a new history query with the corresponding Django queryset operation applied. |
+| `filter(*args, **kwargs)`, `exclude(*args, **kwargs)` | Accept Django history-model predicates and return a new history query. |
+| `order_by(*fields)` | Accept history-model field names and return a new ordered history query. |
+| `first()`, `last()` | Return an instance of the original manager class or `None` if no row matches. |
+| `get(*args, **kwargs)` | Accept Django history-model predicates and return one manager; Django's history-model `DoesNotExist` or `MultipleObjectsReturned` propagates for zero or multiple matches. |
+| `earliest(*fields)`, `latest(*fields)` | Accept history-model ordering fields and return one manager; the history-model `DoesNotExist` propagates if no row matches. |
+| `count()`, `exists()` | Return an `int` row count or `bool`, respectively. `len(history)` and `bool(history)` have the same meanings. |
+| `values(*fields, **expressions)`, `values_list(*fields, **kwargs)` | Return Django querysets of scalar projections; arguments follow Django's queryset methods. |
+| Iteration, `history[index]`, `history[slice]` | Return managers one at a time, one manager, or an eager list of managers, respectively; Django indexing errors propagate. |
+
+Selection, counts and projections limit rows to `history_date` at or before an
+explicit or ambient snapshot. A selected manager preserves that exact instant;
+without one, a closed version uses one microsecond before its successor and an
+open version captures the current time once. The successor is found in the full
+entity timeline even when the query is filtered. Construction calls the original
+manager class with the entity ID under that snapshot, including custom ID-only
+constructors. A conflicting snapshot, a selected interval that does not contain
+the snapshot, or a zero-duration version raises `HistoricalContextConflictError`.
+Materializing a deletion row raises the underlying model's `DoesNotExist`.
+Other Django query and constructor errors propagate. For audit metadata or
+Django operations not listed above, use `.raw`.
+
+Historical manager properties, including GraphQL and custom property
+descriptors, evaluate GM reads under the bound snapshot. Historical raw
+iterator or async iterator results raise `HistoricalReadNotSupportedError`;
+awaitables retain the snapshot when awaited. Updates and deletes on a dated
+manager or its interface raise `HistoricalMutationError`, even after an
+`as_of` context exits. See the [concept](../concepts/historical_context.md),
+[how-to](../howto/historical_queries.md), and
+[cookbook](../examples/historical_queries.md#inspect-a-managers-history).
+
+## Manager attribute access
+
 Late descriptor fallback calls
 `GeneralManagerMeta.ensure_attributes_initialized(cls, name)`; when it returns
 true, the attribute is read normally, and otherwise `AttributeError(name)` is
