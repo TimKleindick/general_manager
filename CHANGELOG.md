@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.87.4 (2026-10-30)
+
+### Bug Fixes
+
+- Preserve GraphQL property shapes with list suffixes
+  ([`9af0a6b`](https://github.com/TimKleindick/general_manager/commit/9af0a6b06e4621056f9332e8fb4fd2122fe5d1cb))
+
+
 ## v0.87.3 (2026-10-28)
 
 ### Bug Fixes
