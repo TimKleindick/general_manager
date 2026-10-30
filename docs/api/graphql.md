@@ -537,6 +537,15 @@ explains the model, the [task guide](../howto/expose_via_graphql.md#declare-mana
 shows declaration patterns, and the [cookbook recipe](../examples/graphql_queries.md#query-a-manager-relation)
 shows directly usable queries.
 
+For `@graph_ql_property`, the return annotation determines the output shape even
+when the property name ends in `_list`. A `list[User]` property named
+`reviewers_list` exposes `reviewersList { id }` as a plain GraphQL list; a
+singular `User` property exposes a single object. Native manager collections
+check the owning property's read permission before evaluation and omit members
+denied by their instance read permission. `Bucket[User]` properties ending in
+`_list` and generated relation-list fields retain paginated `items` and
+`pageInfo` output.
+
 ## Compound list sorting
 
 Generated top-level list fields and generated relation-list fields expose the
