@@ -952,6 +952,10 @@ class GraphQL:
                 raw_hint,
                 cls.manager_registry,
             )
+            is_generated_relation = (
+                getattr(attr_value, "_general_manager_generated_relation", False)
+                is True
+            )
             property_page_hint = raw_hint
             if get_origin(property_page_hint) in {Union, UnionType}:
                 non_none_hints = [
@@ -1068,13 +1072,27 @@ class GraphQL:
                     )
                     or resolved_type
                 )
-                graphene_field = cls._map_field_to_graphene_read(
-                    resolved_type, attr_name
-                )
+                if property_relation_manager is not None and not is_generated_relation:
+                    graphene_field = graphene.Field(
+                        lambda manager=property_relation_manager: cls.graphql_type_registry[
+                            manager.__name__
+                        ]
+                    )
+                else:
+                    graphene_field = cls._map_field_to_graphene_read(
+                        resolved_type, attr_name
+                    )
 
             fields[attr_name] = graphene_field
-            fields[f"resolve_{attr_name}"] = cls._create_resolver(
-                attr_name, resolved_type
+            # Native property values follow their annotations. Generated reverse
+            # relations retain their paginated resolver despite a manager hint.
+            fields[f"resolve_{attr_name}"] = (
+                _create_normal_resolver_fn(
+                    attr_name,
+                    authorize_manager_collection=origin in (list, tuple, set),
+                )
+                if property_relation_manager is not None and not is_generated_relation
+                else cls._create_resolver(attr_name, resolved_type)
             )
 
         capability_declarations = get_graphql_capabilities(generalManagerClass)
