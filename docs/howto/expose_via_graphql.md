@@ -163,6 +163,36 @@ manager modules during startup as described in the [installation
 guide](../installation.md), and then use the generated field names in queries,
 mutations, and subscriptions.
 
+## Expose manager-valued properties
+
+Add these properties to the `Project` manager above to expose its owner as an
+object and as a native list, even though both names end in `_list`:
+
+```python
+from general_manager import graph_ql_property
+
+
+# Inside Project:
+@graph_ql_property(cache="none")
+def selected_list(self) -> User | None:
+    return self.owner
+
+
+@graph_ql_property(cache="none")
+def reviewers_list(self) -> list[User]:
+    return [self.owner] if self.owner is not None else []
+```
+
+Place the methods inside the class and register the manager at startup. Query
+`selectedList { id }` as an object and `reviewersList { id }` as a plain list;
+neither field accepts pagination arguments. `tuple[User, ...]` and `set[User]`
+also produce plain lists. An optional collection may return `null`, which is
+distinct from an empty list. The property read check runs before the getter;
+unreadable collection members are omitted. A `Bucket[User]` property named
+with `_list`, and generated reverse relations, retain paginated `items` and
+`pageInfo`. The [cookbook](../examples/graphql_queries.md#query-manager-valued-properties)
+shows a query for these shapes.
+
 ## Filter by identifier
 
 Actual ORM primary keys and raw scalar foreign-key references use GraphQL
