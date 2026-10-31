@@ -16,8 +16,9 @@ For each manager class, GeneralManager:
 
 Single-valued manager relations are exposed as object fields. Generated
 relation-list fields and `Bucket[Manager]` properties named with the `_list`
-suffix are paginated, with filtering, grouping, sorting, and pagination
-arguments. A native `@graph_ql_property` returning a manager, `list`, `tuple`,
+suffix are paginated, with filtering, sorting, and pagination arguments.
+Grouping, when supported, uses a separate generated sibling field.
+A native `@graph_ql_property` returning a manager, `list`, `tuple`,
 or `set` instead follows its return annotation even if its name ends in
 `_list`: a manager becomes an object and a native collection becomes a plain
 GraphQL list. The owning property is checked for read access before evaluation,
