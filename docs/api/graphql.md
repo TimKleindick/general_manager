@@ -546,10 +546,11 @@ denied by their instance read permission. `Bucket[User]` properties ending in
 `_list` and generated relation-list fields retain paginated `items` and
 `pageInfo` output.
 
-These property fields have no pagination, filtering, sorting, or grouping
-arguments. A native collection returns a GraphQL list, preserving the order and
-duplicates of list or tuple values after unreadable members are removed; set
-iteration order is not guaranteed. Optional values can resolve to `null`,
+Singular-manager and native-collection property fields have no pagination,
+filtering, sorting, or grouping arguments. A native collection returns a GraphQL
+list. List and tuple values preserve their order and duplicates after unreadable
+members are removed; set iteration order is not guaranteed. Optional values can
+resolve to `null`,
 distinct from an empty list. A denied owning property resolves to `null` before
 its getter runs. Errors raised during permission checks or value resolution
 follow normal GraphQL error handling.
