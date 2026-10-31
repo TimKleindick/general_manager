@@ -14,9 +14,17 @@ For each manager class, GeneralManager:
 4. Registers measurement scalars (`MeasurementScalar`) and object wrappers so units stay intact.
 5. Adds a `capabilities` field only when the manager exposes GraphQL permission capability declarations.
 
-Single-valued manager relations are exposed as object fields. Relation fields
-whose Python-side name ends with `_list` are exposed as paginated list fields
-with filtering, grouping, sorting, and pagination arguments.
+Single-valued manager relations are exposed as object fields. Generated
+relation-list fields and `Bucket[Manager]` properties named with the `_list`
+suffix are paginated, with filtering, grouping, sorting, and pagination
+arguments. A native `@graph_ql_property` returning a manager, `list`, `tuple`,
+or `set` instead follows its return annotation even if its name ends in
+`_list`: a manager becomes an object and a native collection becomes a plain
+GraphQL list. The owning property is checked for read access before evaluation,
+and unreadable manager collection members are omitted. See the [property
+guide](../../howto/expose_via_graphql.md#expose-manager-valued-properties) for a
+declaration and the [cookbook](../../examples/graphql_queries.md#query-manager-valued-properties)
+for a query.
 
 ### Identity fields
 

@@ -546,6 +546,21 @@ denied by their instance read permission. `Bucket[User]` properties ending in
 `_list` and generated relation-list fields retain paginated `items` and
 `pageInfo` output.
 
+These property fields have no pagination, filtering, sorting, or grouping
+arguments. A native collection returns a GraphQL list, preserving the order and
+duplicates of list or tuple values after unreadable members are removed; set
+iteration order is not guaranteed. Optional values can resolve to `null`,
+distinct from an empty list. A denied owning property resolves to `null` before
+its getter runs. Errors raised during permission checks or value resolution
+follow normal GraphQL error handling.
+
+The corrected property shapes were introduced in 0.87.4. Clients that used
+the previous incorrect paginated shape for affected properties must update
+their selections and regenerate schema-derived types; paginated bucket and
+generated relation-list fields are unchanged. See the [concept](../concepts/graphql/schema_autogen.md#type-mapping),
+[how-to](../howto/expose_via_graphql.md#expose-manager-valued-properties), and
+[cookbook](../examples/graphql_queries.md#query-manager-valued-properties).
+
 ## Compound list sorting
 
 Generated top-level list fields and generated relation-list fields expose the

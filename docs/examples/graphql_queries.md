@@ -250,6 +250,35 @@ contracts, see the [GraphQL concept guide](../concepts/graphql/schema_autogen.md
 the [task guide](../howto/expose_via_graphql.md#declare-manager-relations), and
 the [API reference](../api/graphql.md#relation-annotation-compatibility).
 
+## Query manager-valued properties
+
+For the `selected_list` and `reviewers_list` properties in the [how-to](../howto/expose_via_graphql.md#expose-manager-valued-properties),
+and the generated `reviewer_list` relation on the same `Project`, use:
+
+```graphql
+query ProjectPropertyShapes($projectId: ID!) {
+  project(id: $projectId) {
+    selectedList { id name }
+    reviewersList { id name }
+    reviewerList(page: 1, pageSize: 20) {
+      items { id name }
+      pageInfo { totalCount }
+    }
+  }
+}
+```
+
+```json
+{"projectId": "42"}
+```
+
+Replace `42` with an existing readable project ID. The first property returns
+an object or `null`; the second returns a plain array. The generated relation
+returns a page. Denied properties resolve to `null` without evaluating their
+getters, and unreadable members are removed from native manager collections.
+See the [API reference](../api/graphql.md#relation-annotation-compatibility) for
+the version and client compatibility details.
+
 ## Update only the fields you supply
 
 Generated ORM update and delete mutations require a stable `id: ID!` target.
