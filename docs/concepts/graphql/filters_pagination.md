@@ -60,6 +60,16 @@ normalizers receive the parsed object mapping for the current `filter` or
 `exclude` input and must return both `filter` and `exclude` mappings; missing
 keys propagate the resulting Python `KeyError`.
 
+## Computed-property filters and ordering
+
+For computed fields, `filterable=True` and `sortable=True` declare the available
+GraphQL controls. A database-backed property's `query_annotation` can express
+filtering, exclusion, and sorting in the ORM, while its Python getter still
+supplies the returned field value. Calculation properties use Python evaluation
+and do not execute query annotations. See the
+[GraphQL property guide](../../howto/expose_via_graphql.md#declare-computed-graphql-properties)
+for expression and queryset-callback examples, fallback costs, and backend limits.
+
 ## Identifier filters
 
 Actual ORM primary keys and raw foreign-key aliases use `ID` for equality and

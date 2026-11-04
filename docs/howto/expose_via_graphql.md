@@ -2,6 +2,230 @@
 
 Managers with an `Interface` are registered during GeneralManager startup and receive generated query, mutation, and subscription fields based on their interface capabilities.
 
+## Declare computed GraphQL properties
+
+Use `@graph_ql_property` on a manager method with a return type hint. Access it
+as an attribute in Python (`book.title_length`), and select it as a field in
+GraphQL (`titleLength` with default camel-casing). The getter supplies the
+returned value; its return annotation supplies the GraphQL type.
+
+| Option | Purpose |
+| --- | --- |
+| `filterable=True` | Expose supported property filters in generated list queries. |
+| `sortable=True` | Allow the property in generated ordering options. |
+| `query_annotation=...` | Give a database bucket an ORM representation for filtering, exclusion, and sorting. |
+| `is_identifier=True` | Expose supported native key values as GraphQL `ID`; see [identity properties](#declare-native-identity-properties). |
+| `cache="run"` | Default: reuse getter results inside the active run. |
+| `cache="dependency"` | Reuse getter results across runs with dependency tracking. |
+| `cache="timeout", timeout=60` | Cache getter results for the configured number of seconds. |
+| `cache="none"` | Evaluate the getter on every access. |
+| `warm_up=True` | Enable proactive warm-up; requires dependency or timeout caching. |
+
+Filtering and sorting default to disabled. Supplying `query_annotation` does
+not enable either flag, and does not change the property's output type or
+cache policy. A return type hint is mandatory even when an ORM expression has
+an `output_field`.
+
+### Use an ORM expression with query_annotation
+
+For a database-backed manager, express the same calculation twice: once as
+Python for reading the property and once as a Django expression for querying it.
+For example, place this manager in a registered Django application and create
+its migration before using it:
+
+```python
+from django.db import models
+from django.db.models.functions import Length
+
+from general_manager import GeneralManager, graph_ql_property
+from general_manager.interface import DatabaseInterface
+
+
+class Book(GeneralManager):
+    title: str
+
+    class Interface(DatabaseInterface):
+        title = models.CharField(max_length=200)
+
+    @graph_ql_property(
+        filterable=True,
+        sortable=True,
+        query_annotation=Length("title"),
+        cache="none",
+    )
+    def title_length(self) -> int:
+        return len(self.title)
+```
+
+`Book.all().filter(title_length__gte=10)` makes the database bucket annotate its
+queryset as `title_length=Length("title")` before applying the lookup.
+`Book.all().exclude(title_length__lt=10)` uses the same annotation for exclusion;
+`Book.all().sort("-title_length")` uses it for descending ordering.
+The annotation alias is the **Python property name**, not `titleLength`.
+Expression field paths such as `"title"` refer to fields on the underlying
+Django model, not arbitrary manager getters.
+
+With the default generated names, a GraphQL query can use the property without
+knowing its SQL expression:
+
+```graphql
+query LongBookTitles {
+  bookList(
+    filter: {titleLength_Gte: 10}
+    orderBy: [{field: titleLength, direction: DESC}]
+    pageSize: 20
+  ) {
+    items { title titleLength }
+    pageInfo { totalCount }
+  }
+}
+```
+
+Both the typed filter field and ordering enum use GraphQL's default
+camel-casing. See the generated schema for your application's exact names.
+
+The annotation is applied when the property is used by `filter()`,
+`exclude()`, or `sort()`. Merely selecting `titleLength` does not apply
+the annotation. Reading `book.title_length` or resolving the output field
+still calls the Python getter through its configured cache; SQL annotations
+do not replace that getter or automatically supply its return value.
+
+Start from a bucket for Python property queries: use `Book.all().filter(...)`
+and `Book.all().exclude(...)`. The current ORM interface applies class-level
+`Book.filter(...)` and `Book.exclude(...)` arguments directly to the model
+queryset before constructing a bucket. A computed property such as
+`title_length` is not a model field, so those shortcuts can raise Django
+`FieldError` before its annotation is installed. Filtering real model fields
+first, then chaining a property filter on the returned bucket, also works.
+Generated GraphQL list filtering uses the bucket path.
+
+### Use a queryset callback
+
+For query preparation that needs more than one expression, pass a callable
+instead. It receives the current Django `QuerySet` and must return a
+`QuerySet` that exposes the property name for the subsequent lookup or order:
+
+```python
+from django.db.models import F, QuerySet
+from django.db.models.functions import Length
+
+
+def annotate_title_length(queryset: QuerySet) -> QuerySet:
+    return queryset.alias(_title_size=Length("title")).annotate(
+        title_length=F("_title_size")
+    )
+
+
+# Alternative declaration inside Book, replacing the property above:
+@graph_ql_property(
+    filterable=True,
+    sortable=True,
+    query_annotation=annotate_title_length,
+    cache="none",
+)
+def title_length(self) -> int:
+    return len(self.title)
+```
+
+Pass the function itself, without calling it. Unlike the expression form,
+GeneralManager does **not** automatically bind a callback's result to the
+property name: the callback must define `title_length` itself. Return the
+transformed queryset, not an expression, a list, or an aggregate dictionary.
+A non-queryset result fails with `InvalidQueryAnnotationTypeError` in the
+database query path.
+
+Build on the supplied queryset so existing restrictions remain intact; starting
+again from `Model.objects.all()` can discard filters and authorization
+constraints. Avoid evaluation and side effects in the callback. It is query
+construction, not a per-row resolver, and may run again for chained operations.
+The property cache does not cache this callback. Make each callback
+self-contained instead of relying on another property's annotation having
+already been installed.
+
+### Keep Python and SQL behavior aligned
+
+GeneralManager stores the annotation metadata without validating that it
+matches the getter. Test both returned values and query membership/order.
+In particular:
+
+- Use compatible types and explicit Django `output_field` declarations where
+  needed for mixed arithmetic. The getter's return annotation does not set the
+  SQL expression's type.
+- Match null handling, rounding, and case/collation behavior. A getter that
+  treats `None` as zero needs an equivalent SQL expression, for example using
+  `Coalesce`.
+- Account for relation joins and aggregation: a query annotation can change
+  row multiplicity or grouping. Keep the resulting queryset appropriate for
+  the manager's model.
+- Do not reuse an existing model field name for a computed annotation alias.
+  Django's annotation validation and database/backend restrictions still apply.
+
+Without `query_annotation`, a database bucket evaluates supported property
+filters and sort keys in Python. Filtering collects matching primary keys;
+sorting builds a database ordering from the computed values. This can require
+evaluating many candidates before pagination and can cause additional queries
+inside the getter. An ORM annotation can reduce this work for selection and
+ordering, but does not eliminate the getter's cost when the property is
+returned to the client. If a multi-key sort includes a Python-only property,
+the database bucket sorts the combined keys in Python, using ORM annotation
+values for the annotated keys.
+
+### CalculationInterface does not execute query_annotation
+
+`query_annotation` is consumed by `DatabaseBucket`, not by
+`CalculationBucket`. A calculation manager has input combinations rather
+than one Django queryset for its computed rows. Setting an annotation on its
+property stores the metadata, but the calculation bucket never invokes the
+callback or evaluates the ORM expression. This remains true when a calculation
+input happens to be a database-backed manager.
+
+Use a Python getter for the calculated value and the filter/sort flags for its
+generated GraphQL controls:
+
+```python
+from general_manager import GeneralManager, graph_ql_property
+from general_manager.interface import CalculationInterface
+from general_manager.manager import Input
+
+
+class DoubleNumber(GeneralManager):
+    number: int
+
+    class Interface(CalculationInterface):
+        number = Input(int, possible_values=[1, 2, 3])
+
+    @graph_ql_property(filterable=True, sortable=True, cache="none")
+    def doubled(self) -> int:
+        return self.number * 2
+
+
+values = [item.doubled for item in DoubleNumber.filter(doubled__gte=4)]
+# [4, 6]
+descending = [item.doubled for item in DoubleNumber.all().sort("-doubled")]
+# [6, 4, 2]
+```
+
+Property filters/excludes instantiate calculation managers and read their
+properties through `getattr`; property sorting also uses Python values.
+Adding `query_annotation` would not change these results or move the work to
+SQL. The calculation path supports its own
+[Python lookup set](../concepts/interfaces/computed_data_interfaces.md#declaring-inputs),
+not every Django lookup.
+
+For large domains, narrow declared inputs before computing derived values,
+or move database-expressible work to a database-backed input manager and filter
+that source before constructing combinations. Cache expensive getters with an
+appropriate scope. If a result must itself support database-level annotations,
+model it through an appropriate database-backed interface. Automatically
+translating arbitrary calculation getters or input combinations into SQL is
+not provided by `query_annotation`.
+
+In generated GraphQL calculation lists, declared-input predicates run before
+row authorization and computed-property predicates run afterward. Sorting and
+pagination follow filtering. Keep that authorization order when designing
+custom resolvers; see [permission-aware calculation
+filtering](../concepts/graphql/filters_pagination.md#query-arguments).
+
 ## Return output-only GraphQL types
 
 Use `GraphQLType` for a response value that needs a GraphQL object shape but
