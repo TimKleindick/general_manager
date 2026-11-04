@@ -1,72 +1,71 @@
 # Custom Capability Examples
 
-The snippets below illustrate how to build reusable capabilities outside of the core library.
+Use these patterns when extending an interface's lifecycle, not when defining
+ordinary manager fields. The
+[custom capability tutorial](../howto/create_custom_capability.md) provides
+the complete module layout and keeps the supplied interface handlers.
 
 ## Cache warm-up capability
 
-```python
-from general_manager.interface.capabilities.builtin import BaseCapability
-from general_manager.logging import get_logger
+For GraphQL property warm-up, use the existing
+[cache tutorial](../howto/cache_dependent_calculation.md#step-4-warm-selected-properties-proactively).
+It owns property selection, recipes, invalidation and scheduling. A capability
+named `"cache_warmup"` is not a supported new slot in `CapabilityName`, and
+logging a cache name does not preload that cache.
 
-
-class CacheWarmupCapability(BaseCapability):
-    """Warm a cache backend during startup."""
-
-    name = "cache_warmup"
-
-    def __init__(self, *, cache_backend: str) -> None:
-        self.cache_backend = cache_backend
-        self.logger = get_logger("interface.cache_warmup")
-
-    def get_startup_hooks(self, interface_cls):
-        def warm_cache() -> None:
-            self.logger.info(
-                "warming cache",
-                context={
-                    "interface": interface_cls.__name__,
-                    "backend": self.cache_backend,
-                },
-            )
-            # Real cache warm-up logic goes here.
-
-        return [warm_cache]
-```
-
-Attach it via `InterfaceCapabilityConfig`:
-
-```python
-from general_manager.interface.capabilities.configuration import InterfaceCapabilityConfig
-
-class ExternalReportInterface(InterfaceBase):
-    configured_capabilities = (
-        InterfaceCapabilityConfig(
-            CacheWarmupCapability,
-            options={"cache_backend": "reports"},
-        ),
-    )
-```
+If an application has a different startup task, adapt the tutorial's
+`StartupMessageCapability`: accept any configuration in its constructor and
+return a no-argument callback from `get_startup_hooks()`. The callback must
+call a real application implementation. Keep expensive deployment maintenance
+in an explicit command.
 
 ## Audit notification capability
 
+The supported observability slot already receives operation outcomes. This
+example adds a topic to successful-operation logs while preserving its normal
+start/error logging:
+
 ```python
-class AuditNotificationCapability(BaseCapability):
-    """Emit audit events whenever mutations happen."""
+from general_manager.interface.capabilities.core.observability import (
+    LoggingObservabilityCapability,
+)
+from general_manager.logging import get_logger
 
-    name = "audit_notification"
 
+class TopicLoggingCapability(LoggingObservabilityCapability):
     def __init__(self, *, topic: str) -> None:
+        super().__init__()
         self.topic = topic
-        self.logger = get_logger("interface.audit_notification")
+        self.topic_logger = get_logger("application.operations")
 
-    def notify(self, action: str, payload: dict[str, Any]) -> None:
-        self.logger.info(
-            "audit event",
-            context={"topic": self.topic, "action": action, "payload": payload},
+    def after_operation(self, *, operation, target, payload, result):
+        super().after_operation(
+            operation=operation, target=target, payload=payload, result=result
         )
-
-    def inject_mutation_hooks(self, interface_cls):
-        def _notify(instance, action: str, payload: dict[str, Any]) -> None:
-            self.notify(action, payload)
-
-        setattr(interface_cls, "_audit_notify", _notify)
+        self.topic_logger.info(
+            "interface operation completed",
+            context={"topic": self.topic, "operation": operation},
+        )
 ```
+
+Configure it on an existing interface, preserving that interface's bundle:
+
+```python
+from general_manager.interface import DatabaseInterface
+from general_manager.interface.capabilities.configuration import InterfaceCapabilityConfig
+
+# Inside a manager's Interface(DatabaseInterface):
+configured_capabilities = (
+    *DatabaseInterface.configured_capabilities,
+    InterfaceCapabilityConfig(
+        TopicLoggingCapability,
+        options={"topic": "project-operations"},
+    ),
+)
+```
+
+The class must be imported before the manager interface is defined. These are
+operation logs, not a durable audit outbox or a promise of transaction commit.
+For durable events and follow-up jobs use the
+[workflow guide](../howto/workflow_events.md); for permission decisions use the
+[audit-logging integration](../concepts/observability/audit_logging.md).

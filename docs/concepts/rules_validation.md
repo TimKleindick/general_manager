@@ -4,7 +4,11 @@ Rules let you attach declarative validation to managers. They execute before dat
 
 ## Defining rules
 
-Create rules with the `general_manager.rule.Rule` helper. Rules accept a callable that receives the manager instance under validation and returns a boolean:
+Create rules with the `general_manager.rule.Rule` helper. Rules accept a callable that reads candidate values and returns a boolean.
+For ORM-backed writes, the candidate is the Django model being validated; for
+request-backed writes it is an attribute namespace of candidate payload values.
+Use declared data fields in predicates rather than manager-only methods or
+computed properties:
 
 ```python
 from general_manager.rule import Rule
@@ -12,7 +16,8 @@ from general_manager.rule import Rule
 positive_price = Rule(lambda product: product.price > 0)
 ```
 
-Use the generic form to declare the target manager type so that type checkers and IDEs understand the lambda body:
+The generic form can describe the expected field shape for type checkers and
+IDEs. It does not convert the runtime candidate into that manager type:
 
 ```python
 Rule["Project"](lambda project: project.start_date < project.end_date)
@@ -91,7 +96,7 @@ You can evaluate a rule in isolation, which is useful for unit tests:
 
 ```python
 result = positive_price.evaluate(product)
-if not result:
+if result is False:
     print(positive_price.get_error_message())
 ```
 

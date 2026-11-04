@@ -24,6 +24,7 @@ what to read next for your task.
 | Build or change part of an application | [Tutorials and task guides](howto/index.md) |
 | Adapt a focused example | [Cookbook](examples/index.md) |
 | Check an exact signature, input, or result | [API reference](api/core.md) |
+| Configure settings and optional integrations | [Configuration map](configuration.md) |
 | Install or upgrade a deployment | [Installation](installation.md) and [upgrade guide](howto/migrate-to-stable-api.md) |
 | Diagnose a problem | [FAQ](faq.md) and [operations map](howto/index.md#operate-and-maintain-an-application) |
 

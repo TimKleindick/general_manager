@@ -38,7 +38,9 @@ See [GraphQL permission capabilities](permission_capabilities.md) for the full
 concept, declaration helpers, current-user provider configuration, and batching
 examples.
 
-Declare object capability hints on the manager's nested `Permission` class:
+Declare object capability hints on an existing manager's nested `Permission`
+class. This fragment assumes a registered `Project` with `name` and `status`
+fields; retain its `Interface` definition:
 
 ```python
 from general_manager.permission import AdditiveManagerPermission, object_capability

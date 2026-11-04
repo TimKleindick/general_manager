@@ -198,6 +198,10 @@ smallest reusable pattern. See the
 [API reference](../../api/graphql.md#bulk-notification-context) for the exact
 signature and failure behavior.
 
+The fragment assumes an application-provided `projects` selection with a writable
+`status` field and an authenticated, authorized Django user named `author`.
+The notification context batches delivery; it does not supply a write actor.
+
 ```python
 from django.db import transaction
 
@@ -207,7 +211,7 @@ from general_manager.api import bulk_data_change_notifications
 with bulk_data_change_notifications():
     with transaction.atomic():
         for project in projects:
-            project.update(status="archived")
+            project.update(status="archived", creator_id=author.pk)
 ```
 
 Keep `bulk_data_change_notifications()` outside the true outermost database

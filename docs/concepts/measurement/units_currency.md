@@ -37,4 +37,14 @@ is_longer = length > width       # True
 
 ## Serialisation
 
-Use `.serialize()` when you need structured data for JSON responses. The method returns a dictionary with `value` and `unit` keys.
+For application JSON, choose an explicit representation. `Measurement` exposes
+`magnitude` and `unit`; it does not provide a `.serialize()` method:
+
+```python
+payload = {"value": str(length.magnitude), "unit": length.unit}
+```
+
+The string magnitude preserves decimal precision. Generated GraphQL measurement
+objects instead expose `value` as a Float and `unit` as text; that transport
+can lose Decimal precision. Use the
+[dataframe helpers](../../howto/dataframe_measurements.md) for paired columns.

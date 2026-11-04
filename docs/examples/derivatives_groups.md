@@ -1,12 +1,13 @@
 # Derivative Aggregation
 
 Group derivatives by project and maturity to produce aggregate statistics.
+This application-specific recipe assumes `Project.derivative_list` is a bucket
+of derivatives with a non-null `maturity_date` and a non-null energy `volume`
+measurement. It extends a domain model; the quickstart's name-only `Project`
+does not provide these fields. Adjust the manager import to your application.
 
 ```python
-import graphene
-
 from core.managers import Project
-from general_manager.api.graphql import GraphQL
 from general_manager.measurement import Measurement
 
 def aggregate_derivatives(project: Project) -> dict[str, Measurement]:

@@ -2,6 +2,12 @@
 
 Factories make it easy to seed development databases or create fixtures for end-to-end tests.
 
+Start in an installed Django app with migrated manager tables. The Project
+below is a complete application-specific declaration; if you extend the
+quickstart Project, add its new fields through migrations before running the
+shell examples. Factory creates return manager wrappers around stored models;
+they do not establish an application user's write permission.
+
 ## Step 1: Define factories
 Factories are automatically generated based on the manager's interface. But you can customise generation by defining a nested `Factory` class.
 
@@ -55,7 +61,6 @@ custom fields and wrap saved models back into managers.
 
 ```python
 Project.Factory.create_batch(20)
-InventoryItem.Factory.create_batch(50)
 ```
 
 `Factory.create(...)` and `Factory.create_batch(...)` save each object before
@@ -234,6 +239,11 @@ Use this hook when the number of records is dynamic, when values need to be gene
 ## Step 4: Integrate with pytest fixtures
 
 ```python
+from collections.abc import Callable
+import pytest
+from projects.managers import Project
+
+
 @pytest.fixture
 def project_factory() -> Callable[..., Project]:
     def _factory(**kwargs):
@@ -241,11 +251,17 @@ def project_factory() -> Callable[..., Project]:
     return _factory
 ```
 
-Use the fixture in tests to create data on demand.
+Use the fixture in tests with database access enabled, for example through
+pytest-django's `db` fixture or `django_db` marker. Adjust the `projects` import
+to your application name.
 
 ## Seed a manager landscape from the command line
 
 Use `seed_manager_landscape` when you want a local or demo database to contain a minimum number of rows for one or more managers that already expose factories.
+
+The multi-manager command below also assumes the
+[measurement tutorial's InventoryItem](add_model_with_measurement.md) exists
+and has been migrated. Select only managers declared in your application.
 
 The command is explicit by default. Select managers with `--manager`, or pass `--all` to target every manager discovered by GeneralManager that has `Factory.create_batch`.
 Omitting both `--manager` and `--all` raises `CommandError` before discovery or
