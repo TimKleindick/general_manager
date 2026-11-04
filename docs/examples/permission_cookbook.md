@@ -2,6 +2,12 @@
 
 These recipes provide drop-in patterns for the permission system. They highlight how `AdditiveManagerPermission` and `OverrideManagerPermission` compose with reusable checks, attribute overrides, and queryset filters.
 
+The snippets assume your application's managers, fields, and user fixtures.
+For a complete setup and ordinary-user write examples, start with
+[Define permission rules](../howto/add_permission_rule.md). Generated GraphQL
+applies read policies to its responses; plain Python reads need explicit
+authorization at the application's response boundary.
+
 ## Attribute-level rule sets
 
 ```python
@@ -22,7 +28,8 @@ class InvoicePermission(AdditiveManagerPermission):
 ```
 
 - Restrict write access to finance operators.
-- Allow anyone to read invoices but hide `paid_at` for unauthorised users.
+- Allow authenticated users to read invoices, with `paid_at` additionally
+  restricted to finance members.
 - `matches` uses the helper registered in the [`permission_checks` registry](../api/permission.md#registry-and-reusable-checks) to guard updates based on the current field value.
 
 ## Delegating through `__based_on__`
@@ -91,7 +98,11 @@ def permission_belongs_to_org(instance, user, config):
     return relation.organisation_id == user.organisation_id
 ```
 
-Use the permission by adding `"belongsToOrganisation:customer"` to `__read__`. The filter keeps queryset results inside the user's organisation without duplicating logic.
+This fragment assumes an authenticated user with `organisation_id` and a
+`customer` relation with the same attribute. Use
+`"isAuthenticated&belongsToOrganisation:customer"` in `__read__`. Generated
+GraphQL uses the filter to constrain rows; test that its result matches the
+predicate. Plain Python queryset or bucket reads do not apply the policy for you.
 
 Filters can also return `{"exclude": {...}}` or include both `filter` and
 `exclude` keys:
@@ -251,12 +262,14 @@ for the backend behavior and a generic resolver helper.
 ## Testing shortcuts
 
 ```python
-from general_manager.permission.base_permission import BasePermission, PermissionCheckError
+import pytest
+
+from general_manager.permission.base_permission import PermissionCheckError
 
 
 def test_finance_cannot_delete_archived_invoice(finance_user, archived_invoice):
     with pytest.raises(PermissionCheckError):
-        BasePermission.check_delete_permission(
+        archived_invoice.Permission.check_delete_permission(
             archived_invoice,
             request_user=finance_user,
         )

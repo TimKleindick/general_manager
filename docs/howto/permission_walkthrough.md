@@ -2,6 +2,13 @@
 
 This tutorial walks through building and validating permissions for a `GeneralManager`. It uses the explicit additive [`AdditiveManagerPermission`](../concepts/permission/manager_based_permission.md) class and the reusable checks from the [`permission_checks` registry](../api/permission.md#registry-and-reusable-checks).
 
+Start with [Define permission rules](add_permission_rule.md) for a complete,
+runnable example. This guide explains additional patterns to adapt to your own
+managers; its declarations omit application-specific interface fields and data.
+The [permission overview](../concepts/permission/index.md) explains which entry
+points enforce these policies. Plain Python reads require explicit authorization
+before their values are returned to a user.
+
 ## 1. Model the access rules
 
 Start by encoding who may create, read, update, or delete each attribute. `AdditiveManagerPermission` exposes class attributes (`__read__`, `__create__`, `__update__`, `__delete__`) plus per-field overrides. Every string in these lists maps to a registered permission function.
@@ -51,7 +58,14 @@ shown above.
 
 ## 2. Attach filters for queryset access
 
-Read permissions do more than guard individual attribute access. The GraphQL API calls [`get_permission_filter`](../concepts/graphql/security.md#permission-enforcement) to narrow the queryset before results are returned, then applies a final per-instance read check. Each permission function may provide a filter companion.
+Generated GraphQL list and search queries obtain a read-permission plan from
+the manager's permission class. The plan may allow or deny the whole query,
+apply row filters, or require a final per-instance check. A filter that completely
+expresses the rule can avoid that final check. Field-level permissions still
+apply when GraphQL resolves the selected fields. See
+[permission enforcement](../concepts/graphql/security.md#permission-enforcement)
+for the exact contract. Each registered permission function may provide a filter
+companion; plain Python `Manager.filter()` does not apply it automatically.
 
 ```python
 from general_manager.permission.permission_checks import register_permission
@@ -70,7 +84,11 @@ def can_access_customer(instance, user, config):
     return getattr(instance, customer_field).owner_id == user.id
 ```
 
-Add `"belongsToCustomer:customer"` to `__read__` to produce filters automatically when the GraphQL layer runs the resolver. Use `python -m pytest` with fixtures that hit `get_permission_filter()` and list/search responses so both the prefilter and the final instance gate match expectations.
+This fragment assumes a `customer` relation whose manager exposes `owner_id`.
+Add `"isAuthenticated&belongsToCustomer:customer"` to `__read__`. Test the
+registered predicate, its filter, and generated list/search responses with
+allowed and denied users: a returned filter must describe the same allowed rows
+as the predicate. Return `None` instead if that equivalence cannot be guaranteed.
 
 `permission_filter` may return only a `filter` mapping, only an `exclude`
 mapping, both keys, or `None`. Return `None` when a rule depends on runtime
@@ -183,11 +201,14 @@ relation whose value is `None` instead uses the defaults described above.
 `BasePermission` exposes helpers used by managers and mutations to enforce permissions. Call them directly in tests or custom workflows:
 
 ```python
-from general_manager.permission.base_permission import BasePermission
-
 payload = {"status": "active"}
-BasePermission.check_create_permission(payload, Project, request_user=user)
+Project.Permission.check_create_permission(payload, Project, request_user=user)
 ```
+
+Use the manager's concrete permission class. `BasePermission` defines the
+abstract contract and cannot evaluate an application's policy by itself. The
+helper checks permission only; it does not validate or persist the payload.
+Normal `Project.create(..., creator_id=user.pk)` calls this check for you.
 
 - `check_create_permission`, `check_update_permission`, and `check_delete_permission` raise `PermissionCheckError` when a rule fails.
 - [`PermissionDataManager`](../api/permission.md#data-access-helpers) merges the old and new state for update checks, making diff-based rules straightforward.
@@ -207,7 +228,9 @@ Use these events in observability pipelines to verify that your permission rules
 
 1. Exercise happy-path scenarios where authorised users succeed.
 2. Attempt the same operations with unauthorised users and assert on the raised `PermissionCheckError`.
-3. For list endpoints, inspect the queryset returned by `get_permission_filter()` and ensure it hides records belonging to other users.
+3. For list endpoints, test the returned filter specifications and the actual
+   generated query response. `get_permission_filter()` returns constraint
+   mappings, not a queryset. Include rules that need a per-instance check.
 4. If audit logging is enabled during tests, capture emitted events using a stub logger to assert on the recorded metadata.
 
 With these steps, your permission classes stay in sync with business requirements while remaining transparent to reviewers and observability tooling.

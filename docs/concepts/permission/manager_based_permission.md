@@ -1,6 +1,7 @@
 # Manager-Based Permissions
 
-GeneralManager now exposes two explicit manager-based permission classes:
+Choose a manager-based permission class according to how field rules should
+combine with the operation's default rule:
 
 - `AdditiveManagerPermission`: attribute-specific rules add an extra gate on top of the class-level CRUD rule.
 - `OverrideManagerPermission`: attribute-specific rules replace the class-level CRUD rule for that field/action.
@@ -9,8 +10,13 @@ GeneralManager now exposes two explicit manager-based permission classes:
 
 ## Configuration
 
+Add a nested policy to your manager. This fragment uses built-in permission
+keywords; the [permission tutorial](../../howto/add_permission_rule.md) shows a
+complete manager and verifies allowed and denied operations.
+
 ```python
-from general_manager.permission.manager_based_permission import AdditiveManagerPermission
+from general_manager import GeneralManager
+from general_manager.permission import AdditiveManagerPermission
 
 class Project(GeneralManager):
     ...
@@ -18,21 +24,34 @@ class Project(GeneralManager):
     class Permission(AdditiveManagerPermission):
         __read__ = ["public"]
         __create__ = ["isAdmin"]
-        __update__ = ["isAdmin", "isProjectManager"]
+        __update__ = ["isAdmin", "inGroup:project-editors"]
         __delete__ = ["isAdmin"]
 ```
 
-Each list contains permission expressions evaluated by `validate_permission_string`. Expressions can reference:
+Each list contains permission expressions evaluated by
+`validate_permission_string`. Expressions name registered permission functions:
 
-- Built-in keywords such as `public`, `isAuthenticated`, or `isAdmin`.
-- Custom methods on the manager (e.g., `isProjectManager`).
+- Built-in keywords such as `public`, `isAuthenticated`, `isAdmin` (Django staff
+  access), or `inGroup:project-editors`.
+- Custom keywords added with `register_permission`; see
+  [custom permission functions](#custom-permission-functions).
+
+A method with a matching name on the manager is not discovered automatically.
+An unregistered name raises `PermissionNotFoundError` when evaluation reaches
+it. Use the exact registry spelling: `isAdmin` and `inGroup`, not `is_staff` or
+`group`.
 
 Each expression is an alternative: if any expression evaluates to `True`, the
 action is allowed. Within one expression, `&` is an AND operator, so
-`"isAuthenticated&isProjectManager"` requires both checks. This same algebra is
-used while planning read access: a static deny in an AND expression denies that
+`"isAuthenticated&inGroup:project-editors"` requires both checks. The same algebra
+is used while planning read access: a static deny in an AND expression denies that
 alternative, a static allow contributes no additional restriction, and the
 remaining mapping or instance checks determine conditional alternatives.
+
+Manager writes enforce these policies with the actor supplied as `creator_id`.
+Read policies are enforced by generated GraphQL or an explicit caller-owned
+authorization flow; plain Python manager/bucket reads do not apply them. See
+[where permissions run](index.md#where-permissions-run).
 
 ## Default permissions from settings
 
@@ -79,6 +98,9 @@ coercion, `InvalidBasedOnTypeError` is raised.
 ## Attribute-level rules
 
 Define nested dictionaries to restrict specific attributes:
+
+In these fragments, `isFinanceTeam` is an application-specific registered
+permission. For a simple Django group rule, use `inGroup:finance` instead.
 
 ```python
 class Permission(AdditiveManagerPermission):
@@ -132,9 +154,11 @@ application import; its `decision` field defaults to `"conditional"` so
 plan-shaped compatibility objects that predate the field keep the safe legacy
 behavior.
 
-For conditional plans, read expressions become Django queryset prefilters.
-Buckets use those filters before any necessary final per-instance check, so an
-unfilterable rule remains fail-closed. Static allow and deny avoid that work:
+For conditional plans, read expressions become queryset prefilters. Generated
+GraphQL list/search resolvers apply the plan before any necessary final
+per-instance check, so an unfilterable rule remains fail-closed. Plain Python
+buckets do not apply these plans automatically. Static allow and deny avoid that
+work:
 list resolvers return every candidate row or an empty result respectively,
 without per-row authorization calls. Aggregate authorization logs are emitted
 only for conditional list/search paths that actually required the final
@@ -166,27 +190,47 @@ Use the `register_permission` decorator to add project-specific keywords to the 
 from general_manager.permission import register_permission
 
 
-@register_permission("isProjectManager")
-def is_project_manager(instance, user, config):
-    return instance.project.managers.filter(pk=user.pk).exists()
+@register_permission("isProjectOwner")
+def is_project_owner(instance, user, _config):
+    return bool(user.is_authenticated and instance.owner_id == user.pk)
 ```
 
-Optionally supply a queryset filter when the permission can be represented as a lookup:
+This example assumes the manager declares an `owner` foreign key and therefore
+exposes `owner_id`. The function receives the object being checked, the resolved
+user and a list of colon-separated configuration values. Write checks may pass
+a `PermissionDataManager` representing the proposed create/update data. Declare
+separate field rules if changing the owner itself needs a stricter policy.
+
+For a read policy, supply a matching filter when the same decision can be
+represented as a lookup. Replace the registration above with this version;
+do not register both under the same name:
 
 ```python
+from general_manager.permission import PermissionFilterDecision, register_permission
+
+
+def project_owner_filter(user, _config):
+    if not user.is_authenticated:
+        return PermissionFilterDecision.DENY_ALL
+    return {"filter": {"owner_id": user.pk}}
+
+
 @register_permission(
-    "inDepartment",
-    permission_filter=lambda user, config: {
-        "filter": {"department__slug": config[0]}
-    }
-    if config
-    else None,
+    "isProjectOwner", permission_filter=project_owner_filter
 )
-def in_department(_instance, user, config):
-    return bool(config and user.department.slug == config[0])
+def is_project_owner(instance, user, _config):
+    return bool(user.is_authenticated and instance.owner_id == user.pk)
 ```
 
-Registered permissions are immediately available to every process that imports the module, so each worker should load the module (for example in `AppConfig.ready`). Attempting to register the same name twice raises `ValueError` to prevent accidental overrides.
+The filter and predicate must describe the same allowed records. If the policy
+cannot be represented by a filter, omit `permission_filter` or return `None`
+and let generated GraphQL perform the required instance checks.
+
+Registered permissions are available in every process that imports their
+module. Put registrations in the application's auto-imported `managers.py`, or
+import a dedicated permissions module from there before the policy is used.
+Attempting to register the same name twice raises `ValueError` to prevent
+accidental overrides.
 
 The duplicate check runs when the returned decorator is applied, because that is
 the point where the function is inserted into the global `permission_functions`

@@ -9,8 +9,15 @@ A manager is a lightweight wrapper around an interface. It exposes attributes de
 Key properties:
 
 - Lazy attribute resolution: attributes are evaluated when accessed, allowing caching and property descriptors such as `@graph_ql_property`.
-- Uniform API: `create`, `update`, `delete`, `filter`, and `all` methods behave consistently across interfaces (with the deprecated `deactivate` alias forwarding to `delete`).
-- Permission hook: operations delegate to the nested `Permission` class before touching the database.
+- Shared API: managers expose `create`, `update`, `delete`, `filter`, and `all`;
+  the interface determines which operations it supports. For example,
+  calculation interfaces support reads but do not persist writes.
+- Write permissions: `create`, `update`, and `delete` check the nested
+  `Permission` class with the supplied `creator_id` before delegating to the
+  interface, unless explicitly bypassed. Plain Python reads do not apply a user
+  policy automatically. Generated GraphQL owns its object and field read checks;
+  custom endpoints must authorize their own reads. See
+  [where permissions run](permission/index.md#where-permissions-run).
 
 ## Interfaces
 
