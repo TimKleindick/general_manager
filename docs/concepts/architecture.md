@@ -1,6 +1,36 @@
 # Architecture
 
-GeneralManager extends Django with a declarative layer that keeps business logic close to the objects you expose. The core architecture revolves around four components: managers, interfaces, buckets, and the dependency tracker.
+GeneralManager lets application code work with domain objects while an
+interface supplies their data. Start with the `Project` from the
+[quickstart](../quickstart.md):
+
+| Expression | Meaning |
+| --- | --- |
+| `Project(id=project_id)` | Identify one project through its interface; this does not create a row |
+| `Project.filter(name="Apollo")` | Build a bucket describing matching projects |
+| `project.name` | Read an attribute through the interface |
+| `Project.create(creator_id=user.pk, name="Apollo")` | Check write permission, validate, persist, and return a manager |
+
+For a database manager, the interface works with a Django model. For a
+calculation manager, it resolves declared inputs and computed properties.
+Application code still works with managers and buckets, but supported operations
+depend on the interface.
+
+## Follow one request
+
+A generated GraphQL list begins with a bucket, applies the query controls and
+read-permission policy, and resolves the selected fields from permitted managers.
+A normal Python write begins with the supplied actor, checks the manager's
+write policy, and delegates validation and persistence to the interface.
+Successful writes can then notify cache, history, search, and workflow machinery.
+
+Plain Python reads do not infer a user or authorize themselves. A custom view
+or service owns that read boundary. See [permissions](permission/index.md)
+before exposing those values to a client.
+
+The sections below explain each part. Dependency tracking is an additional
+mechanism for reuse and invalidation; it is not needed to understand the first
+manager definition.
 
 ## Managers
 
@@ -35,7 +65,7 @@ Buckets (`general_manager.bucket`) behave like querysets tailored for managers. 
 
 ## Dependency tracking and caching
 
-Every data-changing operation emits signals captured by the dependency tracker (`general_manager.cache.cache_tracker.DependencyTracker`). The tracker maps attribute access to cache keys and invalidates dependent entries when mutations occur. This mechanism powers automatic cache expiry, incremental recalculations, and GraphQL query caching.
+The dependency tracker records manager reads made during a calculation. The dependency index connects those reads to persistent cache entries; supported data-change signals trigger invalidation of affected entries. Together they let a later read recompute a derived value after its source data changes. See [caching and dependency tracking](caching.md) for cache scopes and their boundaries.
 
 To take advantage of the tracker:
 

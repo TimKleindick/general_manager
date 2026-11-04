@@ -163,6 +163,6 @@ raise `InvalidManagerStateError`.
 ## Pattern recommendations
 
 - Use descriptive attribute names that align with your GraphQL schema.
-- Expose related managers via buckets instead of raw Django querysets so that permission checks remain consistent.
+- Expose related managers via buckets instead of raw Django querysets to preserve manager and bucket behavior. A bucket does not authorize its own reads; generated GraphQL applies its read policy, while custom Python endpoints must enforce theirs.
 
 With these guidelines you can design manager hierarchies that remain understandable as your project grows.

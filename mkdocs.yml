@@ -71,6 +71,7 @@ nav:
   - Overview:
       - index.md
       - quickstart.md
+      - learning_paths.md
       - installation.md
       - roadmap.md
       - faq.md

@@ -2,6 +2,59 @@
 
 Managers with an `Interface` are registered during GeneralManager startup and receive generated query, mutation, and subscription fields based on their interface capabilities.
 
+## Query and update your first manager
+
+Start with the `Project` from the [quickstart](../quickstart.md), with
+`AUTOCREATE_GRAPHQL = True` and its migrations applied. You already have a
+generated API; no custom output type or resolver is needed for these operations.
+
+Send this operation to the configured GraphQL endpoint:
+
+```graphql
+query Projects {
+  projectList(orderBy: [{field: name}], page: 1, pageSize: 10) {
+    items { id name }
+    pageInfo { totalCount }
+  }
+}
+```
+
+`projectList` returns a page. `items` contains the records you may read;
+`pageInfo` describes the result set. Copy an `id` from the response when you
+want to address that project. With the unchanged quickstart, Apollo is visible
+without login. After the [permission tutorial](add_permission_rule.md), use an
+authenticated session for reads and an authorized editor for updates.
+
+To rename one project, send a mutation with that ID in its variables:
+
+```graphql
+mutation RenameProject($id: ID!) {
+  updateProject(id: $id, name: "Apollo launch") {
+    success
+    project: Project { id name }
+  }
+}
+```
+
+For example, variables are `{"id": "1"}` if the query returned ID `1`.
+Authenticate through your application's normal session or request integration;
+the request user supplies the write actor. The operation needs update
+permission, and normal HTTP authentication and CSRF handling still apply.
+The alias `project: Project` gives the generated `Project` payload field the
+response key `project`. A successful result contains `success: true` and the
+new name. A denied mutation reports a top-level GraphQL error; check `errors`
+before using the payload.
+
+## Choose the next GraphQL task
+
+- Use [filters, ordering, and pagination](../concepts/graphql/filters_pagination.md) to refine lists.
+- Read [partial updates](#partially-update-a-generated-manager) for omission, nulls, and history comments.
+- Use [custom mutations](../concepts/graphql/custom_mutations.md) for service operations beyond generated CRUD.
+- Use [output-only types](#return-output-only-graphql-types) when a calculated response needs a nested object shape.
+- Review [security](../concepts/graphql/security.md) when integrating a new client or custom resolver.
+
+The remaining sections cover those additional contracts and integration cases.
+
 ## Return output-only GraphQL types
 
 Use `GraphQLType` for a response value that needs a GraphQL object shape but
