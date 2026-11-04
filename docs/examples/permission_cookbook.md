@@ -30,7 +30,7 @@ class InvoicePermission(AdditiveManagerPermission):
 - Restrict write access to finance operators.
 - Allow authenticated users to read invoices, with `paid_at` additionally
   restricted to finance members.
-- `matches` uses the helper registered in the [`permission_checks` registry](../api/permission.md#registry-and-reusable-checks) to guard updates based on the current field value.
+- `matches` uses the helper registered in the [`permission_checks` registry](../api/permission.md#registry-and-reusable-checks). Update checks see the proposed state after supplied changes are applied. A simultaneous `status="open"` change can therefore satisfy this rule; it does not prove the stored invoice was already open.
 
 ## Delegating through `__based_on__`
 
@@ -155,10 +155,12 @@ class Project(GeneralManager):
         __read__ = ["isProjectReviewer"]
 ```
 
-Static decisions must be correct for every row. Use `None` when the rule needs
-the concrete instance, and use a mapping when a queryset constraint can narrow
-the candidate rows but does not itself prove authorization. Read expressions
-joined with `&` are ANDed; entries in `__read__` remain OR alternatives.
+Static decisions must be correct for every row. Return a mapping only when its
+queryset constraints fully represent the rule: a mapping-only plan can skip the
+final per-instance check. Return `None` when authorization still needs the
+concrete instance. A filter that merely narrows candidates is not sufficient.
+Read expressions joined with `&` are ANDed; entries in `__read__` remain OR
+alternatives.
 
 ## Guarding GraphQL mutations
 

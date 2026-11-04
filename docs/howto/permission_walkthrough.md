@@ -211,7 +211,7 @@ helper checks permission only; it does not validate or persist the payload.
 Normal `Project.create(..., creator_id=user.pk)` calls this check for you.
 
 - `check_create_permission`, `check_update_permission`, and `check_delete_permission` raise `PermissionCheckError` when a rule fails.
-- [`PermissionDataManager`](../api/permission.md#data-access-helpers) merges the old and new state for update checks, making diff-based rules straightforward.
+- [`PermissionDataManager`](../api/permission.md#data-access-helpers) overlays the proposed changes on the existing attributes for update checks. It exposes the resulting state, not separate before/after values. A rule that needs the original value must obtain it explicitly.
 
 ## 5. Capture audit trails
 
