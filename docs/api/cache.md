@@ -1,5 +1,20 @@
 # Cache API
 
+Use this reference for cache scopes, dependency tracking and mutation signals.
+For a first calculation, follow the [cache tutorial](../howto/cache_dependent_calculation.md);
+the [caching concept](../concepts/caching.md) explains run and transaction boundaries.
+
+| Task | Contract |
+| --- | --- |
+| Cache a callable | [Scopes and decorators](#cache-scopes-and-decorators) |
+| Share work within a request or job | [Tracking and run contexts](#tracking-and-run-contexts) |
+| Refresh application-owned caches after writes | [Batch refresh receivers](#batch-refresh-receivers) |
+| Integrate mutation observers | [Data-change signals and transactions](#data-change-signals-and-transactions) |
+| Read historical data safely | [Historical cache identity](#historical-cache-identity) |
+
+Dependency-entry, lease and shard helpers below describe lower-level integration
+contracts. Normal calculations use the decorator and supported manager writes.
+
 ## Historical cache identity
 
 Historical context usage is introduced in the [Historical Context API
@@ -61,6 +76,8 @@ autocommit is disabled outside an `atomic()` block. Callback failures
 follow the timing contract: they propagate during immediate dispatch or through
 the existing post-commit error path. This is a cache/refresh notification only;
 it does not replace audit history or per-record workflow events.
+
+## Cache scopes and decorators
 
 ::: general_manager.cache.cache_decorator.cached
 
@@ -523,6 +540,8 @@ keys or shards. They do not raise deliberate package-specific exceptions;
 errors and partial-write behavior from the configured Django cache backend or
 value serialization propagate to the caller.
 
+## Tracking and run contexts
+
 ::: general_manager.cache.cache_tracker.DependencyTracker
 
 ::: general_manager.cache.run_context.CalculationRunContext
@@ -721,6 +740,8 @@ exits a temporary `CalculationRunContext`. Use it only in `with` statements:
 `with ensure_calculation_run_context() as context:`. It is a class-based context
 manager, not a decorator or generator context manager; `__enter__()` yields a
 `CalculationRunContext` and `__exit__()` returns `None`.
+
+## Data-change signals and transactions
 
 ::: general_manager.cache.data_change_context.DataChangeTransactionContext
 

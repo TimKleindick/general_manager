@@ -1,5 +1,12 @@
 # Permission API
 
+Use manager permission classes to declare access policy, registered checks to
+reuse predicates, and audit loggers to observe evaluated decisions. Begin with
+[permission concepts](../concepts/permission/index.md) and
+[where enforcement runs](../concepts/permission/index.md#where-permissions-run).
+This page documents the concrete extension contracts; normal manager writes
+and generated GraphQL resolvers already call their owning checks.
+
 ## Core classes
 
 ::: general_manager.permission.base_permission.BasePermission

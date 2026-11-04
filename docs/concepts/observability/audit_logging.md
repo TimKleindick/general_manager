@@ -1,6 +1,14 @@
 # Audit Logging
 
-Audit logging captures every permission decision made by the system. General Manager plugs audit loggers via the ``AUDIT_LOGGER`` setting, and ships with two ready-to-use implementations. During ``AppConfig.ready`` the package reads ``GENERAL_MANAGER['AUDIT_LOGGER']`` first and falls back to the top-level ``AUDIT_LOGGER`` setting; when neither is set, logging resets to a no-op logger.
+Audit logging records permission decisions emitted by the framework's permission
+checks when a logger is enabled. It is not a complete record-access log: plain
+Python reads do not automatically run those checks, and optimized GraphQL read
+plans need not perform a separate per-row check. See
+[where permissions run](../permission/index.md#where-permissions-run). General Manager plugs audit loggers via the ``AUDIT_LOGGER`` setting, and ships with two ready-to-use implementations. During ``AppConfig.ready`` the package reads ``GENERAL_MANAGER['AUDIT_LOGGER']`` first and falls back to the top-level ``AUDIT_LOGGER`` setting; when neither is set, logging resets to a no-op logger.
+
+For a first setup and analysis, follow [the audit how-to](../../howto/audit_logger_analysis.md).
+Use settings-based configuration for normal deployments; custom loggers implement
+the `record(event)` protocol described below.
 
 ## Configuration via settings
 
@@ -19,7 +27,7 @@ GENERAL_MANAGER = {
     "AUDIT_LOGGER": {
         "class": "general_manager.permission.audit.DatabaseAuditLogger",
         "options": {
-            "using": "replica",  # database alias
+            "using": "default",  # writable database alias
             "table_name": "gm_permission_audit",
             "batch_size": 500,
             "flush_interval": 0.25,
@@ -73,6 +81,10 @@ class GeneralManagerIntegrationConfig(AppConfig):
         configure_audit_logger(DatabaseAuditLogger())
         # or configure_audit_logger(FileAuditLogger("/var/log/general-manager-audit.log"))
 ```
+
+A manual `ready()` override must run after `general_manager` in `INSTALLED_APPS`;
+otherwise GeneralManager's settings-based initialization can replace it.
+Prefer the setting above when ordering is unnecessary.
 
 ## Custom loggers
 

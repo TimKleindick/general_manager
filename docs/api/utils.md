@@ -1,5 +1,11 @@
 # Utilities API
 
+These small helpers support settings lookup, argument conversion, cache
+identity, filtering, naming and path traversal. Most application code reaches
+them through managers, buckets and GraphQL. Use the [Core API](core.md) for
+those entry points and the [Cache API](cache.md) for cache lifetime and
+invalidation; this page records the helper contracts.
+
 ::: general_manager.utils._none_to_zero.none_to_zero
 
 `none_to_zero(value)` returns the integer `0` only when `value is None`.
@@ -34,14 +40,19 @@ attribute errors are not wrapped.
 
 ::: general_manager.utils._make_cache_key.make_cache_key
 
-`make_cache_key(func, args, kwargs)` treats `kwargs=None` as empty kwargs and
-copies supplied mappings with `dict(...)`, including falsey custom mappings. It
-binds arguments with `inspect.Signature.bind_partial()`, applies default values,
-serializes the function module, qualified name, and bound arguments with sorted
-JSON keys using `CustomJSONEncoder`, then returns a SHA-256 hex digest computed
-with `usedforsecurity=False`. Invalid argument combinations raise `TypeError`
-from signature binding. Serialization errors from the custom encoder can
-propagate.
+`make_cache_key(func, args, kwargs)` returns a `gm:call:v2:` key followed by a
+SHA-256 digest. Its canonical payload includes the function module and qualified
+name, normalized arguments, and active historical-context identity. The general
+binding path uses `inspect.Signature.bind_partial()` and applies defaults;
+equivalent simple positional calls use the same payload through an optimized
+path. `kwargs=None` means no keyword arguments.
+
+The dedicated cache-key encoder preserves value types and manager class plus
+identification; it does not use `CustomJSONEncoder` or arbitrary string
+representations. Unsupported opaque values and cyclic containers raise a
+`TypeError` subclass. Invalid call binding raises `TypeError`. See
+[historical cache identity](cache.md#historical-cache-identity) for snapshot
+separation and cache-version rollout behavior.
 
 ::: general_manager.utils.filter_parser.UnknownInputFieldError
 

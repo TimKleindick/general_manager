@@ -50,46 +50,42 @@ and dots, spaces become underscores, and an already-prefixed value such as
 
 ## Django settings integration
 
-Configure handlers, formatters, and filters centrally in `settings.py`. The snippet below emits structured JSON logs, forwards `context` payloads, and raises alerts whenever multiple errors occur inside `general_manager` components.
+Start with a console handler using Python's standard logging formatter. Merge
+these entries into the project's existing `LOGGING` configuration. This enables
+readable application logs without requiring an additional formatter or request-ID
+package; it does not create alerts.
 
 ```python
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "json": {
-            "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
-            "fmt": "%(asctime)s %(name)s %(levelname)s %(message)s "
-            "%(component)s %(context)s %(request_id)s",
-        },
-    },
-    "filters": {
-        "request_id": {
-            "()": "django_structlog.filters.RequestIdFilter",
+        "console": {
+            "format": "%(asctime)s %(name)s %(levelname)s %(message)s",
         },
     },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
-            "formatter": "json",
-            "filters": ["request_id"],
+            "formatter": "console",
         },
     },
     "loggers": {
         "general_manager": {
             "handlers": ["console"],
             "level": "INFO",
-        },
-        "general_manager.permission.base": {
-            "handlers": ["console"],
-            "level": "WARNING",
             "propagate": False,
         },
     },
 }
 ```
 
-Place project-specific handlers (e.g. OpenSearch, CloudWatch) inside the same dictionary if you need aggregation beyond stdout.
+The basic formatter displays messages but not the structured `context` mapping.
+To retain `component` and `context` as searchable fields, install and configure
+your project's JSON formatter and log collector. Request IDs need an application
+middleware/filter that supplies them; alerts belong to the downstream monitoring
+system. Keep permission logging at `INFO` when investigating denials, which are
+logged at that level.
 
 ## Structured context & correlation IDs
 

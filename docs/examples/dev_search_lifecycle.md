@@ -26,7 +26,9 @@ backends ignore this DevSearch-specific setting.
 
 ## Declare an index and search it
 
-Add a `SearchConfig` to the manager whose fields should be searchable:
+Add this `SearchConfig` to an existing manager with `name` and `status` fields.
+The fragment shows only search configuration; preserve its actual `Interface`,
+fields and permission policy:
 
 ```python
 from general_manager import GeneralManager, IndexConfig

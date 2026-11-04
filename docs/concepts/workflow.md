@@ -1,6 +1,14 @@
 # Workflow
 
-GeneralManager workflows connect manager-level events to durable automation. The workflow subsystem is intentionally separate from interface CRUD code: interfaces emit domain changes, event registries route those changes, and workflow engines execute or delegate orchestration.
+GeneralManager workflows connect manager changes to application automation.
+Events are routed to handlers, which may start workflows and invoke actions.
+Local backends run in memory. Durable event delivery uses the database registry;
+durable workflow execution uses the Celery engine. An event handler can perform
+its own work without starting a workflow.
+
+Follow the [event tutorial](../howto/workflow_events.md) for a first local route,
+then [workflow operations](../howto/workflow_ops.md) for production delivery.
+This page explains the layers and their contracts.
 
 ## Mental model
 
@@ -10,6 +18,13 @@ A workflow has four layers:
 2. **Registries** route events to handlers. `InMemoryEventRegistry` is useful for local development and tests; `DatabaseEventRegistry` stores durable route state for production-style delivery.
 3. **Engines** execute workflow definitions. `LocalWorkflowEngine` runs in process, while `CeleryWorkflowEngine` persists executions and delegates async work through Celery tasks.
 4. **Actions** centralize reusable side effects behind `ActionRegistry`, so handlers call named operations instead of scattering integration logic.
+
+Before choosing delivery options, follow one event: a manager mutation emits
+`post_data_change`; the optional signal bridge constructs a `WorkflowEvent`;
+the configured registry matches registered handlers; a handler calls the engine
+only if orchestration is needed. Publishing a constructed event alone does not
+write a manager record. Handlers must be registered in each process that routes
+events; durable event storage does not persist Python callback registrations.
 
 ## Event routing
 

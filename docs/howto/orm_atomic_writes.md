@@ -79,6 +79,12 @@ the message. That exception also currently has no stable package-level import;
 let Django surface it as a startup configuration failure instead of importing
 it for application control flow.
 
+Apply the application's migrations on `archive` before these writes. Related
+user rows and history tables must be available on that database too; Django
+foreign keys do not span aliases. The following view/service examples assume
+an authenticated `request.user` allowed by the manager policy and a `new_owner`
+whose primary key exists on `archive`.
+
 ## 3. Write the row and relations together
 
 ```python
@@ -113,11 +119,11 @@ object had no earlier history row. When `history_comment` is omitted, it stores
 customer_id = customer.identification["id"]
 customer.delete(
     history_comment="manual cleanup",
-    ignore_permission=True,
+    creator_id=request.user.id,
 )
 
 history_record = (
-    LegacyCustomer.history.filter(id=customer_id)
+    LegacyCustomer.history.using("archive").filter(id=customer_id)
     .order_by("-history_date")
     .first()
 )
@@ -143,7 +149,7 @@ from django.db import transaction
 customer_id = customer.identification["id"]
 try:
     with transaction.atomic(using="archive"):
-        customer.update(name="Temporary")
+        customer.update(creator_id=request.user.id, name="Temporary")
         raise RuntimeError("cancel change")
 except RuntimeError:
     customer = Customer(id=customer_id)
