@@ -1591,14 +1591,19 @@ def create_list_resolver(
     ``base_queryset._manager_class`` when that is a GeneralManager subclass,
     otherwise using ``fallback_manager_class``. That manager class drives
     permission checks, filter normalization, dependency prefetching, and
-    capability warmups. For non-calculation managers, the resolver applies
+    capability warmups. For non-calculation, non-request sources, the resolver applies
     permission prefilters and the permission row gate before all user-supplied
     query predicates. For calculation managers, it also applies authorization
     first. When query operands are present, it fences the authorized rows as
     an exact subset, then applies declared-input predicates followed by
     computed-property predicates. User input filters cannot reintroduce rows
-    outside the authorized subset. Grouping, sorting, and pagination
-    remain after those predicate phases. Sorting therefore applies to records
+    outside the authorized subset. Request-backed sources are different:
+    unless the permission plan denies all rows, user predicates are applied
+    to ``base_queryset`` before that filtered source is authorized. The earlier
+    query-field permission check uses a separate authorized subset and does
+    not constrain ``base_queryset``. Supported remote ordering and pagination
+    controls may be forwarded during request-source preparation. Grouping,
+    local sorting, and local pagination follow source preparation. Sorting applies to records
     when grouping is omitted and to grouped manager objects when grouping is
     active. It computes ``total_count`` after grouping and sorting and before
     pagination. Non-grouped page items are
