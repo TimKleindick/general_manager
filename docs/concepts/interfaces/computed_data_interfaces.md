@@ -47,8 +47,13 @@ assert summary.label == "Apollo: 2024-01-01"
 
 This identifies a calculation; it does not create a database row. The declared
 domains also make enumeration finite: existing projects paired with two dates.
-Required inputs without a domain must be bound by the query before they can be
-enumerated; an unconstrained required input raises `InvalidPossibleValuesError`.
+For direct Python use, bind required inputs without a domain in the constructor
+or a Python bucket filter before enumeration; an unconstrained required input
+raises `InvalidPossibleValuesError`. Generated GraphQL lists authorize their
+base calculation domain before applying client input filters. A GraphQL filter
+therefore does not replace a domain needed to enumerate that base; declare a
+finite domain when exposing the calculation as a list. See
+[query authorization](../graphql/security.md#query-operands-and-search-projections).
 
 ## Computing values
 
@@ -301,9 +306,11 @@ normalizes arbitrary dates in a month to the configured month-end anchor.
 `anchor="end"`/`"month_end"`; `Input.yearly_date()` accepts the equivalent
 year-start and year-end anchors.
 `quantity` uses scalar bounds for cheap checks; bounds do not supply an
-enumeration domain. Supply an exact `quantity` when constructing or filtering
-this calculation, or add a finite `possible_values` domain before using
-`.all()`. The validator supplies the
+enumeration domain. Supply an exact `quantity` when constructing this calculation
+in Python or filtering a Python bucket, or add a finite `possible_values` domain
+before using `.all()`. For generated GraphQL lists, provide that enumerable
+domain even when the client sends a quantity filter: authorization runs first.
+The validator supplies the
 dependency-aware rule. If you omit `depends_on`, callable parameter names are
 used as dependencies; specifying it explicitly is clearer when callbacks accept
 optional or keyword-only arguments.
