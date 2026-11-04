@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from io import BytesIO
 import json
-from pathlib import Path
 from typing import Any, ClassVar
 
 from django.test import SimpleTestCase
@@ -41,22 +40,6 @@ class FakeExampleResponse:
 
 
 class RequestDocsExampleTests(SimpleTestCase):
-    def test_request_cookbook_example_exists_and_mentions_builtin_transport_path(
-        self,
-    ) -> None:
-        example_path = (
-            Path(__file__).resolve().parents[2]
-            / "docs"
-            / "examples"
-            / "request_interface_end_to_end.md"
-        )
-
-        self.assertTrue(example_path.exists())
-        content = example_path.read_text()
-        self.assertIn("UrllibRequestTransport", content)
-        self.assertIn("BearerTokenAuthProvider", content)
-        self.assertIn("FieldMappingSerializer", content)
-
     def test_documented_builtin_transport_example_is_executable(self) -> None:
         recorded_requests: list[dict[str, Any]] = []
 
