@@ -65,6 +65,17 @@ using the same declaration pattern.
 
 Use `@graph_ql_property(cache="dependency")` when a value should be reused across requests and invalidated when its source managers change. Use `cache="none"` for cheap values.
 
+`query_annotation` does not execute on a `CalculationInterface` manager.
+`CalculationBucket` enumerates input combinations and reads computed properties
+through their Python getters for filtering, exclusion, and sorting; it has no
+queryset on which to apply an ORM expression or annotation callback. A
+database-backed input does not turn the calculation's properties into database
+columns. Set `filterable=True` and `sortable=True` for generated GraphQL controls,
+and narrow the input domain before expensive property evaluation. Caching can
+reuse getter results but does not translate calculations into SQL. See the
+[property and query annotation guide](../../howto/expose_via_graphql.md#calculationinterface-does-not-execute-query_annotation)
+for an executable-style example and alternatives.
+
 ## Iterating combinations
 
 Call `ProjectSummary.all()` to iterate through the declared project/date

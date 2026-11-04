@@ -949,6 +949,13 @@ ordinary `Exception` is sanitized and correlated for server logs.
 
 ::: general_manager.api.property.graph_ql_property
 
+For practical declarations and the two `query_annotation` forms, see
+[computed GraphQL properties](../howto/expose_via_graphql.md#declare-computed-graphql-properties).
+Query annotations are consumed by database buckets for filtering, exclusion,
+and sorting; they do not supply the returned field value and are not executed
+by calculation buckets. The guide also covers queryset callback aliases,
+Python fallbacks, and the class-level ORM filter shortcut limitation.
+
 ::: general_manager.api.property.GraphQLPropertyReturnAnnotationError
 
 ::: general_manager.api.property.GraphQLPropertyTimeoutConfigurationError
