@@ -131,8 +131,10 @@ Pass the function itself, without calling it. Unlike the expression form,
 GeneralManager does **not** automatically bind a callback's result to the
 property name: the callback must define `title_length` itself. Return the
 transformed queryset, not an expression, a list, or an aggregate dictionary.
-A non-queryset result fails with `InvalidQueryAnnotationTypeError` in the
-database query path.
+Each callback must return a `QuerySet` because the next callback receives its
+result. A non-queryset result from the last callback fails with
+`InvalidQueryAnnotationTypeError` in the database query path. An earlier
+non-queryset result can fail inside a later callback instead.
 
 Build on the supplied queryset so existing restrictions remain intact; starting
 again from `Model.objects.all()` can discard filters and authorization
