@@ -1593,11 +1593,11 @@ def create_list_resolver(
     permission checks, filter normalization, dependency prefetching, and
     capability warmups. For non-calculation managers, the resolver applies
     permission prefilters and the permission row gate before all user-supplied
-    query predicates. For calculation managers, it applies input predicates
-    before authorization to limit generated candidates, fences that exact
-    candidate subset before permission prefilters, then applies deferred
-    computed-property predicates afterward. Permission constraints can only
-    narrow the user-selected input domain. Grouping, sorting, and pagination
+    query predicates. For calculation managers, it also applies authorization
+    first. When query operands are present, it fences the authorized rows as
+    an exact subset, then applies declared-input predicates followed by
+    computed-property predicates. User input filters cannot reintroduce rows
+    outside the authorized subset. Grouping, sorting, and pagination
     remain after those predicate phases. Sorting therefore applies to records
     when grouping is omitted and to grouped manager objects when grouping is
     active. It computes ``total_count`` after grouping and sorting and before
