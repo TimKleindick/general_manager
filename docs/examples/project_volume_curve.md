@@ -2,12 +2,15 @@
 
 This recipe shows how to compute a volume curve for a project by grouping derivative volumes per date.
 
+Prerequisites: an installed `projects` application with database-backed
+`Project` and `Derivative` managers. Add the declaration below after those
+classes in `projects/managers.py`, then run `makemigrations projects` and
+`migrate`. Each Django `ForeignKey` targets the manager's backing model.
+
 ```python
 from datetime import date
 
-from django.db.models import DateField, ForeignKey
-
-from core.managers import Derivative, Project
+from django.db.models import CASCADE, DateField, ForeignKey
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 from general_manager.measurement import Measurement, MeasurementField
@@ -19,8 +22,8 @@ class DerivativeVolume(GeneralManager):
     volume: Measurement
 
     class Interface(DatabaseInterface):
-        project = ForeignKey(Project, on_delete=models.CASCADE)
-        derivative = ForeignKey(Derivative, on_delete=models.CASCADE)
+        project = ForeignKey(Project.Interface._model, on_delete=CASCADE)
+        derivative = ForeignKey(Derivative.Interface._model, on_delete=CASCADE)
         date = DateField()
         volume = MeasurementField(base_unit="kWh")
 ```
@@ -65,9 +68,11 @@ def project_volume_curve(project: Project) -> tuple[tuple[date, Measurement], ..
     return grouped.values_list("date", "volume")
 ```
 
-Result:
+After creating volume rows through authenticated manager writes or demo
+factories, pass an existing project to the helper:
 
 ```python
+# Replace 1 with the ID of a project that has DerivativeVolume rows.
 curve = project_volume_curve(Project(id=1))
 for entry_date, volume in curve:
     print(entry_date, volume.to("MWh"))

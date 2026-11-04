@@ -7,6 +7,25 @@ Factories help you create realistic test data for managers. GeneralManager integ
 
 Use factories to populate development databases, seed GraphQL demos, or reproduce edge cases quickly.
 
+## Choose what the test is proving
+
+Use `Project.Factory.create(name="Apollo")` when a test or demo needs a stored
+project with a known name. Override values that matter to an assertion; let
+generated defaults fill incidental fields. `create_batch(...)` builds multiple
+stored fixtures. `build(...)` leaves the main object unsaved, but related
+factory work can still have database side effects.
+
+A factory is a fixture-creation tool. To test application permissions,
+validation, or the normal write path, perform the operation under test through
+`Project.create(...)`, `project.update(...)`, or GraphQL with the intended user.
+A successful factory call does not establish that an ordinary user may perform
+the equivalent operation.
+
+See [testing strategies](../../howto/testing_guides.md) for that boundary and
+[related fixtures](../../howto/factory_related_objects.md) when relations matter.
+The remaining sections explain default generation and relation policies for
+cases where the simple factory call needs customization.
+
 ## Lazy factory helpers
 
 The `general_manager.factory` module exports helper functions that return factory declarations and lazy values for common generated defaults. They are intended for `AutoFactory` definitions and custom factory declarations; when a generated component must vary per object, make that variation explicit in the factory attribute instead of relying on unset helper arguments.

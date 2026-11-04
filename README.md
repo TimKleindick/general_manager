@@ -56,9 +56,11 @@ and [interface concepts](https://timkleindick.github.io/general_manager/concepts
 ## Compatibility
 
 - Python 3.12 or later
-- Django 5.2.15 or later
+- Django 5.2.17 or later
 
-CI tests Python 3.12, 3.13, and 3.14 against SQLite, PostgreSQL and MariaDB.
+CI runs SQLite tests on Python 3.12, 3.13, and 3.14. Pull requests also run
+PostgreSQL 18 and MariaDB 11.8 LTS on Python 3.14; release runs cover those
+backends on Python 3.12–3.14. See [installation and backend guidance](https://timkleindick.github.io/general_manager/installation/).
 
 Other database backends supported by Django may also work, but are not officially supported unless covered by GeneralManager’s test suite or maintained examples.
 

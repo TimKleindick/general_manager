@@ -1,8 +1,33 @@
 # Migrate to the stable API
 
-This guide covers the pre-1.0 public-contract changes in the stable API. Make
-the changes in a feature branch, deploy code that understands the new contract,
-and then run the applicable data/index cutovers below.
+This is a cumulative upgrade checklist for the pre-1.0 API, not a migration to
+a 1.0 release. “Stable API” refers to the public-contract cleanup released in
+v0.79.0. Later releases changed some of those contracts again.
+
+## Choose the sections for your upgrade
+
+Check the installed version with `python -m pip show GeneralManager`, choose
+an exact target version, and read the release notes between them. The relevant
+milestones for this guide are:
+
+| Release | Change covered here | Who needs to act |
+| --- | --- | --- |
+| [v0.79.0](https://github.com/TimKleindick/general_manager/releases/tag/v0.79.0) (2026-09-05) | Original public-contract cleanup: ordering, pagination, caches, measurements, public imports, search, and other subsystem contracts below | Applications crossing this release; apply the sections for the features you use |
+| [v0.83.1](https://github.com/TimKleindick/general_manager/releases/tag/v0.83.1) (2026-10-12) | Measurement defaults normalized for ORM schema metadata | Applications declaring `MeasurementField` defaults; review newly generated migrations |
+| [v0.84.0](https://github.com/TimKleindick/general_manager/releases/tag/v0.84.0) (2026-10-12) | Recursive grouped GraphQL collections and revised grouped result shape | Clients using grouped queries, including clients already upgraded to v0.79.0 |
+| [v0.85.0](https://github.com/TimKleindick/general_manager/releases/tag/v0.85.0) (2026-10-12) | Canonical relation-page type names | Schema-generated clients and fragments naming relation-page types |
+
+The examples below show the later grouped shape and relation-page names
+(v0.85.0 onward). If your target is older, consult that release's documentation.
+This checklist does not replace the
+[complete release history](https://github.com/TimKleindick/general_manager/releases);
+later fixes and security changes also matter.
+
+Prepare application and GraphQL-client changes together. Review database
+migrations and apply schema additions before starting processes that require
+them, following the [migration guide](migrations_gotchas.md). Coordinate cache
+and index transitions only for the affected features; a code deployment alone
+does not perform every cutover below.
 
 ## Replace ordering arguments
 
@@ -34,6 +59,9 @@ pre-stable ordered constructor calls and serialized tuples through this API.
 
 ## Use dedicated grouped fields
 
+This section describes the v0.84.0 grouped contract. It supersedes the
+v0.79.0 shape with `groups`, `keys`, `sums`, `members`, and `count` wrappers.
+
 Move `groupBy` queries from `…List` to `…Groups`. The response retains the
 `items` / `pageInfo` envelope with a distinct grouped item type:
 
@@ -56,6 +84,8 @@ wrapper; retrieve original records through an ordinary filtered list. See the
 [grouping contract](../concepts/graphql/filters_pagination.md#grouping).
 
 ## Update relation page type names
+
+Apply this change when crossing v0.85.0.
 
 Relation lists now share the page type generated for their related manager's
 ordinary root list. The name is `<Manager>TypePage`, derived from its GraphQL
@@ -104,7 +134,11 @@ and compare with another `Measurement`, rather than comparing to a string.
 Compatible relational comparisons use the same canonical magnitude/bin as
 equality and hashing; Decimal formatting retains supplied coefficients. Normal
 `MeasurementField` scalar defaults now serialize through Django migrations,
-alongside callable defaults and field options.
+alongside callable defaults and field options. v0.83.1 additionally corrected
+normalization of those defaults in ORM schema metadata. Review any resulting
+new migration; do not rewrite an applied one. This default handling does not
+rescale existing data when you change a field's base unit; follow the
+[measurement migration guidance](migrations_gotchas.md#measurement-fields).
 
 ## Use public facades and explicit result shapes
 

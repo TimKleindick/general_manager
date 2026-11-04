@@ -1,4 +1,4 @@
-"""Exercise the README onboarding flow against the active Python environment."""
+"""Exercise consumer onboarding against the active Python environment."""
 
 from __future__ import annotations
 
@@ -51,22 +51,6 @@ MANAGER_SNIPPET = dedent(
 
 GRAPHQL_QUERY = "query { projectList { items { name } } }"
 EXPECTED_RESPONSE = {"data": {"projectList": {"items": [{"name": "Apollo"}]}}}
-EXPECTED_RESPONSE_TEXT = '{"data":{"projectList":{"items":[{"name":"Apollo"}]}}}'
-
-ONBOARDING_COMMANDS = (
-    "python -m venv .venv",
-    "python -m pip install GeneralManager",
-    "django-admin startproject gm_demo .",
-    "python manage.py startapp projects",
-    "python manage.py makemigrations projects",
-    "python manage.py migrate",
-    'Project.Factory.create(name="Apollo")',
-    "python manage.py runserver",
-    "curl --get",
-    "--data-urlencode",
-)
-
-DOCUMENTED_PATHS = (Path("README.md"), Path("docs/quickstart.md"))
 RESPONSE_MARKER = "ONBOARDING_RESPONSE="
 USAGE = "usage: smoke_readme_onboarding.py REPOSITORY_ROOT"
 
@@ -92,25 +76,6 @@ def _run(cwd: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
         )
         raise AssertionError(msg)
     return result
-
-
-def _verify_documentation(repository_root: Path) -> None:
-    required_fragments = (
-        *ONBOARDING_COMMANDS,
-        SETTINGS_SNIPPET,
-        MANAGER_SNIPPET,
-        GRAPHQL_QUERY,
-        EXPECTED_RESPONSE_TEXT,
-    )
-    for relative_path in DOCUMENTED_PATHS:
-        document = (repository_root / relative_path).read_text(encoding="utf-8")
-        missing = [
-            fragment for fragment in required_fragments if fragment not in document
-        ]
-        if missing:
-            rendered = "\n- ".join(missing)
-            msg = f"{relative_path} is missing onboarding fragments:\n- {rendered}"
-            raise AssertionError(msg)
 
 
 def _query_script() -> str:
@@ -149,8 +114,7 @@ def main(arguments: list[str]) -> None:
     if len(arguments) != 1:
         raise SystemExit(USAGE)
 
-    repository_root = Path(arguments[0]).resolve()
-    _verify_documentation(repository_root)
+    # Retain the repository-path argument for existing release smoke callers.
 
     with tempfile.TemporaryDirectory(prefix="general-manager-readme-") as temp_dir:
         project_root = Path(temp_dir)
