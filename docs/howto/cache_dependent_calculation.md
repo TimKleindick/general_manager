@@ -1,38 +1,175 @@
 # Cache Dependent Calculations
 
-Use the caching utilities to memoise expensive calculations without sacrificing correctness.
+Choose a cache scope, then follow one calculated label from its first read to
+an authenticated update of its source. The label is deliberately cheap so the
+dependency is easy to see; cache expensive calculations in an application only
+when reuse is useful.
+
+## Before you start
+
+Complete the [quickstart](../quickstart.md), including its `projects.Project`
+manager and migrations. This example uses the unchanged quickstart permission
+policy: reads are public and authenticated users may write. If you have changed
+that policy, use an ordinary account allowed to create and update projects.
+
+Keep Django's default cache enabled. The local-memory default is enough for
+this single-process shell example; a deployment with multiple web or worker
+processes needs a shared cache backend for dependency entries and invalidation
+state. Cache scope does not replace [read authorization](../concepts/permission/index.md).
+
+The four choices are:
+
+| Scope | Choose it for |
+| --- | --- |
+| `run` (default) | Repeated work within one active calculation run |
+| `dependency` | Reuse across runs, invalidated by tracked manager changes |
+| `timeout` | A fixed period of acceptable staleness |
+| `none` | Values that should be recalculated on every access |
 
 ## Step 1: Define a calculation manager
 
+Add this class below the existing `Project` in `projects/managers.py`.
+Keep the original `Project` definition and add these imports if needed:
+
 ```python
-from datetime import date
-
-import graphene
-
-from core.managers import DerivativeVolume, Project
-from general_manager.api.graphql import GraphQL
 from general_manager.interface import CalculationInterface
 from general_manager.manager import GeneralManager, Input, graph_ql_property
 
-class ProjectSummary(GeneralManager):
+
+class ProjectLabel(GeneralManager):
     project: Project
-    date: date
 
     class Interface(CalculationInterface):
-        project = Input(Project)
-        date = Input(date)
+        project = Input.from_manager_query(Project)
 
-    @graph_ql_property
-    def total_volume(self) -> int:
-        return sum(
-            derivative.volume
-            for derivative in self.project.derivative_list.filter(date=self.date)
-        )
+    @graph_ql_property(cache="dependency")
+    def label(self) -> str:
+        return f"Project: {self.project.name}"
 ```
+
+`ProjectLabel` identifies a calculation by its project input; it does not
+create another database row or require a migration. The input domain comes
+from `Project.all()`, so enumerating labels has a defined source of projects.
+For the walkthrough we construct just one label explicitly. There is no
+unbounded date input or undeclared relation.
 
 ## Step 2: Choose a cache scope
 
-`@graph_ql_property` methods use run-scoped caching by default on every manager type. The value is reused within one GraphQL request, calculation graph, bulk operation, or background run, then discarded.
+The example chooses `cache="dependency"` because `label` depends on a
+tracked read of `project.name`. The first evaluation computes the string;
+later runs can reuse it until a supported write invalidates it.
+
+For reuse only inside one run, use `@graph_ql_property` without cache options.
+A shared `CalculationRunContext` defines that run. Generated GraphQL and
+calculation execution paths establish their own contexts; custom shell or
+background work can establish one explicitly, as the next step shows.
+Independent run-cached calls without an outer context do not share retained
+results across calls.
+
+Use `@graph_ql_property(cache="timeout", timeout=300)` when five minutes of
+staleness is acceptable. A timeout is required for this scope. A source change
+does not replace that freshness policy with dependency invalidation.
+Use `@graph_ql_property(cache="none")` to compute every time.
+
+Keep the dependency decorator from Step 1 for the following walkthrough.
+[Decorator details](#decorator-options-and-type-resolution) below cover type
+resolution, invalid configurations, and nested cached calls.
+
+## Step 3: Verify invalidation
+
+Start a new shell after adding `ProjectLabel`:
+
+```bash
+python manage.py shell
+```
+
+Create an ordinary user and project, then read the same calculation in two
+separate runs:
+
+```python
+from django.contrib.auth import get_user_model
+from general_manager.cache.run_context import CalculationRunContext
+from projects.managers import Project, ProjectLabel
+
+author = get_user_model().objects.create_user(username="cache-author")
+project = Project.create(creator_id=author.pk, name="Apollo")
+project_id = project.id
+
+with CalculationRunContext():
+    summary = ProjectLabel(project=Project(id=project_id))
+    print(summary.label)
+
+with CalculationRunContext():
+    summary = ProjectLabel(project=Project(id=project_id))
+    print(summary.label)
+```
+
+Expected output:
+
+```text
+Project: Apollo
+Project: Apollo
+```
+
+The first context's clean exit publishes the dependency entry. The second run
+can reuse that entry. Reusing a different manager instance with the same
+identification does not require a different application cache key.
+
+Now update through the manager API with the same actor, outside those read
+contexts:
+
+```python
+project = project.update(creator_id=author.pk, name="Apollo launch")
+
+with CalculationRunContext():
+    summary = ProjectLabel(project=Project(id=project_id))
+    print(summary.label)
+```
+
+Expected output:
+
+```text
+Project: Apollo launch
+```
+
+The write notifies dependency invalidation; the next run reads the updated
+source and calculates the new label. Fresh contexts and manager instances
+keep this example separate from same-run working-set reuse. If the write is
+inside an outer transaction, let that transaction commit before relying on
+cross-run cache publication and invalidation.
+
+Use the supported manager write path for this behavior. Raw SQL or other
+external writes need their own invalidation integration. The output above
+shows the before/after values; use cache diagnostics to distinguish a reused
+entry from a fresh calculation. See
+[caching and dependency tracking](../concepts/caching.md) for transaction and
+backend boundaries.
+
+## Step 4: Warm selected properties proactively
+
+Warm-up is optional and unnecessary for this inexpensive label. For an
+expensive property that is safe to compute outside a user request, replace its
+decorator with `@graph_ql_property(cache="dependency", warm_up=True)`.
+Timeout properties can also opt in; run and uncached properties cannot.
+
+Warm-up enumerates the manager's input domain. `ProjectLabel` has the projects
+from `Project.all()` as its domain, which may still be large. Keep startup
+warm-up disabled until that work fits the deployment's budget. Follow
+[warm-up configuration and execution](#warm-up-configuration-and-execution)
+below when enabling a scheduler.
+
+## Step 5: Monitor cache usage
+
+Inspect cache-decorator debug logs and the selected backend's monitoring tools.
+Repeated reads should reuse eligible entries; a supported source update should
+lead to a fresh calculation. Compare cache behavior across separate runs,
+because a run-local hit and a dependency-cache hit have different lifetimes.
+
+The basic walkthrough ends here. The following sections cover decorator
+contracts, resource limits, scheduled warm-up, and application-specific
+working sets.
+
+## Decorator options and type resolution
 
 Use either `@graph_ql_property` or `@graph_ql_property(...)`. The decorated
 method must declare a return type annotation; missing annotations raise
@@ -47,35 +184,11 @@ Python type-hint evaluation and lets other exceptions propagate. A resolver
 annotated as `-> None` resolves to `type(None)`, so `graphql_type_hint is None`
 means resolution failed rather than "the resolver returns None".
 
-Use dependency-aware caching only when a calculation result is stable enough to reuse across requests:
-
-```python
-@graph_ql_property(cache="dependency")
-def expensive_summary(self) -> int:
-    return self.project.derivative_list.filter(date=self.date).count()
-```
-
 Dependency-cached calculations can call run-cached properties that were already
 evaluated earlier in the run. Their captured reads and manager arguments still
 contribute to the parent's invalidation metadata. Nested run calculations share
 immutable dependency snapshots, avoiding a copy of a broad source's complete
 dependency set for every small result.
-
-Disable caching for cheap or intentionally volatile values:
-
-```python
-@graph_ql_property(cache="none")
-def cheap_label(self) -> str:
-    return f"{self.project.name}: {self.date:%Y-%m-%d}"
-```
-
-Use timeout caching when a value may be reused for a fixed interval:
-
-```python
-@graph_ql_property(cache="timeout", timeout=300)
-def five_minute_summary(self) -> int:
-    return self.project.derivative_list.count()
-```
 
 `cache="timeout"` requires a non-`None` `timeout`; supplying any non-`None`
 `timeout` with another cache scope raises
@@ -131,28 +244,12 @@ The estimate counts shared dependency snapshots once across retained run values
 and dependency-cache hits. A parent's dependency snapshot survives eviction of
 its child result, preserving invalidation when the child is later recomputed.
 
-## Step 3: Verify invalidation
+## Warm-up configuration and execution
 
-For dependency-aware properties, update a derivative that contributes to the summary. The dependency tracker captures the relationship and invalidates the cache entry automatically.
-
-```python
-DerivativeVolume(id=volume_id).update(quantity=42)
-```
-
-## Step 4: Warm selected properties proactively
-
-Set `warm_up=True` only on properties that are safe and useful to compute
-outside a user request. Warm-up is valid for dependency and timeout cache scopes:
-
-```python
-@graph_ql_property(cache="dependency", warm_up=True)
-def expensive_summary(self) -> int:
-    return self.project.derivative_list.filter(date=self.date).count()
-
-@graph_ql_property(cache="timeout", timeout=300, warm_up=True)
-def five_minute_summary(self) -> int:
-    return self.project.derivative_list.count()
-```
+These settings and scheduler examples are optional deployment configurations.
+They assume importable manager classes with opted-in properties and enumerable
+input domains. They do not require the application-specific working-set models
+in the final section.
 
 When enabled in settings, the framework can enumerate `Manager.all()`, execute
 each opted-in property, and record warm-up recipes. Dependency entries can be
@@ -355,11 +452,17 @@ executor are not wrapped by the command. Successful runs print a styled success
 line, `GraphQL warm-up refreshed <count> recipe(s).`, using `recipe` only when
 the refreshed count is exactly `1`.
 
-## Step 5: Monitor cache usage
-
-Enable Django cache logging or use Redis monitoring tools to ensure cache hits increase and invalidations behave as expected.
-
 ## Working-set reuse
+
+The examples in this section are independent application patterns, not
+continuations of `ProjectLabel`. They assume your application defines a
+`DerivativeVolume` manager with `derivative`, `revision`, `volume_date`
+(a date), and `quantity` (an integer). Put the method fragments inside a
+calculation that supplies `derivative`, `revision`, `target_date`, and any
+`search_date` snapshot it needs. Import `date` from `datetime`,
+`graph_ql_property` from `general_manager.manager`, and your application's
+`DerivativeVolume` before using them. If your quantity is a `Measurement`,
+adapt both the return annotation and aggregation to that type.
 
 For bulk-style calculations, build a run-scoped index directly from the source
 bucket. The framework derives a stable run-local key from the bucket and key
