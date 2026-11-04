@@ -4,7 +4,11 @@
 
 ## Declaring inputs
 
-Inputs use the `Input` descriptor to specify the expected type and optional value providers.
+Inputs use the `Input` descriptor to specify the expected type and optional value
+providers. This example uses the `Project` manager from the
+[quickstart](../../quickstart.md). Define `ProjectSummary` after `Project` in
+`projects/managers.py`, or import `Project` before defining the summary in
+another startup-loaded module.
 
 ```python
 from datetime import date
@@ -17,9 +21,34 @@ class ProjectSummary(GeneralManager):
     date: date
 
     class Interface(CalculationInterface):
-        project = Input(Project)
-        date = Input(date)
+        project = Input.from_manager_query(Project)
+        date = Input(
+            date,
+            possible_values=[date(2024, 1, 1), date(2024, 2, 1)],
+        )
+
+    @graph_ql_property
+    def label(self) -> str:
+        return f"{self.project.name}: {self.date.isoformat()}"
 ```
+
+After restarting the application, construct a calculation by supplying one
+value for every required input:
+
+```python
+from datetime import date
+from projects.managers import Project, ProjectSummary
+
+my_project = Project.get(name="Apollo")
+summary = ProjectSummary(project=my_project, date=date(2024, 1, 1))
+assert summary.date == date(2024, 1, 1)
+assert summary.label == "Apollo: 2024-01-01"
+```
+
+This identifies a calculation; it does not create a database row. The declared
+domains also make enumeration finite: existing projects paired with two dates.
+Required inputs without a domain must be bound by the query before they can be
+enumerated; an unconstrained required input raises `InvalidPossibleValuesError`.
 
 `CalculationInterface` is a capability-backed shell rather than a persistence
 interface. It collects `Input(...)` descriptors from the interface class during
@@ -76,28 +105,28 @@ current database state.
 
 Expose computed attributes with `@graph_ql_property`. The decorator registers the method as a GraphQL field and caches results in the active run context by default for every manager type.
 
-```python
-    @graph_ql_property
-    def total_volume(self) -> int:
-        return sum(
-            derivative.volume
-            for derivative in self.project.derivative_list.filter(date=self.date)
-        )
-```
+The `label` property above combines a related manager's name with the date
+input. More complex properties can query related buckets or combine measurements
+using the same declaration pattern.
 
 Use `@graph_ql_property(cache="dependency")` when a value should be reused across requests and invalidated when its source managers change. Use `cache="none"` for cheap values.
 
 ## Iterating combinations
 
-Call `ProjectSummary.all()` to iterate through all possible input combinations. Filter inputs with keyword arguments:
+Call `ProjectSummary.all()` to iterate through the declared project/date
+combinations. In the shell where `my_project` refers to the quickstart's Apollo
+record, filter inputs with keyword arguments:
 
 ```python
 for summary in ProjectSummary.filter(project=my_project):
-    print(summary.date, summary.total_volume)
+    print(summary.date, summary.label)
 
 for summary in ProjectSummary.filter(project_id=my_project.id):
-    print(summary.date, summary.total_volume)
+    print(summary.date, summary.label)
 ```
+
+Each loop prints two rows, one for 1 January and one for 1 February 2024.
+The label combines the project's name with that row's date.
 
 For manager-typed inputs, filters accept either the manager instance (`project=...`) or its identifier (`project_id=...`). Nested lookups such as `project__name__startswith=...` continue to target fields on the input manager.
 

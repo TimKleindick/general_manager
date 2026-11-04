@@ -129,7 +129,7 @@ checks in application code if multiple matching groups would be ambiguous.
 
 Indexing a `GroupBucket` with an integer returns one group. Slicing returns a new
 `GroupBucket` backed by the union of the selected groups' source buckets; slicing
-to no groups raises `EmptyGroupBucketSliceError`. `sort()` orders groups in
+to no groups returns an empty `GroupBucket`. `sort()` orders groups in
 memory by group attributes and can propagate normal `AttributeError` or
 `TypeError` from missing or incomparable values. Combining grouped buckets with
 `|` requires the same bucket type, manager class, and group-by key tuple; the

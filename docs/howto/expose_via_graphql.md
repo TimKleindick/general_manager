@@ -458,6 +458,11 @@ at write time. Requiredness, model validation, and validation of explicit
 
 ## Partially update a generated manager
 
+Generated CRUD payloads use the manager class name as their result field:
+`Project` for this manager. The alias `project: Project` below gives the JSON
+response a lower-case `project` key. Custom `@graph_ql_mutation` functions instead
+derive a lower-case result field from their return type.
+
 When an ORM interface supports `update`, GeneralManager generates an
 `update<ManagerName>` mutation. The target argument remains `id: ID!`; writable
 fields cannot overwrite it, and primary keys are excluded from update payload
@@ -468,7 +473,7 @@ field without re-sending the rest of the object:
 mutation RenameProject($id: ID!) {
   updateProject(id: $id, name: "Renamed") {
     success
-    project { id name score }
+    project: Project { id name score }
   }
 }
 ```
@@ -481,7 +486,7 @@ declared but omitted from the variables object:
 mutation SetOptionalScore($id: ID!, $score: Int) {
   updateProject(id: $id, score: $score) {
     success
-    project { id score }
+    project: Project { id score }
   }
 }
 ```
@@ -514,7 +519,7 @@ relation normalization. The actor always comes from `info.context.user`. Use the
 mutation RenameProject($id: ID!) {
   updateProject(id: $id, name: "Renamed", historyComment: "Reviewed") {
     success
-    project { id name }
+    project: Project { id name }
   }
 }
 ```
@@ -817,6 +822,13 @@ For permission-backed, mutation-backed, and current-user examples, see
 
 Use `@graph_ql_mutation` for synchronous service-style mutations that do not map directly to the generated create, update, or delete operations. The decorator registers the mutation as soon as the module is imported and returns the original function, so the function remains directly callable in tests.
 
+This fragment assumes an imported `Project` manager with an editable `status`
+field. Define it in an application module imported during startup. The
+decorator checks mutation access; `project.update()` also enforces the manager's
+write policy using the request user and persists the change. Returning the
+updated manager exposes a lower-case `project` result field for this custom
+mutation.
+
 ```python
 from general_manager.api.mutation import graph_ql_mutation
 from general_manager.permission.mutation_permission import MutationPermission
@@ -828,9 +840,10 @@ class CanArchiveProject(MutationPermission):
 
 @graph_ql_mutation(permission=CanArchiveProject)
 def archive_project(info, project: Project) -> Project:
-    project.status = "archived"
-    project.save()
-    return project
+    return project.update(
+        creator_id=info.context.user.pk,
+        status="archived",
+    )
 ```
 
 Supported decorator forms are `@graph_ql_mutation`, `@graph_ql_mutation()`, `@graph_ql_mutation(SomePermission)`, and `@graph_ql_mutation(permission=SomePermission)`. Do not pass both a positional permission and `permission=`; the positional permission wins.
