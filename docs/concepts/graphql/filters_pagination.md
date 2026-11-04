@@ -40,20 +40,20 @@ dictionary key named `none` at any depth under `exclude`, including a top-level
 `UnsupportedExcludeNoneRelationFilterError` because the resolver cannot invert
 that relation shape safely. For non-calculation lists, permission filters and
 any required per-instance row gate run before user filters. Calculation lists
-first apply predicates rooted at declared calculation inputs, then run
-permission filtering and the row gate; predicates rooted at computed GraphQL
-properties remain deferred until afterward. Computed properties are therefore
-never evaluated before per-instance authorization. The input-filtered
-calculation candidates are fenced as an exact subset before permission
-prefilters, so permission constraints can narrow that subset but cannot
-replace a same-key user predicate and reintroduce candidates.
+also apply permission filtering and the row gate first. When query operands
+are present, they freeze the authorized rows as an exact subset before applying
+predicates rooted at declared calculation inputs, then computed-property
+predicates. User input filters therefore cannot replace permission constraints
+and reintroduce unauthorized candidates. Computed-property predicates are
+evaluated only after per-instance authorization; declared-input predicates do
+not reduce the candidate set before that authorization step.
 
 The resolver parses and normalizes all query arguments before authorization. For
 non-calculation lists, permission prefilters and the row gate run first, then
 normalized positive filter predicates, explicit excludes, and the accumulated
 relation-derived exclusions from both inputs. For calculation lists, that
-predicate order is preserved within two phases: declared-input predicates run
-before authorization and deferred computed-property predicates run afterward.
+predicate order is preserved within two phases after row authorization:
+declared-input predicates first, then deferred computed-property predicates.
 Grouping, sorting, total-count calculation, and pagination follow both predicate
 phases. Filter
 normalizers receive the parsed object mapping for the current `filter` or
