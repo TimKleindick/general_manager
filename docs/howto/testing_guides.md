@@ -1,6 +1,30 @@
 # Testing Guides
 
-Use the following strategies to test managers, permissions, and GraphQL APIs effectively.
+Test the application behavior that matters to callers: a valid write persists,
+an invalid write fails without partial changes, an unauthorized operation is
+denied, and a query returns the intended data shape.
+
+## Choose the boundary
+
+| What you want to establish | Exercise |
+| --- | --- |
+| A user may create or change a record | The normal manager write with that user's `creator_id` |
+| Invalid domain data cannot be saved | A manager write that violates the field or Rule constraint |
+| A client sees only authorized records and fields | Generated GraphQL with the client's actual user context |
+| A custom endpoint protects a Python read | That endpoint's explicit row and field permission checks |
+| A calculation returns the right value | The calculation with known inputs and source data |
+
+Use factories to arrange fixture data, then perform the operation under test
+through its real boundary. Factory success does not prove write permission,
+and a plain Python bucket read does not prove GraphQL authorization.
+
+For managers already declared in an installed application, use your normal
+Django application test setup and migrations. The GeneralManager-specific
+harness below is useful when a test defines managers dynamically and needs
+their generated models, schema registrations, and startup hooks initialized.
+Start with the [quickstart](../quickstart.md) and
+[permission tutorial](add_permission_rule.md) for the application these
+strategies build on.
 
 ## Unit tests
 
@@ -10,11 +34,11 @@ Use the following strategies to test managers, permissions, and GraphQL APIs eff
 ## Permission tests
 
 - Use the same user fixtures as your application. Check that unauthorised users receive `PermissionError`.
-- For GraphQL, execute mutations with different users and assert that the `errors` field reflects permission denials.
+- For GraphQL, execute mutations with different users and assert that top-level GraphQL `errors` reflects permission denials; it is not a mutation payload field.
 
 ## GraphQL integration tests
 
-- Use `general_manager.utils.testing.GeneralManagerTransactionTestCase` to set up a test client with schema and user authentication.
+- Use `general_manager.utils.testing.GeneralManagerTransactionTestCase` to prepare dynamically declared managers and the GraphQL test client. Authenticate the client explicitly with the intended user.
 - Create data with factories or manager methods in the test database.
 - Snapshot responses when the schema is stable to detect unintended changes.
 - Verify pagination metadata (`pageInfo`) when you change bucket filters.
@@ -76,7 +100,7 @@ run_registered_startup_hooks(managers=[MyManager])
 
 ## Performance tests
 
-- Populate data with factories and measure query times using Django's `assertNumQueries` context manager.
+- Populate data with factories and assert query counts using Django's `assertNumQueries` context manager. Use profiling to measure elapsed time.
 - Profile cached calculations by toggling the cache backend between local memory and Redis.
 
 ## Continuous integration

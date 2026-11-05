@@ -14,7 +14,14 @@ Security in the GraphQL layer relies on permission checks and robust error handl
 - Attribute-level restrictions hide protected fields even when the user can access the object.
 - Optional GraphQL permission capabilities expose advisory boolean hints for clients. They do not replace read or mutation permission checks.
 
-Always execute GraphQL resolvers through managers; do not reach directly for Django models, or you will bypass permission rules.
+Use manager write methods inside custom mutations so the application's write
+policy, validation, and history participate. Generated GraphQL read resolvers
+own the row and field authorization described above. Simply calling
+`Manager.all()`, `Manager.filter()`, or reading a manager attribute in a custom
+resolver or REST view does not perform those read checks. A custom response
+must apply its requesting user's row and field permissions before exposing
+values. See the [permission overview](../permission/index.md) for these
+boundaries.
 
 Generated create and update mutations reserve `creator_id`, `ignore_permission`,
 and `history_comment` for manager execution metadata. Schema generation rejects
@@ -31,7 +38,9 @@ See [GraphQL permission capabilities](permission_capabilities.md) for the full
 concept, declaration helpers, current-user provider configuration, and batching
 examples.
 
-Declare object capability hints on the manager's nested `Permission` class:
+Declare object capability hints on an existing manager's nested `Permission`
+class. This fragment assumes a registered `Project` with `name` and `status`
+fields; retain its `Interface` definition:
 
 ```python
 from general_manager.permission import AdditiveManagerPermission, object_capability

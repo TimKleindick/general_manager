@@ -6,26 +6,48 @@ Managers model business entities. Buckets represent collections of managers that
 
 Attributes declared as type hints become part of the public interface. They can point to primitive types, measurements, nested managers, or buckets. Methods decorated with `@graph_ql_property` expose computed values that automatically become GraphQL fields.
 
+The example below extends the [quickstart](../quickstart.md) Project with an
+optional date pair. It includes the interface fields that store those values;
+type annotations alone do not create database columns. Apply a new migration
+before using it in an existing project.
+
 ```python
+from datetime import date
+from django.db.models import CharField, DateField
+from general_manager.interface import DatabaseInterface
+from general_manager.manager import GeneralManager, graph_ql_property
+
+
 class Project(GeneralManager):
     name: str
     start_date: date | None
     end_date: date | None
-    derivative_list: Bucket[Derivative]
+
+    class Interface(DatabaseInterface):
+        name = CharField(max_length=100)
+        start_date = DateField(null=True, blank=True)
+        end_date = DateField(null=True, blank=True)
 
     @graph_ql_property
     def duration(self) -> int | None:
-        if not self.start_date or not self.end_date:
+        if self.start_date is None or self.end_date is None:
             return None
         return (self.end_date - self.start_date).days
 ```
 
+Constructing `Project(id=...)` identifies existing data. Creating data is a
+separate authorized write; see [create and update](../howto/create_project.md).
+Relations need their own persisted fields or computed properties; the
+[database-interface guide](interfaces/db_based_interface.md) explains that
+mapping.
+
 ## Buckets
 
-All collection-returning APIs produce a `Bucket`. Buckets behave like Python iterables while preserving metadata such as applied filters and ordering. You can:
+Manager query methods such as `all()`, `filter()`, and `exclude()` return a
+`Bucket`. Buckets behave like Python iterables while preserving metadata such as applied filters and ordering. You can:
 
 - Call `filter()` and `exclude()` to refine the dataset using Django-style lookups.
-- Call `get()` when the lookup must return exactly one manager.
+- For an ordinary entity bucket, call `get()` when the lookup must return exactly one manager; grouped buckets have a different contract described below.
 - Pass `search_date=...` to `filter()` or `exclude()` to query historical state at a specific point in time.
 - Chain `sort()` calls for deterministic ordering.
 - Slice (`bucket[0:10]`) or iterate lazily.
@@ -99,7 +121,7 @@ and [permission cookbook recipe](../examples/permission_cookbook.md#preserve-an-
 
 ### Grouped data
 
-Use `group_by()` to aggregate managers into `GroupedManager` instances. Grouped
+Use `group_by()` to aggregate managers into `GroupManager` instances. Grouped
 managers expose the grouping key and aggregate the remaining attributes
 according to their type, such as summing numbers, merging lists, or combining
 measurements. Group-by keys must be string attribute names exposed by the
@@ -129,7 +151,7 @@ checks in application code if multiple matching groups would be ambiguous.
 
 Indexing a `GroupBucket` with an integer returns one group. Slicing returns a new
 `GroupBucket` backed by the union of the selected groups' source buckets; slicing
-to no groups raises `EmptyGroupBucketSliceError`. `sort()` orders groups in
+to no groups returns an empty `GroupBucket`. `sort()` orders groups in
 memory by group attributes and can propagate normal `AttributeError` or
 `TypeError` from missing or incomparable values. Combining grouped buckets with
 `|` requires the same bucket type, manager class, and group-by key tuple; the
@@ -163,6 +185,6 @@ raise `InvalidManagerStateError`.
 ## Pattern recommendations
 
 - Use descriptive attribute names that align with your GraphQL schema.
-- Expose related managers via buckets instead of raw Django querysets so that permission checks remain consistent.
+- Expose related managers via buckets instead of raw Django querysets to preserve manager and bucket behavior. A bucket does not authorize its own reads; generated GraphQL applies its read policy, while custom Python endpoints must enforce theirs.
 
 With these guidelines you can design manager hierarchies that remain understandable as your project grows.

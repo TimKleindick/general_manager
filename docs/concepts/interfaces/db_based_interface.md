@@ -344,4 +344,11 @@ or provide a list to replace it.
 
 ## Validation hooks
 
-Override `clean()` or add rules in `Meta.rules` to validate data before it reaches the database. Use `constraints` for uniqueness and relational requirements—GeneralManager surfaces validation errors through GraphQL responses automatically.
+Declare `Rule` predicates in `Interface.Meta.rules` to validate generated-model
+fields during writes. These predicates run against the candidate Django model,
+so use its declared fields rather than manager-only computed properties. Django
+field validators and model constraints also participate in `full_clean()`.
+For an `ExistingModelInterface`, the wrapped model's own `clean()` method
+participates too; defining `clean()` on the interface is not the corresponding
+Django model hook. See [writing validation rules](../../howto/write_validation_rules.md)
+for a complete declaration and failure handling.

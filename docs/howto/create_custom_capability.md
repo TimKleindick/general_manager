@@ -1,8 +1,127 @@
 # How-To: Create a Custom Capability
 
-Capabilities encapsulate cohesive behaviour that interfaces can compose. Follow these steps to add a new capability to the ecosystem.
+Capabilities provide the operations and hooks that an interface composes.
+Start with a supplied interface unless you need to change one of those
+responsibilities. This example adds a configurable startup log message while
+preserving the existing operation logger.
+
+Use the [quickstart](../quickstart.md) application. Put the capability in
+`projects/capabilities.py`, then import it from `projects/managers.py` as
+shown below. No new cache backend or preload helper is required.
 
 ## 1. Subclass `BaseCapability`
+
+`LoggingObservabilityCapability` already subclasses `BaseCapability` and
+implements the operation hooks for the `"observability"` slot. Extend it so
+the example retains that behavior:
+
+```python
+from general_manager.interface import InterfaceBase
+from general_manager.interface.capabilities.core.observability import (
+    LoggingObservabilityCapability,
+)
+from general_manager.logging import get_logger
+
+
+class StartupMessageCapability(LoggingObservabilityCapability):
+    def __init__(self, *, message: str) -> None:
+        super().__init__()
+        self.message = message
+        self.startup_logger = get_logger("application.startup")
+
+    def get_startup_hooks(self, interface_cls: type[InterfaceBase]):
+        def announce() -> None:
+            self.startup_logger.info(
+                self.message,
+                context={"interface": interface_cls.__name__},
+            )
+
+        return (announce,)
+```
+
+The constructor accepts exactly the `message` option supplied in Step 4.
+Capability names come from the fixed `CapabilityName` vocabulary; inheriting
+the observability slot does not add a new arbitrary capability name.
+
+## 2. Implement the required methods
+
+Implement the contract of the slot you replace. Here the inherited
+`before_operation`, `after_operation`, and `on_error` methods retain
+operation logging; `get_startup_hooks` adds one no-argument callback.
+
+A name in the registry does not invent a call site. Methods such as a custom
+`preload()` or `inject_mutation_hooks()` run only if your interface or an
+existing framework hook actually calls them. For mutation-triggered application
+work, prefer the [workflow event integration](workflow_events.md).
+
+## 3. Optional: expose startup hooks or system checks
+
+InterfaceBase registers callbacks returned by `get_startup_hooks(interface_cls)`
+and checks returned by `get_system_checks(interface_cls)` when binding the
+capability. The management-command startup runner executes the registered callbacks;
+ordinary WSGI/ASGI application readiness alone does not run them. Use the
+[startup-hook recipe](../examples/startup_hooks.md) for command timing.
+
+The example does not depend on another interface. If an application hook does,
+add a dependency resolver method to that capability:
+
+```python
+# Define once at module level, shared by the dependent interfaces:
+def startup_dependencies(iface):
+    return getattr(iface, "_dependencies", set())
+
+
+# Optional method inside the capability class:
+def get_startup_hook_dependency_resolver(self, interface_cls):
+    return startup_dependencies
+```
+
+This variant assumes the application deliberately supplies `_dependencies`.
+Interfaces that need ordering together must return the same resolver callable;
+a newly created nested function for each interface creates separate groups. Follow the
+[startup-hook recipe](../examples/startup_hooks.md) for a complete dependency
+ordering example.
+
+## 4. Wire it into bundles/configs
+
+Keep the interface's existing capabilities and append the configured observer.
+In `projects/managers.py`, update the quickstart Project declaration:
+
+Import the capability and configuration helper at module level:
+
+```python
+from general_manager.interface.capabilities.configuration import InterfaceCapabilityConfig
+from .capabilities import StartupMessageCapability
+```
+
+Add only this configuration inside the existing `Project.Interface` class.
+Keep the quickstart's fields and `Project.Permission` unchanged:
+
+```python
+configured_capabilities = (
+    *DatabaseInterface.configured_capabilities,
+    InterfaceCapabilityConfig(
+        StartupMessageCapability,
+        options={"message": "Project interface is ready"},
+    ),
+)
+```
+
+The later handler replaces the active `"observability"` slot while the ORM
+read/write/history handlers remain configured. With logging configured to
+display INFO messages from `general_manager.application.startup`, a management command that runs startup
+hooks reports `Project interface is ready`. This changes runtime configuration,
+not the Project fields.
+
+## 5. Document options and side effects
+
+Document accepted constructor options, callback timing, and failures. Startup
+hooks should be appropriate to repeat in application processes; avoid
+unbounded data loading or writes that depend on unapplied migrations. If the
+hook must perform deployment maintenance, use an explicit management command
+and the [startup-maintenance guide](startup_maintenance.md).
+
+### Binding and configuration details
 
 Give the capability a supported `name` so interfaces can reference it via
 `InterfaceCapabilityConfig` and retrieve it from the capability registry.
@@ -23,74 +142,6 @@ When catching a binding failure, `CapabilityBindingError` exposes
 `RuntimeError` message `Capability '<name>' could not be attached: <reason>`.
 The reason string is preserved exactly, including empty or multiline values.
 
-```python
-from typing import ClassVar
-
-from general_manager.interface.capabilities.base import CapabilityName
-from general_manager.interface.capabilities.builtin import BaseCapability
-
-class CacheWarmupCapability(BaseCapability):
-    name: ClassVar[CapabilityName] = "observability"
-    required_attributes: ClassVar[tuple[str, ...]] = ("get_data",)
-```
-
-The built-in `CapabilityName` vocabulary is fixed. Use one of those names when
-you are replacing or extending an existing capability slot. The example above
-uses `"observability"` because it adds startup-time side effects around an
-interface without changing the read/query/mutation handlers.
-
-## 2. Implement the required methods
-
-Add the methods your interface will call—`get_data`, `filter`, `pre_create`, etc. Keep the capability focused on a single responsibility.
-
-```python
-class CacheWarmupCapability(BaseCapability):
-    ...
-    def get_startup_hooks(self, interface_cls: type[object]):
-        def warm_cache():
-            CacheBackend.preload(interface_cls._parent_class)
-        return (warm_cache,)
-```
-
-## 3. Optional: expose startup hooks or system checks
-
-Implement `get_startup_hooks(interface_cls)` or `get_system_checks(interface_cls)` to plug into the global registries. InterfaceBase will register them automatically when the capability binds.
-
-Startup hooks can also declare how they should be ordered relative to other interfaces. If your hook needs related read-only data to exist, expose a dependency resolver:
-
-```python
-class CacheWarmupCapability(BaseCapability):
-    name: ClassVar[CapabilityName] = "observability"
-
-    def get_startup_hooks(self, interface_cls: type[object]):
-        return (lambda: CacheBackend.preload(interface_cls._parent_class),)
-
-    def get_startup_hook_dependency_resolver(self, interface_cls: type[object]):
-        # Return a callable that yields dependent interfaces; ordering is computed per hook set.
-        def resolver(iface):
-            return getattr(iface, "_dependencies", set())
-        return resolver
-```
-
-Each startup hook set is ordered independently using its resolver, so multiple capabilities on the same interface can each define their own dependency graph without interfering with one another.
-
-## 4. Wire it into bundles/configs
-
-- Add the capability to a bundle (e.g., extend `general_manager.interface.bundles.database`).
-- Or configure it directly via `InterfaceCapabilityConfig` on the interface class. For example:
-
-```python
-from general_manager.interface.capabilities.configuration import InterfaceCapabilityConfig
-
-class ExternalReportInterface(InterfaceBase):
-    configured_capabilities = (
-        InterfaceCapabilityConfig(
-            CacheWarmupCapability,
-            options={"cache_backend": "reports"},
-        ),
-    )
-```
-
 `options=None` calls the capability constructor without keyword arguments. Any
 mapping you pass is copied and expanded as keyword arguments, so the original
 mapping is not mutated and even a custom falsey mapping is still honored.
@@ -105,11 +156,7 @@ capability classes or callables and take precedence over the default
 creates a fresh default handler for every duplicate name, and calls an override
 once per duplicate occurrence. Unknown names without overrides raise `KeyError`.
 
-> See `docs/examples/custom_capability_examples.md` for a complete sample.
-
-## 5. Document options and side effects
-
-Explain any `options` the capability accepts, what hooks it registers, and how it affects interface behaviour. Include tests that exercise its public methods to keep refactors safe.
+> See the [capability cookbook](../examples/custom_capability_examples.md) for another observer variant.
 
 ## 6. Replace or rely on observability logging
 

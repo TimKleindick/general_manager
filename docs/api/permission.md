@@ -1,8 +1,21 @@
 # Permission API
 
+Use manager permission classes to declare access policy, registered checks to
+reuse predicates, and audit loggers to observe evaluated decisions. Begin with
+[permission concepts](../concepts/permission/index.md) and
+[where enforcement runs](../concepts/permission/index.md#where-permissions-run).
+This page documents the concrete extension contracts; normal manager writes
+and generated GraphQL resolvers already call their owning checks.
+
 ## Core classes
 
 ::: general_manager.permission.base_permission.BasePermission
+
+`BasePermission` is abstract. Its constructor and helper contracts below are
+implemented or inherited by concrete permission classes. In application code,
+use the manager's policy, for example `Project.Permission(...)` or
+`Project.Permission.check_create_permission(...)`, rather than calling checks
+on `BasePermission` itself. Normal manager writes already invoke those checks.
 
 `BasePermission(instance, request_user)` stores the permission context and
 resolves `request_user` through `get_user_with_id()`. The request user may be a

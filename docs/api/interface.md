@@ -1,5 +1,16 @@
 # Interface API
 
+An interface supplies a manager's data access, query and lifecycle behavior.
+Choose an existing implementation using the [interface overview](../concepts/interfaces/index.md)
+before extending the [capability system](#capabilities). The
+[custom-interface guide](../howto/write_custom_interface.md) explains the responsibilities
+of a new backend.
+
+This reference covers the shared base contract, ORM and calculation interfaces,
+[request interfaces](#request-interfaces), [Excel interfaces](#excel-interface),
+and their supporting capabilities and errors. [Historical execution](#historical-execution-context)
+is a cross-cutting contract; it does not add history support to every backend.
+
 ## Historical execution context
 
 See the dedicated [Historical Context API reference](historical_context.md) for

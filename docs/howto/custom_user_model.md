@@ -9,13 +9,17 @@ This guide shows how to:
 
 The key pattern is:
 
-- `myapp.models.User` is the real Django ORM model
-- `myapp.managers.User` is the GeneralManager wrapper
-- application code should import `myapp.managers.User` when it wants GeneralManager behavior
+- `accounts.models.User` is the real Django ORM model
+- `accounts.managers.User` is the GeneralManager wrapper
+- application code should import `accounts.managers.User` when it wants GeneralManager behavior
 
 ## 1. Define the Django user model
 
-Create the Django auth model in `models.py`.
+This setup assumes a new Django project with an installed `accounts` app,
+before its initial migrations are applied. Changing `AUTH_USER_MODEL` in an
+existing migrated project requires a separate data/schema migration plan.
+
+Create the Django auth model in `accounts/models.py`.
 
 ```python
 from __future__ import annotations

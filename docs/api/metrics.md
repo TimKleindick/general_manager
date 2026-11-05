@@ -1,5 +1,11 @@
 # Metrics API
 
+This reference describes the opt-in GraphQL metrics backend, resolver
+middleware and label helpers. For installation, settings, emitted metrics and
+operational limits, follow [GraphQL metrics](../concepts/observability/graphql_metrics.md).
+The [observability overview](../concepts/observability/index.md) distinguishes
+metrics from application logs and permission audit records.
+
 ::: general_manager.metrics.graphql.GraphQLMetricsBackend
 
 ::: general_manager.metrics.graphql.GraphQLMetricsSettings

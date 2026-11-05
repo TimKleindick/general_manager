@@ -1,6 +1,11 @@
 # How-To: Create a Custom Interface Type
 
-This guide walks through building a new interface type that composes existing capabilities.
+This guide outlines how an application-owned interface composes capabilities.
+It assumes you have already implemented the backend's read/query/lifecycle
+contracts described in [Write a custom interface](write_custom_interface.md).
+`ExternalSyncCapability` below is an application-supplied handler, not a
+GeneralManager export or a complete HTTP client. For a working remote-service
+integration, begin with [RequestInterface](request_interface.md).
 
 ## 1. Subclass the appropriate base
 
@@ -70,7 +75,11 @@ class ExternalReport(GeneralManager):
 
 ## 4. Update bundles/manifests if needed
 
-If your interface should be reusable by others, consider defining a bundle in `general_manager.interface.bundles` and documenting the capability names in the manifest so tooling can enforce required vs optional capabilities.
+For reuse within your application, define a `CapabilitySet` in your own package
+and reuse it in `configured_capabilities`. The framework's
+`general_manager.interface.bundles` module is the owner of its built-in bundles;
+applications do not need to edit that installed module. Use manifests only when
+your custom builder needs their required/optional capability selection contract.
 
 ## 5. Test & document
 

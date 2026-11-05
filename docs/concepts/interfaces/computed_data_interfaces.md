@@ -4,7 +4,11 @@
 
 ## Declaring inputs
 
-Inputs use the `Input` descriptor to specify the expected type and optional value providers.
+Inputs use the `Input` descriptor to specify the expected type and optional value
+providers. This example uses the `Project` manager from the
+[quickstart](../../quickstart.md). Define `ProjectSummary` after `Project` in
+`projects/managers.py`, or import `Project` before defining the summary in
+another startup-loaded module.
 
 ```python
 from datetime import date
@@ -17,9 +21,115 @@ class ProjectSummary(GeneralManager):
     date: date
 
     class Interface(CalculationInterface):
-        project = Input(Project)
-        date = Input(date)
+        project = Input.from_manager_query(Project)
+        date = Input(
+            date,
+            possible_values=[date(2024, 1, 1), date(2024, 2, 1)],
+        )
+
+    @graph_ql_property
+    def label(self) -> str:
+        return f"{self.project.name}: {self.date.isoformat()}"
 ```
+
+After restarting the application, construct a calculation by supplying one
+value for every required input:
+
+```python
+from datetime import date
+from projects.managers import Project, ProjectSummary
+
+my_project = Project.get(name="Apollo")
+summary = ProjectSummary(project=my_project, date=date(2024, 1, 1))
+assert summary.date == date(2024, 1, 1)
+assert summary.label == "Apollo: 2024-01-01"
+```
+
+This identifies a calculation; it does not create a database row. The declared
+domains also make enumeration finite: existing projects paired with two dates.
+For direct Python use, bind required inputs without a domain in the constructor
+or a Python bucket filter before enumeration; an unconstrained required input
+raises `InvalidPossibleValuesError`. Generated GraphQL lists authorize their
+base calculation domain before applying client input filters. A GraphQL filter
+therefore does not replace a domain needed to enumerate that base; declare a
+finite domain when exposing the calculation as a list. See
+[query authorization](../graphql/security.md#query-operands-and-search-projections).
+
+## Computing values
+
+Expose computed attributes with `@graph_ql_property`. The decorator registers the method as a GraphQL field and caches results in the active run context by default for every manager type.
+
+The `label` property above combines a related manager's name with the date
+input. More complex properties can query related buckets or combine measurements
+using the same declaration pattern.
+
+Use `@graph_ql_property(cache="dependency")` when a value should be reused across requests and invalidated when its source managers change. Use `cache="none"` for cheap values.
+
+`query_annotation` does not execute on a `CalculationInterface` manager.
+`CalculationBucket` enumerates input combinations and reads computed properties
+through their Python getters for filtering, exclusion, and sorting; it has no
+queryset on which to apply an ORM expression or annotation callback. A
+database-backed input does not turn the calculation's properties into database
+columns. Set `filterable=True` and `sortable=True` for generated GraphQL controls,
+and narrow the input domain before expensive property evaluation. Caching can
+reuse getter results but does not translate calculations into SQL. See the
+[property and query annotation guide](../../howto/expose_via_graphql.md#calculationinterface-does-not-execute-query_annotation)
+for an executable-style example and alternatives.
+
+## Iterating combinations
+
+Call `ProjectSummary.all()` to iterate through the declared project/date
+combinations. In the shell where `my_project` refers to the quickstart's Apollo
+record, filter inputs with keyword arguments:
+
+```python
+for summary in ProjectSummary.filter(project=my_project):
+    print(summary.date, summary.label)
+
+for summary in ProjectSummary.filter(project_id=my_project.id):
+    print(summary.date, summary.label)
+```
+
+Each loop prints two rows, one for 1 January and one for 1 February 2024.
+The label combines the project's name with that row's date.
+
+For manager-typed inputs, filters accept either the manager instance (`project=...`) or its identifier (`project_id=...`). Nested lookups such as `project__name__startswith=...` continue to target fields on the input manager.
+
+The following GraphQL fragment is a separate `ProjectCommercial` example from
+[the GraphQL task guide](../../howto/expose_via_graphql.md#filter-calculation-managers-by-manager-input);
+it assumes that manager and its `target_date` input have been declared. It is
+not a query for the `ProjectSummary` class above.
+
+Generated GraphQL list fields expose manager-typed calculation inputs through
+the same nested relation-filter shape as persisted managers:
+
+```graphql
+query ProjectCommercials($projectId: ID!) {
+  projectCommercialList(filter: {project: {id: $projectId}}) {
+    items {
+      project { id }
+      targetDate
+    }
+  }
+}
+```
+
+The resolver normalizes this filter to the Python lookup
+`project__id=<projectId>`.
+
+This inference applies when calculation metadata does not already describe the
+field as a relation; explicit relation metadata remains authoritative. For the
+declaration and query workflow, see [Filter calculation managers by manager
+input](../../howto/expose_via_graphql.md#filter-calculation-managers-by-manager-input),
+the [calculation filter recipe](../../examples/graphql_queries.md#filter-a-calculation-by-manager-input),
+and the [GraphQL API compatibility note](../../api/graphql.md#manager-typed-calculation-input-filters).
+
+Because calculation managers do not persist data, `create`, `update`, and `delete` are unavailable. They still participate in dependency tracking when a property opts into dependency-aware caching.
+
+## Resolution and lifecycle details
+
+The examples above are the normal application path. These details matter when
+diagnosing input resolution or implementing a custom calculation interface.
 
 `CalculationInterface` is a capability-backed shell rather than a persistence
 interface. It collects `Input(...)` descriptors from the interface class during
@@ -71,72 +181,6 @@ Resolved input values are memoized on each calculation instance. This includes
 manager inputs: repeated `self.project` access on one calculation returns the
 same wrapper, while a new calculation instance resolves a fresh wrapper from the
 current database state.
-
-## Computing values
-
-Expose computed attributes with `@graph_ql_property`. The decorator registers the method as a GraphQL field and caches results in the active run context by default for every manager type.
-
-```python
-    @graph_ql_property
-    def total_volume(self) -> int:
-        return sum(
-            derivative.volume
-            for derivative in self.project.derivative_list.filter(date=self.date)
-        )
-```
-
-Use `@graph_ql_property(cache="dependency")` when a value should be reused across requests and invalidated when its source managers change. Use `cache="none"` for cheap values.
-
-`query_annotation` does not execute on a `CalculationInterface` manager.
-`CalculationBucket` enumerates input combinations and reads computed properties
-through their Python getters for filtering, exclusion, and sorting; it has no
-queryset on which to apply an ORM expression or annotation callback. A
-database-backed input does not turn the calculation's properties into database
-columns. Set `filterable=True` and `sortable=True` for generated GraphQL controls,
-and narrow the input domain before expensive property evaluation. Caching can
-reuse getter results but does not translate calculations into SQL. See the
-[property and query annotation guide](../../howto/expose_via_graphql.md#calculationinterface-does-not-execute-query_annotation)
-for an executable-style example and alternatives.
-
-## Iterating combinations
-
-Call `ProjectSummary.all()` to iterate through all possible input combinations. Filter inputs with keyword arguments:
-
-```python
-for summary in ProjectSummary.filter(project=my_project):
-    print(summary.date, summary.total_volume)
-
-for summary in ProjectSummary.filter(project_id=my_project.id):
-    print(summary.date, summary.total_volume)
-```
-
-For manager-typed inputs, filters accept either the manager instance (`project=...`) or its identifier (`project_id=...`). Nested lookups such as `project__name__startswith=...` continue to target fields on the input manager.
-
-Generated GraphQL list fields expose manager-typed calculation inputs through
-the same nested relation-filter shape as persisted managers:
-
-```graphql
-query ProjectCommercials($projectId: ID!) {
-  projectCommercialList(filter: {project: {id: $projectId}}) {
-    items {
-      project { id }
-      targetDate
-    }
-  }
-}
-```
-
-The resolver normalizes this filter to the Python lookup
-`project__id=<projectId>`.
-
-This inference applies when calculation metadata does not already describe the
-field as a relation; explicit relation metadata remains authoritative. For the
-declaration and query workflow, see [Filter calculation managers by manager
-input](../../howto/expose_via_graphql.md#filter-calculation-managers-by-manager-input),
-the [calculation filter recipe](../../examples/graphql_queries.md#filter-a-calculation-by-manager-input),
-and the [GraphQL API compatibility note](../../api/graphql.md#manager-typed-calculation-input-filters).
-
-Because calculation managers do not persist data, `create`, `update`, and `delete` are unavailable. They still participate in dependency tracking when a property opts into dependency-aware caching.
 
 ## Input helpers
 
@@ -227,6 +271,10 @@ normalizers, and validators.
 
 ## Cookbook: constrained dependent inputs
 
+This independent pattern assumes your application's `Project` exposes
+`started_on`, optional `closed_on`, and integer `capacity` attributes. Those
+fields are not part of the minimal quickstart Project.
+
 Use structured domains when you want GraphQL and calculation enumeration to
 understand the shape of an input instead of receiving a plain list:
 
@@ -268,7 +316,12 @@ normalizes arbitrary dates in a month to the configured month-end anchor.
 `Input.monthly_date()` accepts `anchor="start"`/`"month_start"` and
 `anchor="end"`/`"month_end"`; `Input.yearly_date()` accepts the equivalent
 year-start and year-end anchors.
-`quantity` uses scalar bounds for cheap checks and a validator for the
+`quantity` uses scalar bounds for cheap checks; bounds do not supply an
+enumeration domain. Supply an exact `quantity` when constructing this calculation
+in Python or filtering a Python bucket, or add a finite `possible_values` domain
+before using `.all()`. For generated GraphQL lists, provide that enumerable
+domain even when the client sends a quantity filter: authorization runs first.
+The validator supplies the
 dependency-aware rule. If you omit `depends_on`, callable parameter names are
 used as dependencies; specifying it explicitly is clearer when callbacks accept
 optional or keyword-only arguments.

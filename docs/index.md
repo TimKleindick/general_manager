@@ -1,26 +1,40 @@
 # Welcome to GeneralManager
 
-GeneralManager is a modular data management framework for Django projects. It combines a declarative model layer, automatic GraphQL integration, and measurement-aware fields to help you expose consistent domain objects to multiple clients.
+GeneralManager adds a domain layer to Django: define a manager once, use it in
+Python, and expose it through a generated GraphQL API. Interfaces decide where
+the data comes from; managers give application code a consistent way to work
+with it.
 
-The documentation is organised around the developer workflows you follow when building with GeneralManager:
+## Start with one working application
 
-- Understand the [core concepts](concepts/index.md) such as managers, buckets, interfaces, and permissions.
-- Follow the [Quickstart](quickstart.md) to bootstrap a new project or integrate the package into an existing Django app.
-- Dive into advanced topics like [GraphQL auto-generation](concepts/graphql/index.md), [attribute-based access control](concepts/permission/index.md), and [unit-aware calculations](concepts/measurement/index.md).
-- Explore hands-on [tutorials](howto/index.md) and a curated [cookbook](examples/index.md) with real-world snippets.
-- Reference the [API documentation](api/core.md) generated directly from the source code when you need precise signatures.
+Follow the [quickstart](quickstart.md) to create a `Project` manager, save an
+Apollo project, and retrieve it through GraphQL. Then continue with
+[authenticated writes](howto/create_project.md) and
+[your first permission policy](howto/add_permission_rule.md).
 
-## Key capabilities
+You do not need to understand capability manifests, cache internals, or custom
+interfaces to complete this path. The [learning paths](learning_paths.md) show
+what to read next for your task.
 
-- **Declarative managers**: describe domain entities with Python type hints and let interfaces handle persistence, caching, and identification.
-- **Multiple interfaces**: combine database-backed, read-only, and computed managers without changing your business logic.
-- **Attribute-based permissions**: secure operations through reusable permission rules and contextual checks.
-- **GraphQL integration**: expose managers, relationships, and custom mutations automatically, with fine-grained security controls.
-- **Grounded LLM chat**: let tool-capable models discover and query explicitly exposed managers through HTTP, SSE, or WebSocket APIs.
-- **Measurement support**: work with physical units and currencies using intuitive arithmetic and Django model fields.
+## Find the right kind of explanation
 
-## Getting help
+| I want to… | Start here |
+| --- | --- |
+| Understand managers, interfaces, and buckets | [Concepts](concepts/index.md) |
+| Build or change part of an application | [Tutorials and task guides](howto/index.md) |
+| Adapt a focused example | [Cookbook](examples/index.md) |
+| Check an exact signature, input, or result | [API reference](api/core.md) |
+| Configure settings and optional integrations | [Configuration map](configuration.md) |
+| Install or upgrade a deployment | [Installation](installation.md) and [upgrade guide](howto/migrate-to-stable-api.md) |
+| Diagnose a problem | [FAQ](faq.md) and [operations map](howto/index.md#operate-and-maintain-an-application) |
 
-If you are new, start with the [Quickstart guide](quickstart.md). For troubleshooting, consult the [FAQ](faq.md) or open an issue on the [GitHub repository](https://github.com/TimKleindick/general_manager).
+## Add capabilities when your application needs them
 
-The documentation is continuously evolving. Contributions that clarify explanations, add examples, or cover missing topics are welcome.
+- Store unit-aware values with [measurements and currencies](concepts/measurement/index.md).
+- Combine database, calculated, remote, and spreadsheet data through [interfaces](concepts/interfaces/index.md).
+- Expose queries and mutations with [GraphQL](concepts/graphql/index.md).
+- Build [search](howto/search.md), [workflows](concepts/workflow.md), or [file uploads](howto/graphql_file_uploads.md).
+- Add [LLM chat](howto/install_llm_chat.md) over explicitly exposed managers.
+
+For questions or documentation gaps, open an issue on the
+[GitHub repository](https://github.com/TimKleindick/general_manager).

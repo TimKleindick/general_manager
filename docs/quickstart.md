@@ -200,7 +200,8 @@ application writes and restart the development server after permission changes.
 ## Next steps
 
 - Understand [managers, interfaces, and buckets](concepts/architecture.md).
-- Build an application policy with the [permission walkthrough](howto/permission_walkthrough.md).
+- Continue with [authenticated writes](howto/create_project.md) and [your first permission policy](howto/add_permission_rule.md).
+- Choose a [learning path](learning_paths.md) for your application.
 - Add [measurements and currency-aware fields](concepts/measurement/index.md).
 - Explore [generated GraphQL](concepts/graphql/index.md), including filters,
   pagination, mutations, and security.

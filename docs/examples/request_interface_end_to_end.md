@@ -85,6 +85,12 @@ class Project(GeneralManager):
             )
 ```
 
+Replace the example URL and token with a service that provides the declared
+`/projects` endpoints and fields. Register the manager in an installed
+application. For writes, `author` below is an authenticated, authorized Django
+user in the consuming application; upstream credentials remain the separate
+`auth_provider` configuration.
+
 Typical usage:
 
 ```python
@@ -93,7 +99,7 @@ project = Project(id=1)
 created = Project.create(
     name="Created Example",
     status="active",
-    ignore_permission=True,
+    creator_id=author.pk,
 )
 
 print(active_projects[0].name)
@@ -107,7 +113,9 @@ Notes:
 - `Project(id=1).name` lazily resolves through the `"detail"` operation.
 - `Project.create(...)` uses `FieldMappingSerializer` to shape the outbound JSON body.
 - request input values such as `id` are readable through the normal manager attribute path as well as `identification`
-- `ignore_permission=True` is only needed when your project enables mutation permission checks and you want a minimal standalone example.
+- Normal manager writes enforce their local permission policy before the HTTP
+  request. `creator_id` identifies the local actor; it is not an upstream login.
+  Use an application-specific auth provider for the remote service.
 
 ## Contracts to rely on
 

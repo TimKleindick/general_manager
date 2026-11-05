@@ -1,53 +1,14 @@
 # Search Tutorial
 
 This tutorial walks through enabling search with Meilisearch, indexing data, and
-querying via GraphQL. It assumes Django + the auto GraphQL schema are enabled.
+querying via GraphQL. It assumes an initialized Django project with GeneralManager
+and automatic GraphQL generation enabled. Keep the project's existing
+`GENERAL_MANAGER` settings when adding the search entries below.
 
-## Reindex existing identity projections
-
-After upgrading to identity-aware search transport, rebuild every affected
-manager/index pair before accepting identity-filtered traffic. Existing
-Meilisearch documents lack the new equality tokens, so declared identity filters
-omit those rows until reindexing finishes. A partly rebuilt index returns only
-rebuilt matching rows; it never broadens back to numeric comparison. Plan a
-maintenance window, or build a separate application-owned index and switch
-traffic after verifying it.
-
-For one configured pair, use the supported indexer in the application process:
-
-```python
-from general_manager.search.indexer import SearchIndexer
-
-SearchIndexer().reindex_manager_index(Project, "global")
-```
-
-This rebuilds current rows and removes stale documents belonging to that manager
-type, preserving other types in the index. `python manage.py search_index
---reindex --manager Project` rebuilds all configured indexes for the selected
-manager. Its `--index` option selects settings updates; it does not limit that
-manager's reindex scope. Settings-only `search_index` calls preserve identity
-filterability. Reconciliation fingerprints also track resolved identity types
-and transport version, so enabled reconciliation marks affected pairs for
-rebuilding. Verify exact equality/membership and authorized totals after repair.
-No database migration or changes to native constructors are required.
-
-When using a custom `to_document`, declare aliased native identity fields on
-the index instead of stringifying all numbers:
-
-```python
-IndexConfig(
-    name="global",
-    fields=["customer_alias", "quantity"],
-    filters=["customer_alias", "quantity"],
-    identity_fields={"customer_alias": int},
-)
-```
-
-The declaration describes the native identity kind, including scalar elements
-of nullable/list fields. Unmarked `quantity` stays a business number. For direct
-provider queries use `build_search_filters(Project, "global", filters)`; manual
-documents and custom providers can use the explicit document/filter metadata
-contract described in [the API reference](../api/search.md).
+For a new index, start with Step 1 below. If an existing deployment is
+upgrading its identity-aware search transport, follow the
+[reindexing instructions](#reindex-existing-identity-projections) before serving
+identity-filtered traffic. Keep those cutover steps separate from a first setup.
 
 ## Step 1: Configure a backend
 
@@ -111,10 +72,16 @@ with `auto_reindex=True` or enabled later with
 
 ## Step 2: Add SearchConfig to a manager
 
-Define searchable, filterable, and sortable fields:
+In an installed application's `managers.py`, define searchable, filterable and
+sortable fields. This standalone example uses `name` and `status`. If extending
+an existing manager, retain its existing fields and permission policy:
 
 ```python
+from django.db.models import CharField
+from general_manager.interface import DatabaseInterface
+from general_manager.manager import GeneralManager
 from general_manager.search.config import IndexConfig
+
 
 class Project(GeneralManager):
     class Interface(DatabaseInterface):
@@ -132,10 +99,18 @@ class Project(GeneralManager):
         ]
 ```
 
+Apply the application's migrations after adding this stored manager. Create
+records through the manager API with an authorized `creator_id`, or use existing
+application data. Searching an empty source correctly returns no results. The
+GraphQL example below expects a matching project named `alpha` with status
+`public`; manager and field permissions still determine its visibility.
+
 ### Invalidate fields owned by related managers
 
-When a project document contains customer or investment data, put the rule on
-`Project`, the manager that owns the document:
+This optional extension assumes your application also defines customer and
+investment managers and the shown relations; they are not fields of the simple
+Project above. Merge these rules into the existing `Project.SearchConfig`,
+the owner of the document. For first setup, continue to [Step 3](#step-3-create-index-settings-and-reindex-data):
 
 ```python
 from general_manager import GeneralManager, IndexConfig, SearchInvalidationRule
@@ -417,3 +392,49 @@ extraction, and backend write/list/delete errors propagate to the caller.
   failures.
 - Apply migration `0011_search_index_state_dirty_generation` before enabling
   lifecycle invalidation workers.
+
+## Reindex existing identity projections
+
+After upgrading to identity-aware search transport, rebuild every affected
+manager/index pair before accepting identity-filtered traffic. Existing
+Meilisearch documents lack the new equality tokens, so declared identity filters
+omit those rows until reindexing finishes. A partly rebuilt index returns only
+rebuilt matching rows; it never broadens back to numeric comparison. Plan a
+maintenance window, or build a separate application-owned index and switch
+traffic after verifying it.
+
+For one configured pair, use the supported indexer in the application process:
+
+```python
+from general_manager.search.indexer import SearchIndexer
+
+SearchIndexer().reindex_manager_index(Project, "global")
+```
+
+This rebuilds current rows and removes stale documents belonging to that manager
+type, preserving other types in the index. `python manage.py search_index
+--reindex --manager Project` rebuilds all configured indexes for the selected
+manager. Its `--index` option selects settings updates; it does not limit that
+manager's reindex scope. Settings-only `search_index` calls preserve identity
+filterability. Reconciliation fingerprints also track resolved identity types
+and transport version, so enabled reconciliation marks affected pairs for
+rebuilding. Verify exact equality/membership and authorized totals after repair.
+No database migration or changes to native constructors are required.
+
+When using a custom `to_document`, declare aliased native identity fields on
+the index instead of stringifying all numbers:
+
+```python
+IndexConfig(
+    name="global",
+    fields=["customer_alias", "quantity"],
+    filters=["customer_alias", "quantity"],
+    identity_fields={"customer_alias": int},
+)
+```
+
+The declaration describes the native identity kind, including scalar elements
+of nullable/list fields. Unmarked `quantity` stays a business number. For direct
+provider queries use `build_search_filters(Project, "global", filters)`; manual
+documents and custom providers can use the explicit document/filter metadata
+contract described in [the API reference](../api/search.md).

@@ -3,6 +3,14 @@
 GeneralManager ships configuration primitives and a development backend for search.
 Production deployments are expected to use an external search service.
 
+For first setup, follow the [search tutorial](../howto/search.md). The normal
+flow is: declare each manager's index fields, initialize the backend, index
+current records, then query the generated GraphQL search field. Supported
+manager changes update the projection; [reconciliation](../howto/search_reconciliation.md)
+repairs missing or dirty indexes. Indexes can lag behind source data.
+GraphQL checks access against the native source; direct backend calls return
+search documents and do not supply that authorization layer.
+
 ## Overview
 
 Search is configured per manager and aggregated per index name. Each manager can

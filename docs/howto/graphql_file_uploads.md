@@ -44,75 +44,6 @@ Startup fails on a collision. Disabling uploads while an exposed manager has an
 editable ORM file field also fails startup; it never restores unsafe arbitrary
 string assignment.
 
-### Complete settings reference
-
-Every integer below must be a positive non-boolean integer. Unknown keys are
-rejected. Both path settings must be safe relative paths ending in `/`.
-
-| Setting | Default | Meaning and constraints |
-| --- | ---: | --- |
-| `ENABLED` | `False` | Registers the mutation and HTTP routes. |
-| `HTTP_UPLOAD_PATH` | `"gm/uploads/"` | Framework-owned relative route prefix. |
-| `STAGING_PREFIX` | `"gm-staging/"` | Private, framework-owned storage prefix. |
-| `INTENT_DATABASE` | `"default"` | Intent DB alias; `null`/empty normalizes to `default`. Must equal each manager's effective alias. |
-| `MAX_BYTES` | `25_000_000` | Global per-file declared/verified byte ceiling. |
-| `MAX_PENDING_INTENTS_PER_USER` | `20` | Active intents admitted per owner. |
-| `MAX_PENDING_BYTES_PER_USER` | `100_000_000` | Sum of active declared bytes per owner. |
-| `MAX_PENDING_INTENTS_GLOBAL` | `1_000` | Active intents across all owners. |
-| `MAX_PENDING_BYTES_GLOBAL` | `5_000_000_000` | Active declared bytes globally. |
-| `BEGIN_RATE_LIMIT_WINDOW_SECONDS` | `60` | Fixed begin-upload counter window. |
-| `MAX_BEGIN_ATTEMPTS_PER_USER` | `30` | Begin attempts per owner/window. |
-| `MAX_BEGIN_ATTEMPTS_GLOBAL` | `1_000` | Begin attempts globally/window. |
-| `TRANSFER_LEASE_SECONDS` | `60` | Proxy lease duration before a crashed transfer may be reclaimed. |
-| `TRANSFER_CREDENTIAL_TTL_SECONDS` | `900` | Lifetime of the distinct proxy transfer credential. |
-| `TRANSFER_RATE_LIMIT_WINDOW_SECONDS` | `60` | Fixed proxy-attempt counter window. |
-| `MAX_TRANSFER_ATTEMPTS_PER_USER` | `120` | Proxy attempts per owner/window. |
-| `MAX_TRANSFER_ATTEMPTS_GLOBAL` | `5_000` | Proxy attempts globally/window. |
-| `MAX_TRANSFER_ATTEMPTS_PER_INTENT` | `10` | Durable attempt ceiling for one intent. |
-| `ALLOW_INSECURE_HTTP` | `False` | Permits HTTP only while Django `DEBUG=True`. |
-| `MAX_IMAGE_PIXELS` | `40_000_000` | Decoded image pixel ceiling. |
-| `MAX_IMAGE_WIDTH` | `16_384` | Decoded image width ceiling. |
-| `MAX_IMAGE_HEIGHT` | `16_384` | Decoded image height ceiling. |
-| `MAX_INSPECTION_BYTES` | `1_048_576` | Maximum prefix supplied to a content inspector. |
-| `TOKEN_TTL_SECONDS` | `900` | Consumption-intent lifetime. |
-| `DOWNLOAD_URL_TTL_SECONDS` | `300` | Private URL lifetime, maximum `604_800` (seven days). |
-| `CLEANUP_BATCH_SIZE` | `100` | Default bounded maintenance batch. |
-| `CLEANUP_MIN_AGE_SECONDS` | `3_600` | Default age for expiry/terminal cleanup. |
-| `CLEANUP_LEASE_SECONDS` | `300` | Durable reconciliation worker lease. |
-| `CLEANUP_FAILURE_COOLDOWN_SECONDS` | `60` | Delay before retrying a failed cleanup/finalization. |
-| `TERMINAL_RETENTION_SECONDS` | `86_400` | Retention for terminal intent metadata; must exceed the download URL TTL. |
-| `DELETE_REPLACED_FILES` | `False` | Deletes an old object only after safe exact claim and successful replacement. |
-
-When enabling local replacement deletion, reserve
-`gm-upload-old-claims/` exclusively for GeneralManager. Do not write, sync,
-restore, scan-and-rewrite, or manually clean paths below it while the
-application is running. GeneralManager serializes its own workers with a
-durable cleanup lease and re-verifies moved inode/checksum identities, but
-portable POSIX filesystems have no atomic compare-and-unlink primitive. If
-another process can mutate that namespace, keep `DELETE_REPLACED_FILES=False`.
-
-Reserve `.gm-upload-*` names exclusively for GeneralManager. Local filesystem
-finalization writes a private sibling with that prefix before
-atomically linking the complete file to its final name. Concurrent retries never
-read a partially written final file, and an occupied final name is never
-overwritten. The filesystem must support hard links; publication failures return
-`UPLOAD_STORAGE_ERROR`. Private siblings are removed after publication or a
-write/publication error; a terminated process or a cleanup I/O failure can leave
-a sibling for offline cleanup. Custom filesystem storage must preserve these
-private names when saving; storage that rewrites them needs a custom adapter.
-
-`TERMINAL_RETENTION_SECONDS` is a minimum age, not permission to discard live
-download metadata. A `CONSUMED` intent is retained beyond that age for as long as
-the current model row still references its `final_key`; cleanup deletes it only
-after replacement, explicit clear, or row deletion removes that live binding.
-This preserves exact-version verification for structured downloads.
-
-The default cache backend must implement atomic `add` and `incr`; unsafe
-fallback implementations fail closed with `UPLOAD_STORAGE_ERROR`. Admission is
-also serialized through the upload quota-lock database row. Authentication is
-validated before either global or per-user admission counters are incremented,
-so anonymous traffic cannot consume the authenticated global upload budget.
-
 ## Define file fields and policies
 
 ```python
@@ -331,6 +262,75 @@ application-defined `UploadError` subclass is normalized to
 should branch on `extensions.code`, never on arbitrary exception text. This
 normalization applies to generated mutations and mutations registered with
 `@graph_ql_mutation`.
+
+## Complete settings reference
+
+Every integer below must be a positive non-boolean integer. Unknown keys are
+rejected. Both path settings must be safe relative paths ending in `/`.
+
+| Setting | Default | Meaning and constraints |
+| --- | ---: | --- |
+| `ENABLED` | `False` | Registers the mutation and HTTP routes. |
+| `HTTP_UPLOAD_PATH` | `"gm/uploads/"` | Framework-owned relative route prefix. |
+| `STAGING_PREFIX` | `"gm-staging/"` | Private, framework-owned storage prefix. |
+| `INTENT_DATABASE` | `"default"` | Intent DB alias; `null`/empty normalizes to `default`. Must equal each manager's effective alias. |
+| `MAX_BYTES` | `25_000_000` | Global per-file declared/verified byte ceiling. |
+| `MAX_PENDING_INTENTS_PER_USER` | `20` | Active intents admitted per owner. |
+| `MAX_PENDING_BYTES_PER_USER` | `100_000_000` | Sum of active declared bytes per owner. |
+| `MAX_PENDING_INTENTS_GLOBAL` | `1_000` | Active intents across all owners. |
+| `MAX_PENDING_BYTES_GLOBAL` | `5_000_000_000` | Active declared bytes globally. |
+| `BEGIN_RATE_LIMIT_WINDOW_SECONDS` | `60` | Fixed begin-upload counter window. |
+| `MAX_BEGIN_ATTEMPTS_PER_USER` | `30` | Begin attempts per owner/window. |
+| `MAX_BEGIN_ATTEMPTS_GLOBAL` | `1_000` | Begin attempts globally/window. |
+| `TRANSFER_LEASE_SECONDS` | `60` | Proxy lease duration before a crashed transfer may be reclaimed. |
+| `TRANSFER_CREDENTIAL_TTL_SECONDS` | `900` | Lifetime of the distinct proxy transfer credential. |
+| `TRANSFER_RATE_LIMIT_WINDOW_SECONDS` | `60` | Fixed proxy-attempt counter window. |
+| `MAX_TRANSFER_ATTEMPTS_PER_USER` | `120` | Proxy attempts per owner/window. |
+| `MAX_TRANSFER_ATTEMPTS_GLOBAL` | `5_000` | Proxy attempts globally/window. |
+| `MAX_TRANSFER_ATTEMPTS_PER_INTENT` | `10` | Durable attempt ceiling for one intent. |
+| `ALLOW_INSECURE_HTTP` | `False` | Permits HTTP only while Django `DEBUG=True`. |
+| `MAX_IMAGE_PIXELS` | `40_000_000` | Decoded image pixel ceiling. |
+| `MAX_IMAGE_WIDTH` | `16_384` | Decoded image width ceiling. |
+| `MAX_IMAGE_HEIGHT` | `16_384` | Decoded image height ceiling. |
+| `MAX_INSPECTION_BYTES` | `1_048_576` | Maximum prefix supplied to a content inspector. |
+| `TOKEN_TTL_SECONDS` | `900` | Consumption-intent lifetime. |
+| `DOWNLOAD_URL_TTL_SECONDS` | `300` | Private URL lifetime, maximum `604_800` (seven days). |
+| `CLEANUP_BATCH_SIZE` | `100` | Default bounded maintenance batch. |
+| `CLEANUP_MIN_AGE_SECONDS` | `3_600` | Default age for expiry/terminal cleanup. |
+| `CLEANUP_LEASE_SECONDS` | `300` | Durable reconciliation worker lease. |
+| `CLEANUP_FAILURE_COOLDOWN_SECONDS` | `60` | Delay before retrying a failed cleanup/finalization. |
+| `TERMINAL_RETENTION_SECONDS` | `86_400` | Retention for terminal intent metadata; must exceed the download URL TTL. |
+| `DELETE_REPLACED_FILES` | `False` | Deletes an old object only after safe exact claim and successful replacement. |
+
+When enabling local replacement deletion, reserve
+`gm-upload-old-claims/` exclusively for GeneralManager. Do not write, sync,
+restore, scan-and-rewrite, or manually clean paths below it while the
+application is running. GeneralManager serializes its own workers with a
+durable cleanup lease and re-verifies moved inode/checksum identities, but
+portable POSIX filesystems have no atomic compare-and-unlink primitive. If
+another process can mutate that namespace, keep `DELETE_REPLACED_FILES=False`.
+
+Reserve `.gm-upload-*` names exclusively for GeneralManager. Local filesystem
+finalization writes a private sibling with that prefix before
+atomically linking the complete file to its final name. Concurrent retries never
+read a partially written final file, and an occupied final name is never
+overwritten. The filesystem must support hard links; publication failures return
+`UPLOAD_STORAGE_ERROR`. Private siblings are removed after publication or a
+write/publication error; a terminated process or a cleanup I/O failure can leave
+a sibling for offline cleanup. Custom filesystem storage must preserve these
+private names when saving; storage that rewrites them needs a custom adapter.
+
+`TERMINAL_RETENTION_SECONDS` is a minimum age, not permission to discard live
+download metadata. A `CONSUMED` intent is retained beyond that age for as long as
+the current model row still references its `final_key`; cleanup deletes it only
+after replacement, explicit clear, or row deletion removes that live binding.
+This preserves exact-version verification for structured downloads.
+
+The default cache backend must implement atomic `add` and `incr`; unsafe
+fallback implementations fail closed with `UPLOAD_STORAGE_ERROR`. Admission is
+also serialized through the upload quota-lock database row. Authentication is
+validated before either global or per-user admission counters are incremented,
+so anonymous traffic cannot consume the authenticated global upload budget.
 
 ## Stable GraphQL error codes
 

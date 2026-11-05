@@ -7,7 +7,10 @@ number is added to or removed from the project's many-to-many relation.
 
 ## Declare the rules
 
-Assume `Customer` and `InvestNumber` are existing ORM-backed managers:
+Assume `Customer` and `InvestNumber` are existing ORM-backed managers and
+`Project` already has `name`, `status`, a `customer` relation, and an
+`invest_numbers` many-to-many relation. Merge the shown `SearchConfig` into that
+manager, preserving its `Interface` and permission policy:
 
 ```python
 from general_manager import (

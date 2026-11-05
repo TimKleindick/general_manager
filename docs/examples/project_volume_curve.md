@@ -2,12 +2,15 @@
 
 This recipe shows how to compute a volume curve for a project by grouping derivative volumes per date.
 
+Prerequisites: an installed `projects` application with database-backed
+`Project` and `Derivative` managers. Add the declaration below after those
+classes in `projects/managers.py`, then run `makemigrations projects` and
+`migrate`. Each Django `ForeignKey` targets the manager's backing model.
+
 ```python
 from datetime import date
 
-from django.db.models import DateField, ForeignKey
-
-from core.managers import Derivative, Project
+from django.db.models import CASCADE, DateField, ForeignKey
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 from general_manager.measurement import Measurement, MeasurementField
@@ -19,11 +22,36 @@ class DerivativeVolume(GeneralManager):
     volume: Measurement
 
     class Interface(DatabaseInterface):
-        project = ForeignKey(Project, on_delete=models.CASCADE)
-        derivative = ForeignKey(Derivative, on_delete=models.CASCADE)
+        project = ForeignKey(Project.Interface._model, on_delete=CASCADE)
+        derivative = ForeignKey(Derivative.Interface._model, on_delete=CASCADE)
         date = DateField()
         volume = MeasurementField(base_unit="kWh")
 ```
+
+## Calculate the curve
+
+```python
+def project_volume_curve(project: Project) -> tuple[tuple[date, Measurement], ...]:
+    grouped = (
+        project.derivative_volume_list
+        .filter(project=project)
+        .group_by("date")
+        .sort("date")
+    )
+    return grouped.values_list("date", "volume")
+```
+
+After creating volume rows through authenticated manager writes or demo
+factories, pass an existing project to the helper:
+
+```python
+# Replace 1 with the ID of a project that has DerivativeVolume rows.
+curve = project_volume_curve(Project(id=1))
+for entry_date, volume in curve:
+    print(entry_date, volume.to("MWh"))
+```
+
+Use this pattern to power charts in dashboards or export data to CSV.
 
 ## Give optional volumes a logical default
 
@@ -53,27 +81,6 @@ Callable defaults are intentionally omitted
 from schema defaults because they are evaluated only during model
 initialization. Partial-update arguments omit defaults: omission preserves the
 stored volume, while explicit `null` clears it when the field is nullable.
-
-```python
-def project_volume_curve(project: Project) -> tuple[tuple[date, Measurement], ...]:
-    grouped = (
-        project.derivative_volume_list
-        .filter(project=project)
-        .group_by("date")
-        .sort("date")
-    )
-    return grouped.values_list("date", "volume")
-```
-
-Result:
-
-```python
-curve = project_volume_curve(Project(id=1))
-for entry_date, volume in curve:
-    print(entry_date, volume.to("MWh"))
-```
-
-Use this pattern to power charts in dashboards or export data to CSV.
 
 ## Project selected fields
 
