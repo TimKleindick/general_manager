@@ -6,10 +6,12 @@ import inspect
 import re
 import textwrap
 from collections.abc import Container, Iterable, Mapping, Sequence, Sized
+from contextvars import ContextVar
 from operator import eq, ge, gt, le, lt, ne
 from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar, cast
 from decimal import Decimal
 from types import CodeType
+from weakref import WeakKeyDictionary
 
 from django.core.exceptions import NON_FIELD_ERRORS
 from django.utils.module_loading import import_string
@@ -48,6 +50,12 @@ _REVERSED_COMPARISON_OPS: dict[type[ast.cmpop], type[ast.cmpop]] = {
     ast.IsNot: ast.IsNot,
 }
 _ERROR_TEMPLATE_PLACEHOLDER = re.compile(r"{([^{}]*)}")
+
+# Copy on write: child asyncio contexts may initially share the same mapping.
+# Weak keys let short-lived rules disappear without retaining their inputs forever.
+_rule_states: ContextVar[
+    WeakKeyDictionary[object, tuple[Optional[bool], object, Dict[str, object]]] | None
+] = ContextVar("rule_states", default=None)
 
 
 class NonexistentAttributeError(AttributeError):
@@ -135,9 +143,6 @@ class Rule(Generic[GeneralManagerType]):
     _func: Callable[[GeneralManagerType], bool]
     _custom_error_message: Optional[str]
     _ignore_if_none: bool
-    _last_result: Optional[bool]
-    _last_input: Optional[GeneralManagerType]
-    _last_args: Dict[str, object]
     _param_names: Tuple[str, ...]
     _primary_param: Optional[str]
     _tree: ast.AST
@@ -162,9 +167,6 @@ class Rule(Generic[GeneralManagerType]):
         self._func = func
         self._custom_error_message = custom_error_message
         self._ignore_if_none = ignore_if_none
-        self._last_result = None
-        self._last_input = None
-        self._last_args = {}
 
         parameters = inspect.signature(func).parameters
         self._param_names = tuple(parameters.keys())
@@ -230,6 +232,49 @@ class Rule(Generic[GeneralManagerType]):
                 "variables": self._variables,
             },
         )
+
+    def _state(self) -> tuple[Optional[bool], object, Dict[str, object]]:
+        states = _rule_states.get()
+        return (
+            states.get(self, (None, None, {}))
+            if states is not None
+            else (None, None, {})
+        )
+
+    def _set_state(
+        self, state: tuple[Optional[bool], object, Dict[str, object]]
+    ) -> None:
+        previous = _rule_states.get()
+        states = previous.copy() if previous is not None else WeakKeyDictionary()
+        states[self] = state
+        _rule_states.set(states)
+
+    @property
+    def _last_result(self) -> Optional[bool]:
+        return self._state()[0]
+
+    @_last_result.setter
+    def _last_result(self, value: Optional[bool]) -> None:
+        _, candidate, args = self._state()
+        self._set_state((value, candidate, args))
+
+    @property
+    def _last_input(self) -> Optional[GeneralManagerType]:
+        return cast(Optional[GeneralManagerType], self._state()[1])
+
+    @_last_input.setter
+    def _last_input(self, value: Optional[GeneralManagerType]) -> None:
+        result, _, args = self._state()
+        self._set_state((result, value, args))
+
+    @property
+    def _last_args(self) -> Dict[str, object]:
+        return self._state()[2]
+
+    @_last_args.setter
+    def _last_args(self, value: Dict[str, object]) -> None:
+        result, candidate, _ = self._state()
+        self._set_state((result, candidate, value))
 
     @property
     def func(self) -> Callable[[GeneralManagerType], bool]:
@@ -454,11 +499,9 @@ class Rule(Generic[GeneralManagerType]):
         Returns:
             `True` if the predicate evaluates to true, `False` if it evaluates to false, `None` if evaluation was skipped because a referenced value was `None` and `ignore_if_none` is enabled.
         """
-        self._last_result = None
-        self._last_input = x
-        self._last_args = {}
-        if self._primary_param is not None:
-            self._last_args[self._primary_param] = x
+        self._set_state(
+            (None, x, {self._primary_param: x} if self._primary_param else {})
+        )
 
         logger.debug(
             "evaluating rule",
@@ -483,8 +526,9 @@ class Rule(Generic[GeneralManagerType]):
             )
             return None
 
-        self._last_result = self._func(x)
-        if self._last_result:
+        result = self._func(x)
+        self._last_result = result
+        if result:
             logger.debug(
                 "rule evaluation passed",
                 context={
@@ -501,7 +545,7 @@ class Rule(Generic[GeneralManagerType]):
                     "variables": self._variables,
                 },
             )
-        return self._last_result
+        return result
 
     def _parse_custom_error_paths(self) -> dict[str, tuple[str, ...]]:
         """Parse and validate placeholder syntax in the custom error message."""
