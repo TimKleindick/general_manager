@@ -81,11 +81,13 @@ def test_evaluation_context_does_not_keep_short_lived_rules_alive():
     import weakref
 
     rule = Rule(candidate_is_valid)
-    candidate = SimpleNamespace(amount=1)
+
+    class Candidate:
+        amount = 1
+
+    candidate = Candidate()
     rule_ref = weakref.ref(rule)
-    candidate_ref = (
-        weakref.ref(candidate) if hasattr(candidate, "__weakref__") else None
-    )
+    candidate_ref = weakref.ref(candidate)
     assert rule.evaluate(candidate) is True
     del rule
     gc.collect()
