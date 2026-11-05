@@ -182,3 +182,11 @@ non-empty string `function_name`, and returning a `dict[str, str]` from
 `handle()`. The `rule` argument provides helper methods used by built-in handlers:
 `_get_node_name(node) -> str`, `_eval_node(node) -> object | None`, and
 `_get_op_symbol(op) -> str`.
+
+### Concurrent evaluations
+
+A rule's last evaluation result and input, and the context used by
+`get_error_message()`, are local to the current execution context. Concurrent
+threads and asynchronous tasks can evaluate the same rule without replacing
+one another's validation context. Call `get_error_message()` in the same
+execution context as the corresponding evaluation.
