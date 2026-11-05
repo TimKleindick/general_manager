@@ -11,6 +11,7 @@ from operator import eq, ge, gt, le, lt, ne
 from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar, cast
 from decimal import Decimal
 from types import CodeType
+from threading import RLock
 from weakref import WeakKeyDictionary
 
 from django.core.exceptions import NON_FIELD_ERRORS
@@ -51,11 +52,16 @@ _REVERSED_COMPARISON_OPS: dict[type[ast.cmpop], type[ast.cmpop]] = {
 }
 _ERROR_TEMPLATE_PLACEHOLDER = re.compile(r"{([^{}]*)}")
 
-# Copy on write: child asyncio contexts may initially share the same mapping.
-# Weak keys let short-lived rules disappear without retaining their inputs forever.
-_rule_states: ContextVar[
-    WeakKeyDictionary[object, tuple[Optional[bool], object, Dict[str, object]]] | None
-] = ContextVar("rule_states", default=None)
+
+class _EvaluationToken:
+    """Identify one immutable evaluation state within an execution context."""
+
+
+# Values contain no candidate or rule references, so a context cannot root a
+# dynamic rule/class graph. Sharding limits copy-on-write to one rule bucket.
+_rule_tokens: tuple[
+    ContextVar[WeakKeyDictionary[object, _EvaluationToken] | None], ...
+] = tuple(ContextVar(f"rule_tokens_{index}", default=None) for index in range(64))
 
 
 class NonexistentAttributeError(AttributeError):
@@ -167,6 +173,10 @@ class Rule(Generic[GeneralManagerType]):
         self._func = func
         self._custom_error_message = custom_error_message
         self._ignore_if_none = ignore_if_none
+        self._evaluation_states: WeakKeyDictionary[
+            _EvaluationToken, tuple[Optional[bool], object, Dict[str, object]]
+        ] = WeakKeyDictionary()
+        self._evaluation_lock = RLock()
 
         parameters = inspect.signature(func).parameters
         self._param_names = tuple(parameters.keys())
@@ -234,23 +244,31 @@ class Rule(Generic[GeneralManagerType]):
         )
 
     def _state(self) -> tuple[Optional[bool], object, Dict[str, object]]:
-        states = _rule_states.get()
-        return (
-            states.get(self, (None, None, {}))
-            if states is not None
-            else (None, None, {})
-        )
+        """Read the last state for this rule in the current context."""
+        token_context = _rule_tokens[hash(self) % len(_rule_tokens)]
+        tokens = token_context.get()
+        token = tokens.get(self) if tokens is not None else None
+        if token is None:
+            return (None, None, {})
+        with self._evaluation_lock:
+            return self._evaluation_states.get(token, (None, None, {}))
 
     def _set_state(
         self, state: tuple[Optional[bool], object, Dict[str, object]]
     ) -> None:
-        previous = _rule_states.get()
-        states = previous.copy() if previous is not None else WeakKeyDictionary()
-        states[self] = state
-        _rule_states.set(states)
+        """Publish a new state without modifying inherited task contexts."""
+        token_context = _rule_tokens[hash(self) % len(_rule_tokens)]
+        previous = token_context.get()
+        tokens = previous.copy() if previous is not None else WeakKeyDictionary()
+        token = _EvaluationToken()
+        with self._evaluation_lock:
+            self._evaluation_states[token] = state
+        tokens[self] = token
+        token_context.set(tokens)
 
     @property
     def _last_result(self) -> Optional[bool]:
+        """Return the result in the current execution context."""
         return self._state()[0]
 
     @_last_result.setter
@@ -260,10 +278,12 @@ class Rule(Generic[GeneralManagerType]):
 
     @property
     def _last_input(self) -> Optional[GeneralManagerType]:
+        """Return the input in the current execution context."""
         return cast(Optional[GeneralManagerType], self._state()[1])
 
     @property
     def _last_args(self) -> Dict[str, object]:
+        """Return the arguments in the current execution context."""
         return self._state()[2]
 
     @property
