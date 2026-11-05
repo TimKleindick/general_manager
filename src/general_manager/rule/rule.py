@@ -262,19 +262,9 @@ class Rule(Generic[GeneralManagerType]):
     def _last_input(self) -> Optional[GeneralManagerType]:
         return cast(Optional[GeneralManagerType], self._state()[1])
 
-    @_last_input.setter
-    def _last_input(self, value: Optional[GeneralManagerType]) -> None:
-        result, _, args = self._state()
-        self._set_state((result, value, args))
-
     @property
     def _last_args(self) -> Dict[str, object]:
         return self._state()[2]
-
-    @_last_args.setter
-    def _last_args(self, value: Dict[str, object]) -> None:
-        result, candidate, _ = self._state()
-        self._set_state((result, candidate, value))
 
     @property
     def func(self) -> Callable[[GeneralManagerType], bool]:
