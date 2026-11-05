@@ -455,7 +455,12 @@ def test_publish_workflow_runs_every_exact_sha_through_quality_and_release() -> 
     assert workflow["on"] == {"push": {"branches": ["main"]}}
     assert workflow["permissions"] == {"contents": "read"}
     assert "concurrency" not in workflow
-    assert set(workflow["jobs"]) == {"quality", "artifact", "release"}
+    assert set(workflow["jobs"]) == {
+        "quality",
+        "artifact",
+        "release",
+        "verify-publication",
+    }
     assert workflow["jobs"]["quality"] == {"uses": "./.github/workflows/quality.yml"}
     assert workflow["jobs"]["artifact"]["needs"] == "quality"
     assert workflow["jobs"]["release"]["needs"] == "artifact"
@@ -668,11 +673,28 @@ fi"""
     steps = cast(list[dict[str, Any]], job["steps"])
     pre_upload = step_by_id(job, "verify_pypi_before")
     publish = step_by_id(job, "publish_pypi")
-    post_upload = step_by_id(job, "verify_pypi_after")
+    verification_job = workflow["jobs"]["verify-publication"]
+    post_upload = step_by_id(verification_job, "verify_pypi_after")
     assert steps.index(final_release) < steps.index(verify)
     assert steps.index(verify) < steps.index(pre_upload)
     assert steps.index(pre_upload) < steps.index(publish)
-    assert steps.index(publish) < steps.index(post_upload)
+    assert "verify_pypi_after" not in [step.get("id") for step in steps]
+    assert verification_job["needs"] == ["artifact", "release"]
+    assert verification_job["if"] == "${{ needs.artifact.outputs.released == 'true' }}"
+    assert verification_job["runs-on"] == "ubuntu-latest"
+    assert verification_job["permissions"] == {"contents": "read"}
+    assert action_step(verification_job, "actions/setup-python@v5")["with"] == {
+        "python-version": "3.12"
+    }
+    assert action_step(verification_job, "actions/checkout@v4")["with"] == {
+        "ref": "${{ github.sha }}",
+        "persist-credentials": "false",
+    }
+    assert action_step(verification_job, "actions/download-artifact@v4")["with"] == {
+        "name": "validated-distributions-${{ github.sha }}",
+        "path": "validated-dist",
+    }
+    assert len(verification_job["steps"]) == 4
 
     assert pre_upload["env"] == {
         "EXPECTED_VERSION": "${{ needs.artifact.outputs.version }}"
@@ -688,9 +710,9 @@ fi"""
     assert str(post_upload["run"]).strip() == (
         "python scripts/verify_pypi_artifacts.py "
         'GeneralManager "$EXPECTED_VERSION" validated-dist --require-all'
-        " --wait-seconds 60"
+        " --wait-seconds 900"
     )
-    assert post_upload["timeout-minutes"] == "2"
+    assert post_upload["timeout-minutes"] == "17"
     assert not post_upload.get("continue-on-error", False)
     assert "twine upload dist/*" not in commands
     assert "semantic-release changelog" not in commands

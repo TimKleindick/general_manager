@@ -344,6 +344,22 @@ def test_waits_only_for_valid_delayed_visibility(
     assert "Verified 2 PyPI artifacts" in output
 
 
+def test_wait_accepts_release_after_the_previous_60_second_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checksums = _write_dist(tmp_path)
+    clock = FakeClock(monkeypatch)
+    timeouts = _install_sequence(
+        monkeypatch, [_http_error(404)] * 15 + [_remote_payload(checksums)]
+    )
+
+    _verifier()("GeneralManager", "1.2.3", tmp_path, require_all=True, wait_seconds=900)
+
+    assert clock.now == 75
+    assert len(timeouts) == 16
+    assert clock.sleeps == [5] * 15
+
+
 @pytest.mark.parametrize("not_found", [False, True])
 def test_missing_files_fail_at_visibility_deadline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, not_found: bool
