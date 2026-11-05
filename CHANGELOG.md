@@ -2,6 +2,54 @@
 
 <!-- version list -->
 
+## v0.87.5 (2026-11-05)
+
+### Bug Fixes
+
+- Isolate concurrent rule evaluation state
+  ([`740d4ee`](https://github.com/TimKleindick/general_manager/commit/740d4eee1ae68152c2ffdf9985c132002661749a))
+
+- Isolate concurrent rule evaluation state
+  ([`85fb681`](https://github.com/TimKleindick/general_manager/commit/85fb681b7ee4ccbda37d3f57e7983ff60dd69dc6))
+
+- Release rule state with dynamic classes
+  ([`82676c9`](https://github.com/TimKleindick/general_manager/commit/82676c9cd1397dcb47ef1b6b7d4ee5640d795dba))
+
+### Documentation
+
+- Align calculation resolver docstring with authorization flow
+  ([`f767ef2`](https://github.com/TimKleindick/general_manager/commit/f767ef2e25e247d8745d5d6cd630d917f999fe20))
+
+- Clarify chained query annotation callback errors
+  ([`df0cb9b`](https://github.com/TimKleindick/general_manager/commit/df0cb9bbc14ce7c287ce87cb0386b351c08a74c6))
+
+- Clarify historical property subclass support
+  ([`d02eeb4`](https://github.com/TimKleindick/general_manager/commit/d02eeb4d76516b52319074b684879635abe322ed))
+
+- Correct calculation filter authorization order
+  ([`4938a1d`](https://github.com/TimKleindick/general_manager/commit/4938a1de14d639d017ddac6405fbd50520c1948d))
+
+- Distinguish property and grouping field arguments
+  ([`99878da`](https://github.com/TimKleindick/general_manager/commit/99878da418849b8f5aa692bd11d199b3d91f8615))
+
+- Distinguish request-backed filter authorization
+  ([`817a2c6`](https://github.com/TimKleindick/general_manager/commit/817a2c656024d83fcee5951b9f16bee67caa7e74))
+
+- Explain GraphQL property list shapes
+  ([`0a68b2b`](https://github.com/TimKleindick/general_manager/commit/0a68b2bf545d516430981822cc5cf68c2d6872aa))
+
+- Explain GraphQL query annotations and calculation limits
+  ([`ec6a4d7`](https://github.com/TimKleindick/general_manager/commit/ec6a4d7b5715f41fa53923d324877a3bd1be5d75))
+
+- Explain historical manager queries
+  ([`02b56e2`](https://github.com/TimKleindick/general_manager/commit/02b56e2290d18452e189f5945e307bde3b7529b6))
+
+### Refactoring
+
+- Remove unused rule state setters
+  ([`ae84267`](https://github.com/TimKleindick/general_manager/commit/ae84267c0ad7840236b31ccf95d0dbe8bd032102))
+
+
 ## v0.87.4 (2026-10-30)
 
 ### Bug Fixes
