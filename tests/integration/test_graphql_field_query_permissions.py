@@ -8,7 +8,11 @@ from django.db.models import CharField, ForeignKey, CASCADE
 from unittest.mock import patch, MagicMock
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from general_manager.api.graphql_resolvers import create_list_resolver
+from general_manager.api.graphql_resolvers import (
+    apply_read_authorization,
+    create_list_resolver,
+)
+from general_manager.api.graphql_errors import get_read_permission_filter
 from general_manager.api.graphql_query_permissions import authorize_query_fields
 from graphql import GraphQLError
 from general_manager.api.graphql import GraphQL
@@ -21,7 +25,14 @@ from general_manager.search.projection import (
 )
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.permission import OverrideManagerPermission
+from general_manager.permission import (
+    AdditiveManagerPermission,
+    OverrideManagerPermission,
+)
+from general_manager.permission.permission_checks import (
+    permission_functions,
+    register_permission,
+)
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
 
@@ -128,6 +139,117 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
         )
         assert result.errors is None
         assert result.data["confidentialEntryList"]["pageInfo"]["totalCount"] == 1
+
+    def test_prefilter_only_plan_does_not_prove_native_field_read(self):
+        """A stable registry snapshot cannot prove filter/predicate equivalence."""
+        user = get_user_model().objects.create_user(username="native-proof-gap")
+        entry = self.Entry.create(name="visible", secret="hidden", creator_id=user.id)
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        original = permission_functions["public"]
+        # The mutation precedes planning and consumption; no stale-request cache
+        # is involved. Keep the native filter, but replace its predicate.
+        with patch.dict(
+            permission_functions,
+            {
+                "public": {
+                    "permission_method": lambda *_: False,
+                    "permission_filter": original["permission_filter"],
+                }
+            },
+        ):
+            plan = get_read_permission_filter(self.Entry, info)
+            assert plan.decision == "allow_all"
+            assert plan.requires_instance_check is False
+            result = apply_read_authorization(
+                self.Entry.all(), self.Entry, info, source="list"
+            )
+            assert result.requires_instance_check is False
+            assert [row.id for row in result.queryset] == [entry.id]
+            assert self.Entry.Permission(entry, user).can_read_instance() is False
+            assert (
+                self.Entry.Permission(entry, user).check_permission("read", "name")
+                is False
+            )
+            with self.assertRaisesMessage(
+                GraphQLError, "Permission denied to use query field"
+            ):
+                authorize_query_fields(result.queryset, info, {"name"})
+
+    def test_native_matches_prefilter_coercion_cannot_grant_query_field_read(self):
+        """Native SQL coercion is not the native string-comparison predicate."""
+        user = get_user_model().objects.create_user(username="matches-proof-gap")
+        entry = self.Entry.create(name="visible", secret="hidden", creator_id=user.id)
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        with patch.object(
+            self.Entry.Permission, "__read__", [f"matches:id:0{entry.id}"]
+        ):
+            result = apply_read_authorization(
+                self.Entry.all(), self.Entry, info, source="list"
+            )
+            assert result.requires_instance_check is False
+            assert [row.id for row in result.queryset] == [entry.id]
+            assert self.Entry.Permission(entry, user).can_read_instance() is False
+            with self.assertRaisesMessage(
+                GraphQLError, "Permission denied to use query field"
+            ):
+                authorize_query_fields(result.queryset, info, {"name"})
+
+    def test_backend_operand_checks_denied_aliases_before_filter_exclude_and_sort(self):
+        """Every owning alias remains a gate even for nonmatching predicates."""
+        user = get_user_model().objects.create_user(username="backend-alias-gates")
+        entry = self.Entry.create(name="visible", secret="hidden", creator_id=user.id)
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        assert self.Entry.Permission(entry, user).check_permission("read", "name")
+        assert not self.Entry.Permission(entry, user).check_permission("read", "secret")
+        metadata = self.Entry.Interface.get_attribute_types()
+        metadata = {
+            **metadata,
+            "secret": {**metadata["secret"], "filter_lookup": "name"},
+        }
+        resolver = create_list_resolver(lambda *_: self.Entry.all(), self.Entry)
+        with patch.object(
+            self.Entry.Interface, "get_attribute_types", return_value=metadata
+        ):
+            for arguments in (
+                {"filter": {"name": "visible"}},
+                {"filter": {"name": "absent"}},
+                {"filter": {"name__exact": "visible"}},
+                {"filter": {"name__exact": "absent"}},
+                {"exclude": {"name": "visible"}},
+                {"exclude": {"name": "absent"}},
+                {"order_by": [{"field": "name", "direction": "ASC"}]},
+                {"order_by": [{"field": "name", "direction": "DESC"}]},
+            ):
+                with self.subTest(arguments=arguments):
+                    with self.assertRaisesMessage(
+                        GraphQLError, "Permission denied to use query field 'name'"
+                    ):
+                        resolver(None, info, page_size=1, **arguments)
+
+    def test_generated_foreign_key_id_alias_checks_native_owner_before_count(self):
+        """The genuine ORM attname does not borrow the owning field's grant."""
+        user = get_user_model().objects.create_user(username="native-fk-alias-gates")
+        entry = self.Entry.create(name="visible", secret="hidden", creator_id=user.id)
+        link = self.Link.create(name="link", entry=entry, creator_id=user.id)
+        permission = self.Link.Permission(link, user)
+        assert permission.check_permission("read", "entry_id") is True
+        assert permission.check_permission("read", "entry") is False
+        metadata = self.Link.Interface.get_attribute_types()
+        assert metadata["entry_id"]["filter_lookup"] == "entry_id"
+        assert metadata["entry"]["filter_lookup"] == "entry"
+        schema = graphene.Schema(query=GraphQL._query_class)
+        for identifier in (entry.id, entry.id + 1):
+            with self.subTest(identifier=identifier):
+                result = schema.execute(
+                    "{ confidentialLinkList(filter: {entryId_Exact: "
+                    + str(identifier)
+                    + "}) { pageInfo { totalCount } } }",
+                    context_value=SimpleNamespace(user=user),
+                )
+                assert result.errors
+                assert "Permission denied to use query field 'entry_id'" in str(
+                    result.errors
+                )
 
     def test_order_and_exclude_rejected_before_value_dependent_result(self):
         user = get_user_model().objects.create_user(username="ordering")
@@ -612,3 +734,169 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
                     ["members__name"],
                     native_paths=True,
                 )
+
+
+class TestNativeAdditiveQueryProofBoundary(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Use the proposed native Additive scope without field read rules."""
+
+        registry_patch = patch.dict(permission_functions)
+        registry_patch.start()
+        cls.addClassCleanup(registry_patch.stop)
+
+        def visible_name_filter(_user, _config):
+            return {"filter": {"name": "visible"}}
+
+        @register_permission("nativeProofDenied", permission_filter=visible_name_filter)
+        def deny_native_proof(_instance, _user, _config):
+            return False
+
+        class AdditiveProofEntry(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+
+            class Permission(AdditiveManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
+        class AdditiveRegisteredProofEntry(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+
+            class Permission(AdditiveManagerPermission):
+                __read__: ClassVar[list[str]] = ["nativeProofDenied"]
+
+        class AdditiveMatchesProofEntry(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = CharField(max_length=100)
+
+            class Permission(AdditiveManagerPermission):
+                __read__: ClassVar[list[str]] = ["matches:id:0123"]
+
+        cls.Entry = AdditiveProofEntry
+        cls.RegisteredEntry = AdditiveRegisteredProofEntry
+        cls.MatchesEntry = AdditiveMatchesProofEntry
+        cls.general_manager_classes = [
+            AdditiveProofEntry,
+            AdditiveRegisteredProofEntry,
+            AdditiveMatchesProofEntry,
+        ]
+
+    def _assert_native_additive_scope(self, entry, user):
+        owner = type(entry)
+        permission_class = owner.Permission
+        assert permission_class.__init__ is AdditiveManagerPermission.__init__
+        assert (
+            permission_class.can_read_instance
+            is AdditiveManagerPermission.can_read_instance
+        )
+        assert (
+            permission_class.check_permission
+            is AdditiveManagerPermission.check_permission
+        )
+        assert (
+            permission_class._evaluate_local_permission
+            is AdditiveManagerPermission._evaluate_local_permission
+        )
+        permission = permission_class(entry, user)
+        assert permission.__based_on__ is None
+        for field in owner.Interface.get_attribute_types():
+            assert permission._get_attribute_permission_expressions("read", field) == (
+                [],
+                False,
+            )
+
+    def _assert_graphql_counts_reject_hits_and_nonhits(
+        self, user, list_field="additiveProofEntryList"
+    ):
+        schema = graphene.Schema(query=GraphQL._query_class)
+        for name in ("visible", "absent"):
+            with self.subTest(name=name):
+                result = schema.execute(
+                    "{ "
+                    + list_field
+                    + '(filter: {name: "'
+                    + name
+                    + '"}) { pageInfo { totalCount } } }',
+                    context_value=SimpleNamespace(user=user),
+                )
+                assert result.errors
+                assert "Permission denied to use query field 'name'" in str(
+                    result.errors
+                )
+
+    def test_native_additive_public_counts_preserve_hits_and_nonhits(self):
+        user = get_user_model().objects.create_user(username="additive-public-count")
+        entry = self.Entry.create(name="visible", creator_id=user.id)
+        self._assert_native_additive_scope(entry, user)
+        schema = graphene.Schema(query=GraphQL._query_class)
+        for name, expected_count in (("visible", 1), ("absent", 0)):
+            with self.subTest(name=name):
+                result = schema.execute(
+                    '{ additiveProofEntryList(filter: {name: "'
+                    + name
+                    + '"}) { pageInfo { totalCount } } }',
+                    context_value=SimpleNamespace(user=user),
+                )
+                assert result.errors is None
+                assert (
+                    result.data["additiveProofEntryList"]["pageInfo"]["totalCount"]
+                    == expected_count
+                )
+
+    def test_native_additive_prefilter_only_plan_does_not_prove_field_read(self):
+        user = get_user_model().objects.create_user(username="additive-registry-gap")
+        entry = self.Entry.create(name="visible", creator_id=user.id)
+        self._assert_native_additive_scope(entry, user)
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        original = permission_functions["public"]
+        with patch.dict(
+            permission_functions,
+            {
+                "public": {
+                    "permission_method": lambda *_: False,
+                    "permission_filter": original["permission_filter"],
+                }
+            },
+        ):
+            result = apply_read_authorization(
+                self.Entry.all(), self.Entry, info, source="list"
+            )
+            assert result.requires_instance_check is False
+            assert [row.id for row in result.queryset] == [entry.id]
+            assert self.Entry.Permission(entry, user).can_read_instance() is False
+            self._assert_graphql_counts_reject_hits_and_nonhits(user)
+
+    def test_native_additive_matches_coercion_does_not_grant_field_read(self):
+        user = get_user_model().objects.create_user(username="additive-matches-gap")
+        self.MatchesEntry.Interface._model.objects.create(id=123, name="visible")
+        entry = self.MatchesEntry(123)
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        self._assert_native_additive_scope(entry, user)
+        result = apply_read_authorization(
+            self.MatchesEntry.all(), self.MatchesEntry, info, source="list"
+        )
+        assert result.requires_instance_check is False
+        assert [row.id for row in result.queryset] == [entry.id]
+        assert self.MatchesEntry.Permission(entry, user).can_read_instance() is False
+        self._assert_graphql_counts_reject_hits_and_nonhits(
+            user, "additiveMatchesProofEntryList"
+        )
+
+    def test_registered_conditional_additive_filter_does_not_prove_field_read(self):
+        user = get_user_model().objects.create_user(username="additive-registered-gap")
+        entry = self.RegisteredEntry.create(name="visible", creator_id=user.id)
+        self._assert_native_additive_scope(entry, user)
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        plan = get_read_permission_filter(self.RegisteredEntry, info)
+        assert plan.decision == "conditional"
+        assert plan.requires_instance_check is False
+        result = apply_read_authorization(
+            self.RegisteredEntry.all(), self.RegisteredEntry, info, source="list"
+        )
+        assert result.requires_instance_check is False
+        assert [row.id for row in result.queryset] == [entry.id]
+        assert self.RegisteredEntry.Permission(entry, user).can_read_instance() is False
+        self._assert_graphql_counts_reject_hits_and_nonhits(
+            user, "additiveRegisteredProofEntryList"
+        )
