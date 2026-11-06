@@ -1,5 +1,6 @@
 # ruff: noqa: S106
-from typing import ClassVar
+from typing import Annotated, Any, ClassVar, Literal
+from uuid import UUID
 from types import SimpleNamespace
 import graphene
 from django.contrib.auth import get_user_model
@@ -11,7 +12,13 @@ from general_manager.api.graphql_resolvers import create_list_resolver
 from general_manager.api.graphql_query_permissions import authorize_query_fields
 from graphql import GraphQLError
 from general_manager.api.graphql import GraphQL
-from general_manager.search.config import IndexConfig
+from general_manager.api.property import GraphQLProperty
+from general_manager.bucket.request_bucket import RequestBucket
+from general_manager.search.config import IndexConfig, SearchConfigSpec
+from general_manager.search.projection import (
+    projection_source_paths,
+    validate_source_paths,
+)
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.permission import OverrideManagerPermission
@@ -272,3 +279,213 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
             self.assertTrue(can_read_class_for_user(self.Entry, user))
             user.user_permissions.remove(permission)
             self.assertFalse(can_read_class_for_user(self.Entry, user))
+
+    def test_projection_source_paths_are_exact_on_empty_candidate_scopes(self):
+        for path in [
+            "missing",
+            "name__in",
+            "entry__missing",
+            "entry__name__in",
+            "entry",
+        ]:
+            with self.subTest(path=path):
+                with self.assertRaisesMessage(ValueError, "source path"):
+                    validate_source_paths(self.Link, [path])
+        validate_source_paths(self.Link, ["entry__contains", "entry__id"])
+
+    def test_projection_relation_dependencies_use_native_field_and_row_gates(self):
+        user = get_user_model().objects.create_user(username="projection-relations")
+        entry = self.Entry.create(name="entry", secret="hidden", creator_id=user.id)
+        link = self.Link.create(name="link", entry=entry, creator_id=user.id)
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        config = SearchConfigSpec(
+            indexes=(IndexConfig(name="global", fields=["snippet"]),),
+            to_document=lambda item: {"snippet": item.entry.secret},
+            field_dependencies={"snippet": ("entry__secret",)},
+        )
+        paths = projection_source_paths(self.Link, config, ["snippet"])
+        with self.assertRaisesMessage(GraphQLError, "query field 'entry'"):
+            authorize_query_fields([link], info, paths, native_paths=True)
+        native = self.Link.Permission.check_permission
+
+        def allow_relation(permission, action, field):
+            return True if field == "entry" else native(permission, action, field)
+
+        with patch.object(self.Link.Permission, "check_permission", allow_relation):
+            with self.assertRaisesMessage(GraphQLError, "query field 'secret'"):
+                authorize_query_fields([link], info, paths, native_paths=True)
+            authorize_query_fields([link], info, ["entry__name"], native_paths=True)
+            with patch.object(
+                self.Entry.Permission, "can_read_instance", return_value=False
+            ):
+                with self.assertRaisesMessage(GraphQLError, "traverse query relation"):
+                    authorize_query_fields(
+                        [link], info, ["entry__name"], native_paths=True
+                    )
+            with self.assertRaisesMessage(GraphQLError, "query field 'contains'"):
+                authorize_query_fields(
+                    [link], info, ["entry__contains"], native_paths=True
+                )
+
+    def test_projection_native_source_names_ignore_backend_filter_aliases(self):
+        user = get_user_model().objects.create_user(username="projection-names")
+        entry = self.Entry.create(name="entry", secret="hidden", creator_id=user.id)
+        metadata = self.Entry.Interface.get_attribute_types()
+        metadata = {
+            **metadata,
+            "secret": {**metadata["secret"], "filter_lookup": "name"},
+        }
+        with patch.object(
+            self.Entry.Interface, "get_attribute_types", return_value=metadata
+        ):
+            validate_source_paths(self.Entry, ["name"])
+            authorize_query_fields(
+                [entry],
+                SimpleNamespace(context=SimpleNamespace(user=user)),
+                ["name"],
+                native_paths=True,
+            )
+
+    def test_projection_rejects_unknown_and_ambiguous_leaf_types_without_rows(self):
+        metadata = self.Link.Interface.get_attribute_types()
+        for annotation in (
+            None,
+            Any,
+            object,
+            self.Entry | self.Link,
+            list[self.Entry | self.Link],
+        ):
+            with self.subTest(annotation=annotation):
+                with patch.object(
+                    self.Link.Interface,
+                    "get_attribute_types",
+                    return_value={**metadata, "entry": {"type": annotation}},
+                ):
+                    with self.assertRaisesMessage(ValueError, "source path"):
+                        validate_source_paths(self.Link, ["entry"])
+        with patch.object(
+            self.Link.Interface,
+            "get_attribute_types",
+            return_value={
+                key: value for key, value in metadata.items() if key != "entry"
+            },
+        ):
+            with self.assertRaisesMessage(ValueError, "source path"):
+                validate_source_paths(self.Link, ["entry"])
+
+    def test_projection_accepts_proven_scalar_container_annotations(self):
+        metadata = self.Entry.Interface.get_attribute_types()
+        for annotation in (
+            int | str,
+            str | None,
+            UUID,
+            list[str | None],
+            tuple[int, ...],
+            Annotated[list[str], "native values"],
+            dict[str, list[int]],
+            Literal["open", 3],
+        ):
+            with self.subTest(annotation=annotation):
+                with patch.object(
+                    self.Entry.Interface,
+                    "get_attribute_types",
+                    return_value={**metadata, "name": {"type": annotation}},
+                ):
+                    validate_source_paths(self.Entry, ["name"])
+
+    def test_projection_scalar_id_name_does_not_inherit_another_relation_gate(self):
+        user = get_user_model().objects.create_user(username="scalar-id-source")
+        entry = self.Entry.create(name="entry", secret="hidden", creator_id=user.id)
+        metadata = self.Entry.Interface.get_attribute_types()
+        metadata = {
+            **metadata,
+            "subject": {"type": self.Link, "relation_kind": "direct"},
+            "subject_id": {"type": int},
+        }
+        native = self.Entry.Permission.check_permission
+
+        def permission(rule, action, field):
+            return False if field == "subject" else native(rule, action, field)
+
+        with (
+            patch.object(
+                self.Entry.Interface, "get_attribute_types", return_value=metadata
+            ),
+            patch.object(self.Entry.Permission, "check_permission", permission),
+        ):
+            validate_source_paths(self.Entry, ["subject_id"])
+            authorize_query_fields(
+                [entry],
+                SimpleNamespace(context=SimpleNamespace(user=user)),
+                ["subject_id"],
+                native_paths=True,
+            )
+
+    def test_projection_native_foreign_key_alias_still_checks_owning_relation(self):
+        user = get_user_model().objects.create_user(username="native-fk-source")
+        entry = self.Entry.create(name="entry", secret="hidden", creator_id=user.id)
+        link = self.Link.create(name="link", entry=entry, creator_id=user.id)
+        validate_source_paths(self.Link, ["entry_id"])
+        with self.assertRaisesMessage(GraphQLError, "query field 'entry_id'"):
+            authorize_query_fields(
+                [link],
+                SimpleNamespace(context=SimpleNamespace(user=user)),
+                ["entry_id"],
+                native_paths=True,
+            )
+
+    def test_projection_collection_sources_check_every_member(self):
+        user = get_user_model().objects.create_user(username="projection-members")
+        first = self.Entry.create(name="first", secret="one", creator_id=user.id)
+        second = self.Entry.create(name="second", secret="two", creator_id=user.id)
+        link = self.Link.create(name="link", entry=first, creator_id=user.id)
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+
+        def members(_instance):
+            return [first, second]
+
+        members.__annotations__["return"] = list[self.Entry]
+        descriptor = GraphQLProperty(members, cache="none")
+        descriptor.__set_name__(self.Link, "members")
+        with patch.object(self.Link, "members", descriptor, create=True):
+            validate_source_paths(self.Link, ["members__name"])
+            authorize_query_fields([link], info, ["members__name"], native_paths=True)
+            native = self.Entry.Permission.check_permission
+
+            def conditional(permission, action, field):
+                return permission.instance.id != second.id and native(
+                    permission, action, field
+                )
+
+            with patch.object(self.Entry.Permission, "check_permission", conditional):
+                with self.assertRaisesMessage(GraphQLError, "query field 'name'"):
+                    authorize_query_fields(
+                        [link], info, ["members__name"], native_paths=True
+                    )
+
+    def test_projection_rejects_incomplete_nested_source_bucket(self):
+        user = get_user_model().objects.create_user(username="projection-page")
+        entry = self.Entry.create(name="entry", secret="hidden", creator_id=user.id)
+        link = self.Link.create(name="link", entry=entry, creator_id=user.id)
+        partial = RequestBucket(
+            self.Entry,
+            self.Entry.Interface,
+            items=(entry,),
+            response_is_complete=False,
+        )
+
+        def members(_instance):
+            return partial
+
+        members.__annotations__["return"] = list[self.Entry]
+        descriptor = GraphQLProperty(members, cache="none")
+        descriptor.__set_name__(self.Link, "members")
+        with patch.object(self.Link, "members", descriptor, create=True):
+            validate_source_paths(self.Link, ["members__name"])
+            with self.assertRaisesMessage(GraphQLError, "complete candidate set"):
+                authorize_query_fields(
+                    [link],
+                    SimpleNamespace(context=SimpleNamespace(user=user)),
+                    ["members__name"],
+                    native_paths=True,
+                )

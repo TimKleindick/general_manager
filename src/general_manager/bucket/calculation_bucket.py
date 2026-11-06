@@ -1588,6 +1588,30 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         own._allowed_identifications = []
         return own
 
+    def filter_instances(
+        self,
+        instances: Iterable[GeneralManagerType],
+    ) -> Bucket[GeneralManagerType]:
+        """Apply this plan to exact instances without enumerating or rebuilding.
+
+        Reuse Input normalization, manager lookups and atomic exclusion groups
+        when filtering a previously authorized snapshot. Order, duplicates and
+        manager identity are retained; this method does not authorize reads.
+        """
+        snapshot = self.with_instances(instances)
+        return snapshot.with_instances(
+            instance
+            for instance in snapshot
+            if all(
+                self._matches_call_group(instance, group)
+                for group in self._parsed_filter_call_groups
+            )
+            and not any(
+                self._matches_call_group(instance, group)
+                for group in self._parsed_exclude_call_groups
+            )
+        )
+
     def with_instances(
         self,
         instances: Iterable[GeneralManagerType],

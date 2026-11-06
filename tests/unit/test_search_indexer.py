@@ -254,6 +254,42 @@ class SearchIndexerTests(SimpleTestCase):
 
         assert document.data["name"] is None
 
+    def test_declared_projection_rejects_undeclared_native_fallback(self) -> None:
+        with (
+            patch.object(
+                Project.SearchConfig,
+                "field_dependencies",
+                {"name": ("name",), "status": ("name",)},
+                create=True,
+            ),
+            patch.object(
+                Project.SearchConfig,
+                "to_document",
+                staticmethod(lambda instance: {"name": instance.name}),
+            ),
+        ):
+            with pytest.raises(ValueError, match=r"fallback.*status"):
+                SearchIndexer(DevSearchBackend()).index_instance(Project(id=1))
+
+    def test_declared_projection_preserves_covered_native_fallback(self) -> None:
+        backend = DevSearchBackend()
+        with (
+            patch.object(
+                Project.SearchConfig,
+                "field_dependencies",
+                {"name": ("name",), "status": ("status",)},
+                create=True,
+            ),
+            patch.object(
+                Project.SearchConfig,
+                "to_document",
+                staticmethod(lambda instance: {"name": instance.name}),
+            ),
+        ):
+            SearchIndexer(backend).index_instance(Project(id=1))
+        hit = backend.search("global", "Alpha").hits[0]
+        assert hit.data == {"name": "Alpha", "status": "public"}
+
     def test_indexer_delete_instance(self) -> None:
         """
         Verifies that deleting a previously indexed instance removes it from the search index.

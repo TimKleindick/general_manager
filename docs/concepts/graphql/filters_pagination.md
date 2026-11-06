@@ -38,27 +38,30 @@ Nested relation filters are normalized before they reach the bucket. Relation
 dictionary key named `none` at any depth under `exclude`, including a top-level
 `none` key, raises
 `UnsupportedExcludeNoneRelationFilterError` because the resolver cannot invert
-that relation shape safely. For non-calculation, non-request lists, permission filters and
-any required per-instance row gate run before user filters. Calculation lists
-also apply permission filtering and the row gate first. When query operands
-are present, they freeze the authorized rows as an exact subset before applying
-predicates rooted at declared calculation inputs, then computed-property
-predicates. User input filters therefore cannot replace permission constraints
-and reintroduce unauthorized candidates. Computed-property predicates are
-evaluated only after per-instance authorization; declared-input predicates do
-not reduce the candidate set before that authorization step.
+that relation shape safely. For non-calculation, non-request lists, permission
+filters and any required row gate run before user filters.
 
-The resolver parses and normalizes all query arguments before authorization. For
-non-calculation, non-request lists, permission prefilters and the row gate run first, then
-normalized positive filter predicates, explicit excludes, and the accumulated
-relation-derived exclusions from both inputs. For calculation lists, that
-predicate order is preserved within two phases after row authorization:
-declared-input predicates first, then deferred computed-property predicates.
-Grouping, sorting, total-count calculation, and pagination follow both predicate
-phases. Filter
-normalizers receive the parsed object mapping for the current `filter` or
-`exclude` input and must return both `filter` and `exclude` mappings; missing
-keys propagate the resulting Python `KeyError`.
+Calculation lists first apply safe constructor constraints: direct scalar Input
+values/comparisons and confirmed manager identity exact/in predicates. For
+example, a requested project ID and date range constrain construction before
+any unbounded enumeration. Replaced/custom input getters, arbitrary related
+fields and computed properties remain deferred. The scoped combinations are
+frozen before permission constraints, so a permission filter on the same input
+cannot replace the client's requested domain. Static deny-all never evaluates
+the domain.
+
+After row authorization, **all** query operands are checked against the
+row-visible scope before deferred predicates read values. Exclusion mappings
+remain atomic: `exclude(A, B)` means `NOT(A AND B)`. A mixed constructor/result
+exclusion stays entirely deferred, rather than excluding each part separately.
+Deferred input values retain native Input normalization and are evaluated over
+the exact authorized instances. Grouping, sorting, totals and pagination follow.
+
+The resolver parses and normalizes query arguments before these stages.
+Positive filters, explicit excludes and accumulated relation-derived excludes
+retain their order within each stage. Filter normalizers receive the parsed
+mapping for `filter` or `exclude` and must return both `filter` and `exclude`
+mappings; missing keys propagate `KeyError`.
 
 Request-backed lists follow a separate path. Unless the permission plan denies
 all rows, user predicates are applied to the base request bucket before that

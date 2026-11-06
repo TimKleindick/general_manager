@@ -84,7 +84,7 @@ related invalidation. `SearchConfigSpec.to_document`
 receives the manager instance and returns a mapping of document field names to
 payload values. `SearchConfigSpec.indexes` is required when constructing the
 spec directly. `resolve_search_config()` copies `indexes`, `document_id`,
-`type_label`, `to_document`, `update_strategy`, and `invalidation_rules`
+`type_label`, `to_document`, `field_dependencies`, `update_strategy`, and `invalidation_rules`
 attributes from arbitrary config objects; missing `indexes` and
 `invalidation_rules` attributes become empty tuples and missing optional
 attributes become `None`. It does not validate that callable attributes
@@ -92,6 +92,31 @@ are callable or that every `indexes` entry is an `IndexConfig`; invalid values
 fail later when the registry or indexer uses them. Attribute access errors from
 unusual config objects propagate. `iter_index_names()` returns a concrete list
 of names, or an empty list for `None`.
+
+`SearchConfigSpec.field_dependencies` defaults to `None`. A custom projector may
+opt in to GraphQL search with a `Mapping[str, tuple[str, ...]]` from document
+field names to complete native source paths. Sequence values are copied to
+owned tuples and the mapping becomes read-only. Invalid declarations raise
+`SearchProjectionError` (`ValueError`) from `general_manager.search.projection`.
+A declaration requires `to_document`; unknown configured keys, empty paths and
+bare strings as dependency sequences are rejected. Every serialized field of
+the selected index needs an entry. Source paths use exact native names, without
+query lookup suffixes; `owner__contains` denotes an actual field called
+`contains`. Paths terminate at scalar values, so manager membership dependencies
+must explicitly name their identity field, such as `suppliers__id`.
+Leaf annotations must establish a supported scalar or a typed list, tuple, set,
+frozenset or dict of scalars. Primitive strings/numbers/booleans, Decimal, date/time/timedelta, UUID,
+bytes and Measurement are supported, including optional/union, Annotated and
+Literal wrappers. Untyped accessors, Any, object, unparameterized containers and
+ambiguous manager unions are rejected; an opaque type does not inherit the
+legacy GraphQL mapper's String fallback.
+
+The complete declaration is an assertion by trusted application code, not
+runtime access tracing. Each path is validated even for empty/null domains and
+all used native fields are authorized on all row-visible candidates before a
+backend request. Omitted projector keys retain native extraction only when the
+same native field path is explicitly declared. See the [migration
+example](../howto/search.md#authorize-custom-document-projections).
 
 ::: general_manager.search.registry.SearchIndexSettings
 

@@ -491,28 +491,41 @@ class GraphQLHelperTests(SimpleTestCase):
 
         normalizer.assert_not_called()
 
-    def test_partition_calculation_query_plan_separates_inputs_and_properties(
-        self,
-    ) -> None:
-        input_plan, deferred_plan = partition_calculation_query_plan(
+    def test_partition_calculation_query_plan_preserves_mixed_exclusion_groups(self):
+        scope, deferred = partition_calculation_query_plan(
             _CalculationManager,
             QueryParameterPlan(
-                filters={"subject__id": 7, "result__gte": 10},
-                excludes={"subject__id": 7, "result__gte": 10},
-                normalized_excludes={"subject__id": 7, "result__gte": 10},
+                filters={"subject__gte": 7, "result__gte": 10},
+                excludes={"subject": 7, "result__gte": 10},
+                normalized_excludes={"period": "2026", "result": 5},
             ),
         )
+        assert scope == QueryParameterPlan({"subject__gte": 7}, {}, {})
+        assert deferred == QueryParameterPlan(
+            {"result__gte": 10},
+            {"subject": 7, "result__gte": 10},
+            {"period": "2026", "result": 5},
+        )
 
-        assert input_plan == QueryParameterPlan(
-            filters={"subject__id": 7},
-            excludes={"subject__id": 7},
-            normalized_excludes={"subject__id": 7},
+    def test_partition_calculation_query_plan_defers_scalar_traversal(self):
+        scope, deferred = partition_calculation_query_plan(
+            _CalculationManager, QueryParameterPlan({"subject__id": 7}, {}, {})
         )
-        assert deferred_plan == QueryParameterPlan(
-            filters={"result__gte": 10},
-            excludes={"result__gte": 10},
-            normalized_excludes={"result__gte": 10},
-        )
+        assert scope.filters == {}
+        assert deferred.filters == {"subject__id": 7}
+
+    def test_partition_calculation_query_plan_defers_replaced_input_getters(self):
+        def unexpected_getter(_instance):
+            pytest.fail("metadata classification must not invoke a getter")
+
+        with mock.patch.object(
+            _CalculationManager, "subject", property(unexpected_getter)
+        ):
+            scope, deferred = partition_calculation_query_plan(
+                _CalculationManager, QueryParameterPlan({"subject": 7}, {}, {})
+            )
+        assert scope.filters == {}
+        assert deferred.filters == {"subject": 7}
 
     def test_partition_calculation_query_plan_rejects_unknown_roots_in_all_mappings(
         self,

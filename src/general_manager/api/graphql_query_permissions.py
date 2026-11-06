@@ -52,12 +52,18 @@ _LOOKUPS = {
 
 
 def authorize_query_fields(
-    candidates: Iterable[GeneralManager], info: ResolveInfo, paths: Iterable[str]
+    candidates: Iterable[GeneralManager],
+    info: ResolveInfo,
+    paths: Iterable[str],
+    *,
+    native_paths: bool = False,
 ) -> None:
     """Check all operands against every row-visible candidate, never just hits.
 
     Related rows require their own row permission as well as field permission.
     Failure leaves the original candidate set unchanged and rejects the query.
+    ``native_paths`` checks exact projection sources without backend aliases or
+    lookup operators. Callers validate those paths statically before iteration.
     """
     from general_manager.api.graphql_relations import (
         resolve_general_manager_type,
@@ -86,15 +92,21 @@ def authorize_query_fields(
         field, *rest = parts
         attributes = instance.Interface.get_attribute_types()
         # Backend collection lookup names can differ from public manager names.
-        aliases = [
-            name
-            for name, metadata in attributes.items()
-            if metadata.get("filter_lookup", name) == field
-        ]
+        aliases = (
+            []
+            if native_paths
+            else [
+                name
+                for name, metadata in attributes.items()
+                if metadata.get("filter_lookup", name) == field
+            ]
+        )
         names = set(aliases or [field])
         for name in tuple(names):
-            relation = relation_id_alias_field(type(instance), name)
-            if relation is None and name.endswith("_id"):
+            relation = relation_id_alias_field(
+                type(instance), name, native_source=native_paths
+            )
+            if not native_paths and relation is None and name.endswith("_id"):
                 alias = name.removesuffix("_id")
                 metadata: dict[str, object] = dict(attributes.get(alias, {}))
                 if (
@@ -109,6 +121,7 @@ def authorize_query_fields(
         known_fields = set(attributes) | set(instance.identification)
         known_fields.update(instance.Interface.get_graph_ql_properties())
         known_fields.update(instance.Interface.get_attributes())
+        known_fields.update(instance.Interface.input_fields)
         if not names.intersection(known_fields):
             raise QueryFieldPermissionError(field)
         if any(not check_read_permission(instance, info, name) for name in names):
@@ -120,8 +133,14 @@ def authorize_query_fields(
         field_metadata: dict[str, object] = dict(
             attributes.get(aliases[0] if aliases else field, {})
         )
+        if native_paths:
+            from general_manager.search.projection import source_field_annotation
+
+            _, annotation = source_field_annotation(type(instance), field)
+            field_metadata["type"] = annotation
         if (
-            len(rest) == 1
+            not native_paths
+            and len(rest) == 1
             and rest[0] in _LOOKUPS
             and (
                 (field.endswith("_id") and len(names) > 1)
@@ -140,7 +159,12 @@ def authorize_query_fields(
         related_type = resolve_general_manager_type(
             field_metadata.get("type"), get_graphql_manager_registry()
         )
-        if len(rest) == 1 and rest[0] in _LOOKUPS and related_type is not None:
+        if (
+            not native_paths
+            and len(rest) == 1
+            and rest[0] in _LOOKUPS
+            and related_type is not None
+        ):
             related_fields = set(related_type.Interface.get_attribute_types())
             related_fields.update(related_type.Interface.get_attributes())
             related_fields.update(related_type.Interface.get_graph_ql_properties())
@@ -154,12 +178,24 @@ def authorize_query_fields(
             if not isinstance(member, GeneralManager):
                 # A lookup is an operator only after resolving its preceding
                 # scalar field. A relation's field named "contains" is a field.
-                if len(rest) == 1 and rest[0] in _LOOKUPS:
+                if not native_paths and len(rest) == 1 and rest[0] in _LOOKUPS:
                     continue
+                raise GraphQLError(_RELATION_ERROR)
+            if (
+                native_paths
+                and related_type is not None
+                and not isinstance(member, related_type)
+            ):
                 raise GraphQLError(_RELATION_ERROR)
             if not can_read_instance(member, info):
                 raise GraphQLError(_RELATION_ERROR)
             check(member, tuple(rest))
+        if (
+            native_paths
+            and isinstance(related, RequestBucket)
+            and not related.response_is_complete
+        ):
+            raise GraphQLError(INCOMPLETE_ERROR)
 
     for candidate in candidates:
         for normalized_parts in sorted(normalized):

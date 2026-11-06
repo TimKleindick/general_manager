@@ -164,7 +164,8 @@ def build_search_schema_fingerprint(
     The fingerprint includes the manager import path, index fields, filters,
     sorts, boosts, min score, resolved identity kinds and transport version,
     type label, update strategy, and import-like paths
-    for custom `document_id` and `to_document` callables. It returns a SHA-256
+    for custom `document_id` and `to_document` callables, plus canonical
+    projection permission dependencies. It returns a SHA-256
     hex digest. Field order follows `index_config.iter_fields()`, filters and
     sorts keep configured order, duplicate entries remain in the payload, and
     JSON object keys are sorted before hashing. Callable paths use
@@ -194,6 +195,11 @@ def build_search_schema_fingerprint(
         if config
         else [],
     }
+    if config is not None and config.field_dependencies is not None:
+        payload["field_dependencies"] = {
+            name: sorted(set(paths))
+            for name, paths in config.field_dependencies.items()
+        }
     identities = get_search_identity_fields(manager_class, index_config)
     if identities:
         payload["identity_transport"] = {

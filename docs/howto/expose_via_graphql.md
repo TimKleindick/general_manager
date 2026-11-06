@@ -222,9 +222,10 @@ model it through an appropriate database-backed interface. Automatically
 translating arbitrary calculation getters or input combinations into SQL is
 not provided by `query_annotation`.
 
-In generated GraphQL calculation lists, row authorization runs before
-declared-input predicates, and computed-property predicates run afterward.
-Sorting and pagination follow filtering. Keep that authorization order when designing
+Generated GraphQL calculation lists bind safe constructor values and manager
+identity predicates before freezing the requested combinations. Row and operand
+authorization then precede related-field and computed-result predicates.
+Sorting and pagination follow filtering. Keep those boundaries when designing
 custom resolvers; see [permission-aware calculation
 filtering](../concepts/graphql/filters_pagination.md#query-arguments).
 
