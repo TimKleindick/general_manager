@@ -91,7 +91,6 @@ class Project(GeneralManager):
         def to_document(instance: "Project") -> dict:
             return {
                 "name": instance.name,
-                "status": instance.status,
             }
 ```
 

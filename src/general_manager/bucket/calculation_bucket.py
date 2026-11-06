@@ -834,23 +834,65 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                     if not filter_func(value):
                         return False
             for lookup, expected in definitions.get("filter_kwargs", {}).items():
-                identification = getattr(value, "identification", None)
-                lookup_parts = lookup.split("__") if lookup else []
-                if (
-                    isinstance(identification, dict)
-                    and lookup_parts
-                    and lookup_parts[0] in identification
-                ):
-                    candidate = identification[lookup_parts[0]]
-                    matcher = create_filter_function(
-                        "__".join(lookup_parts[1:]), expected
-                    )
-                else:
-                    candidate = value
-                    matcher = create_filter_function(lookup, expected)
-                if not matcher(candidate):
+                if not self._matches_manager_lookup(value, lookup, expected):
                     return False
         return True
+
+    @staticmethod
+    def _matches_manager_lookup(value: object, lookup: str, expected: object) -> bool:
+        """Resolve declared fields before interpreting a trailing scalar lookup."""
+        from general_manager.api.graphql_value_contract import _manager_source
+        from general_manager.manager.general_manager import GeneralManager
+
+        parts = lookup.split("__") if lookup else []
+        candidate = value
+        scalar_input: Input[type[object]] | None = None
+        operator = ""
+        for position, part in enumerate(parts):
+            if not isinstance(candidate, GeneralManager):
+                operator = "__".join(parts[position:])
+                break
+            interface = candidate.Interface
+            get_attribute_types = getattr(interface, "get_attribute_types", None)
+            attributes = get_attribute_types() if callable(get_attribute_types) else {}
+            get_properties = getattr(interface, "get_graph_ql_properties", None)
+            properties = get_properties() if callable(get_properties) else {}
+            inputs = getattr(interface, "input_fields", {})
+            identification = candidate.identification
+            if part not in attributes and part not in properties and part not in inputs:
+                if part not in identification:
+                    operator = "__".join(parts[position:])
+                    break
+            field_type = attributes.get(part, {}).get("type")
+            input_field = inputs.get(part)
+            if input_field is not None and not (
+                input_field.is_manager or input_field.is_collection
+            ):
+                scalar_input = input_field
+            elif isinstance(field_type, type) and not issubclass(
+                field_type, GeneralManager
+            ):
+                scalar_input = Input(field_type)
+            else:
+                scalar_input = None
+            if part in identification and _manager_source(type(candidate), part):
+                # Preserve native constructor identities only while their actual
+                # getter still has the common source. Replaced getters are values.
+                candidate = identification[part]
+            else:
+                try:
+                    candidate = getattr(candidate, part)
+                except AttributeError:
+                    return False
+
+        if scalar_input is not None:
+            if isinstance(expected, (list, tuple)) and not isinstance(
+                expected, scalar_input.type
+            ):
+                expected = [scalar_input.cast(item) for item in expected]
+            else:
+                expected = scalar_input.cast(expected)
+        return create_filter_function(operator, expected)(candidate)
 
     def _apply_call_groups(
         self,

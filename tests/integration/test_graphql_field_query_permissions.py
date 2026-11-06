@@ -28,6 +28,8 @@ from general_manager.utils.testing import GeneralManagerTransactionTestCase
 class TestFieldInference(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls):
+        """Register real ORM sources with separate owner, field and target gates."""
+
         class ConfidentialEntry(GeneralManager):
             class SearchConfig:
                 indexes: ClassVar[list] = [
@@ -60,8 +62,40 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
                 __read__: ClassVar[list[str]] = ["public"]
                 entry: ClassVar[dict] = {"read": ["isAdmin"]}
 
+        class ConfidentialReference(GeneralManager):
+            class SearchConfig:
+                indexes: ClassVar[list] = [
+                    IndexConfig(
+                        name="global",
+                        fields=["reference"],
+                        filters=["reference"],
+                        identity_fields={"reference": int},
+                    )
+                ]
+                field_dependencies: ClassVar[dict] = {"reference": ("entry_id",)}
+
+                @staticmethod
+                def to_document(instance):
+                    return {"reference": instance.entry_id}
+
+            class Interface(DatabaseInterface):
+                entry = ForeignKey(
+                    "general_manager.ConfidentialEntry",
+                    on_delete=CASCADE,
+                    null=True,
+                    blank=True,
+                )
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
         cls.Link = ConfidentialLink
-        cls.general_manager_classes = [ConfidentialEntry, ConfidentialLink]
+        cls.Reference = ConfidentialReference
+        cls.general_manager_classes = [
+            ConfidentialEntry,
+            ConfidentialLink,
+            ConfidentialReference,
+        ]
         cls.Entry = ConfidentialEntry
 
     def test_filter_reveals_secret_while_field_denied(self):
@@ -281,6 +315,7 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
             self.assertFalse(can_read_class_for_user(self.Entry, user))
 
     def test_projection_source_paths_are_exact_on_empty_candidate_scopes(self):
+        """Static source proof rejects lookup syntax even without candidate rows."""
         for path in [
             "missing",
             "name__in",
@@ -294,6 +329,7 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
         validate_source_paths(self.Link, ["entry__contains", "entry__id"])
 
     def test_projection_relation_dependencies_use_native_field_and_row_gates(self):
+        """Every relation hop and terminal field needs its native read permission."""
         user = get_user_model().objects.create_user(username="projection-relations")
         entry = self.Entry.create(name="entry", secret="hidden", creator_id=user.id)
         link = self.Link.create(name="link", entry=entry, creator_id=user.id)
@@ -309,6 +345,7 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
         native = self.Link.Permission.check_permission
 
         def allow_relation(permission, action, field):
+            """Open only the owner hop so target-field denial stays observable."""
             return True if field == "entry" else native(permission, action, field)
 
         with patch.object(self.Link.Permission, "check_permission", allow_relation):
@@ -347,6 +384,7 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
             )
 
     def test_projection_rejects_unknown_and_ambiguous_leaf_types_without_rows(self):
+        """Opaque annotations cannot establish scalar projection provenance."""
         metadata = self.Link.Interface.get_attribute_types()
         for annotation in (
             None,
@@ -374,6 +412,7 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
                 validate_source_paths(self.Link, ["entry"])
 
     def test_projection_accepts_proven_scalar_container_annotations(self):
+        """Typed scalar containers remain valid sources without instance reads."""
         metadata = self.Entry.Interface.get_attribute_types()
         for annotation in (
             int | str,
@@ -394,6 +433,7 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
                     validate_source_paths(self.Entry, ["name"])
 
     def test_projection_scalar_id_name_does_not_inherit_another_relation_gate(self):
+        """A genuine scalar name ending in _id is independent of another relation."""
         user = get_user_model().objects.create_user(username="scalar-id-source")
         entry = self.Entry.create(name="entry", secret="hidden", creator_id=user.id)
         metadata = self.Entry.Interface.get_attribute_types()
@@ -405,6 +445,7 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
         native = self.Entry.Permission.check_permission
 
         def permission(rule, action, field):
+            """Deny the unrelated hop while retaining the real scalar's rules."""
             return False if field == "subject" else native(rule, action, field)
 
         with (
@@ -434,7 +475,88 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
                 native_paths=True,
             )
 
+    def test_projection_native_foreign_key_requires_referenced_row_and_field(self):
+        """An attname source has the same target gates as its explicit ID path."""
+        user = get_user_model().objects.create_user(username="native-fk-target")
+        entry = self.Entry.create(name="entry", secret="hidden", creator_id=user.id)
+        reference = self.Reference.create(entry=entry, creator_id=user.id)
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        validate_source_paths(self.Reference, ["entry_id"])
+        authorize_query_fields([reference], info, ["entry_id"], native_paths=True)
+        with patch.object(
+            self.Entry.Permission, "can_read_instance", return_value=False
+        ):
+            with self.assertRaisesMessage(GraphQLError, "traverse query relation"):
+                authorize_query_fields(
+                    [reference], info, ["entry_id"], native_paths=True
+                )
+        native = self.Entry.Permission.check_permission
+
+        def deny_id(permission, action, field):
+            """Deny the referenced identity independently of its row permission."""
+            return False if field == "id" else native(permission, action, field)
+
+        with patch.object(self.Entry.Permission, "check_permission", deny_id):
+            with self.assertRaisesMessage(GraphQLError, "query field 'id'"):
+                authorize_query_fields(
+                    [reference], info, ["entry_id"], native_paths=True
+                )
+
+    def test_projection_native_foreign_key_denies_hits_and_nonhits_before_search(self):
+        """A projected FK cannot disclose a denied target through search counts."""
+        from general_manager.search.backend_registry import (
+            configure_search_backend,
+            get_search_backend,
+        )
+        from general_manager.search.backends.dev import DevSearchBackend
+        from general_manager.search.indexer import SearchIndexer
+
+        user = get_user_model().objects.create_user(username="native-fk-search")
+        entry = self.Entry.create(name="entry", secret="hidden", creator_id=user.id)
+        reference = self.Reference.create(entry=entry, creator_id=user.id)
+        previous_backend = get_search_backend()
+        backend = DevSearchBackend()
+        configure_search_backend(backend)
+        self.addCleanup(configure_search_backend, previous_backend)
+        SearchIndexer(backend).index_instance(reference)
+        schema = graphene.Schema(query=GraphQL._query_class)
+        query = '{ search(query: "", types: ["ConfidentialReference"]) { total } }'
+        result = schema.execute(query, context_value=SimpleNamespace(user=user))
+        assert result.errors is None, result.errors
+        assert result.data["search"]["total"] == 1
+        with (
+            patch.object(
+                self.Entry.Permission, "can_read_instance", return_value=False
+            ),
+            patch.object(backend, "search", wraps=backend.search) as search,
+        ):
+            for value in (entry.id, entry.id + 100):
+                with self.subTest(value=value):
+                    result = schema.execute(
+                        '{ search(query: "", types: ["ConfidentialReference"], '
+                        f'filters: "{{\\"reference\\": {value}}}") {{ total }} }}',
+                        context_value=SimpleNamespace(user=user),
+                    )
+                    assert result.errors
+                    assert "traverse query relation" in str(result.errors)
+            search.assert_not_called()
+
+    def test_projection_null_native_foreign_key_does_not_traverse_a_target(self):
+        """An absent target needs no row decision or target getter access."""
+        user = get_user_model().objects.create_user(username="native-fk-null")
+        reference = self.Reference.create(entry=None, creator_id=user.id)
+        with patch.object(
+            self.Entry.Permission, "can_read_instance", return_value=False
+        ):
+            authorize_query_fields(
+                [reference],
+                SimpleNamespace(context=SimpleNamespace(user=user)),
+                ["entry_id"],
+                native_paths=True,
+            )
+
     def test_projection_collection_sources_check_every_member(self):
+        """Collection dependency checks include every member, including nonhits."""
         user = get_user_model().objects.create_user(username="projection-members")
         first = self.Entry.create(name="first", secret="one", creator_id=user.id)
         second = self.Entry.create(name="second", secret="two", creator_id=user.id)
@@ -453,6 +575,7 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
             native = self.Entry.Permission.check_permission
 
             def conditional(permission, action, field):
+                """Deny one member without changing the owner's readable relation."""
                 return permission.instance.id != second.id and native(
                     permission, action, field
                 )

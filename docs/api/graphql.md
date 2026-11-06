@@ -706,7 +706,10 @@ does not reduce the pre-page permission workload.
 filter/exclude call groups to exact supplied manager instances. It retains Input
 normalization, order, duplicates and object identity, and does not enumerate
 constructor domains or rebuild managers. It returns an exact `Bucket` and does
-not authorize access; GraphQL uses it only after operand and row checks.
+not authorize access. For an existing snapshot, GraphQL uses it to apply proven
+constructor constraints before permission checks. Permission prefilters retain
+the same native Input normalization on the frozen scope. Deferred result and
+related-field predicates run through it after operand and row checks.
 
 The [calculation concept guide](../concepts/interfaces/computed_data_interfaces.md#iterating-combinations)
 explains the model, the [task guide](../howto/expose_via_graphql.md#filter-calculation-managers-by-manager-input)

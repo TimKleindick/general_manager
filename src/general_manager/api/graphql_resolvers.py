@@ -310,6 +310,7 @@ def partition_calculation_query_plan(
     known_names = set(input_fields) | computed_names
 
     def is_constructor_constraint(lookup: str) -> bool:
+        """Require an input's native getter before allowing early restriction."""
         root, *suffix = lookup.split("__")
         if root not in known_names and root.endswith("_id"):
             alias = root.removesuffix("_id")
@@ -338,6 +339,7 @@ def partition_calculation_query_plan(
     def partition_mapping(
         mapping: GraphQLFilterMapping, *, atomic: bool = False
     ) -> tuple[GraphQLFilterMapping, GraphQLFilterMapping]:
+        """Move only proven constraints, preserving each exclusion conjunction."""
         safe = {lookup: is_constructor_constraint(lookup) for lookup in mapping}
         if atomic and not all(safe.values()):
             return {}, dict(mapping)
@@ -606,12 +608,19 @@ def prepare_read_authorization(
     info: ReadPermissionInfo,
     *,
     permission_plan: ReadPermissionPlan | None = None,
+    constraint_applier: Callable[
+        [Bucket[GeneralManagerT], GraphQLFilterMapping, GraphQLFilterMapping],
+        Bucket[GeneralManagerT],
+    ]
+    | None = None,
 ) -> ReadAuthorizationPreparation[GeneralManagerT]:
     """Apply only permission pushdowns, leaving any row gate for the caller.
 
     Request-backed resolvers use this seam to compile permission filters into
     their final upstream query before reading response provenance. Callers must
     subsequently pass the preparation through ``finalize_read_authorization``.
+    A constraint applier retains native predicate semantics for exact snapshots;
+    this helper still owns permission alternatives and the final row-gate plan.
     """
     permission_plan = permission_plan or get_read_permission_filter(
         general_manager_class, info
@@ -659,6 +668,8 @@ def prepare_read_authorization(
             exclude_dict = permission_filter.get("exclude", {})
             if not filter_dict and not exclude_dict:
                 qs_perm = queryset
+            elif constraint_applier is not None:
+                qs_perm = constraint_applier(queryset, filter_dict, exclude_dict)
             else:
                 qs_perm = queryset.filter(**filter_dict).exclude(**exclude_dict)
             filtered_queryset = (
@@ -1796,8 +1807,30 @@ def create_list_resolver(
                 # Freeze the requested constructor combinations before permission
                 # filters can replace the same input keys during enumeration.
                 base_queryset = base_queryset.with_instances(base_queryset)
+
+            def apply_calculation_permission_constraints(
+                candidates: Bucket[GeneralManager],
+                filters: GraphQLFilterMapping,
+                excludes: GraphQLFilterMapping,
+            ) -> Bucket[GeneralManager]:
+                """Apply native calculation predicates to the frozen candidates."""
+                constraints = (
+                    CalculationBucket(manager_class)
+                    .filter(**filters)
+                    .exclude(**excludes)
+                )
+                return constraints.filter_instances(candidates)
+
             preparation = prepare_read_authorization(
-                base_queryset, manager_class, info, permission_plan=permission_plan
+                base_queryset,
+                manager_class,
+                info,
+                permission_plan=permission_plan,
+                constraint_applier=(
+                    apply_calculation_permission_constraints
+                    if not isinstance(base_queryset, CalculationBucket)
+                    else None
+                ),
             )
             authorization_result = finalize_read_authorization(
                 preparation, manager_class, info, source="list"

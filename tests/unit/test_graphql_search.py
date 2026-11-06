@@ -193,6 +193,7 @@ class BestEffortTotalSearchBackend(CountingDevSearchBackend):
 
 class GraphQLSearchTests(SimpleTestCase):
     def _install_declared_projection(self, dependencies=None, *, fields=None):
+        """Install a real alias projection and index the two canonical fixtures."""
         indexes = [
             IndexConfig(
                 name="global",
@@ -232,22 +233,65 @@ class GraphQLSearchTests(SimpleTestCase):
         return backend
 
     def test_declared_projection_searches_aliases_filters_and_sorts(self) -> None:
-        self._install_declared_projection()
-        schema = graphene.Schema(
-            query=type("ProjectionQuery", (graphene.ObjectType,), GraphQL._query_fields)
-        )
-        result = schema.execute(
-            '{ search(query: "Alpha", types: ["Project"], '
-            'filters: "{\\"label__in\\": [\\"published\\"]}", '
-            "orderBy: [{field: sortName, direction: ASC}]) "
-            "{ total results { ... on ProjectType { name status } } } }",
-            context_value=SimpleNamespace(user=AnonymousUser()),
-        )
+        """Projection filters remove a visible match and order the retained matches."""
+        with patch.object(
+            ProjectInterface,
+            "data_store",
+            {
+                1: {"name": "Alpha", "status": "public"},
+                2: {"name": "Beta", "status": "public"},
+                3: {"name": "Gamma", "status": "public"},
+            },
+        ):
+            backend = self._install_declared_projection(
+                {
+                    "title": ("name",),
+                    "snippet": ("name", "status"),
+                    "label": ("name",),
+                    "sort_name": ("name",),
+                }
+            )
+            with patch.object(
+                Project.SearchConfig,
+                "to_document",
+                staticmethod(
+                    lambda instance: {
+                        "title": "shared",
+                        "snippet": instance.name,
+                        "label": "drop" if instance.name == "Beta" else "keep",
+                        "sort_name": {"Alpha": "z", "Beta": "m", "Gamma": "a"}[
+                            instance.name
+                        ],
+                    }
+                ),
+            ):
+                indexer = SearchIndexer(backend)
+                for identifier in (1, 2, 3):
+                    indexer.index_instance(Project(id=identifier))
+                schema = graphene.Schema(
+                    query=type(
+                        "ProjectionQuery", (graphene.ObjectType,), GraphQL._query_fields
+                    )
+                )
+                result = schema.execute(
+                    '{ search(query: "shared", types: ["Project"], '
+                    'filters: "{\\"label__in\\": [\\"keep\\"]}", '
+                    "orderBy: [{field: sortName, direction: ASC}]) "
+                    "{ total results { ... on ProjectType { name status } } } }",
+                    context_value=SimpleNamespace(user=AnonymousUser()),
+                )
         assert result.errors is None, result.errors
         assert result.data["search"] == {
-            "total": 1,
-            "results": [{"name": "Alpha", "status": "public"}],
+            "total": 2,
+            "results": [
+                {"name": "Gamma", "status": "public"},
+                {"name": "Alpha", "status": "public"},
+            ],
         }
+        assert backend.search_calls
+        assert all(
+            call["kwargs"]["sort"] == ("sort_name",) for call in backend.search_calls
+        )
 
     def test_declared_projection_uses_native_permissions_before_backend(self) -> None:
         backend = self._install_declared_projection()
@@ -292,6 +336,7 @@ class GraphQLSearchTests(SimpleTestCase):
             )
 
     def test_declared_projection_does_not_push_native_permission_filters(self) -> None:
+        """Native source prefilters cannot be sent to transformed document aliases."""
         self._install_declared_projection()
         result = GraphQL._query_fields["search"].resolver(
             None,
@@ -407,6 +452,7 @@ class GraphQLSearchTests(SimpleTestCase):
         assert backend.search_calls == []
 
     def test_projection_preserves_nested_document_identity_filter_names(self) -> None:
+        """Declared identity aliases keep their complete document lookup names."""
         index = IndexConfig(
             name="global",
             fields=["title"],

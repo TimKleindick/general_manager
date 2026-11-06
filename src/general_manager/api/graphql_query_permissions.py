@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from graphql import GraphQLError
 
@@ -85,6 +85,7 @@ def authorize_query_fields(
     decisions = 0
 
     def check(instance: GeneralManager, parts: tuple[str, ...]) -> None:
+        """Authorize one exact operand path, charging each visited field decision."""
         nonlocal decisions
         decisions += 1
         if decisions > MAX_QUERY_PERMISSION_CANDIDATES:
@@ -102,6 +103,7 @@ def authorize_query_fields(
             ]
         )
         names = set(aliases or [field])
+        native_relations = set()
         for name in tuple(names):
             relation = relation_id_alias_field(
                 type(instance), name, native_source=native_paths
@@ -118,6 +120,8 @@ def authorize_query_fields(
                     relation = alias
             if relation is not None:
                 names.add(relation)
+                if native_paths:
+                    native_relations.add(relation)
         known_fields = set(attributes) | set(instance.identification)
         known_fields.update(instance.Interface.get_graph_ql_properties())
         known_fields.update(instance.Interface.get_attributes())
@@ -126,6 +130,33 @@ def authorize_query_fields(
             raise QueryFieldPermissionError(field)
         if any(not check_read_permission(instance, info, name) for name in names):
             raise QueryFieldPermissionError(field)
+        for relation in sorted(native_relations):
+            # An ORM attname is a scalar spelling of a related field. Give it
+            # the same target row/leaf gates as an explicit relation path.
+            value = getattr(instance, relation)
+            if value is None:
+                continue
+            related_type = resolve_general_manager_type(
+                attributes[relation].get("type"), get_graphql_manager_registry()
+            )
+            if (
+                not isinstance(value, GeneralManager)
+                or related_type is None
+                or not isinstance(value, related_type)
+                or not can_read_instance(value, info)
+            ):
+                raise GraphQLError(_RELATION_ERROR)
+            from django.db import models
+            from general_manager.interface.orm_interface import OrmInterfaceBase
+
+            orm_interface = cast(
+                type[OrmInterfaceBase[models.Model]], instance.Interface
+            )
+            foreign_key = orm_interface._model._meta.get_field(relation)
+            target_field = getattr(foreign_key, "target_field", None)
+            if not isinstance(target_field, models.Field):
+                raise GraphQLError(_RELATION_ERROR)
+            check(value, ("id" if target_field.primary_key else target_field.name,))
         if not rest:
             return
         if len(aliases) > 1:

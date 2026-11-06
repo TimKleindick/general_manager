@@ -42,8 +42,11 @@ transport types independently.
 
 The declaration is trusted application configuration. GeneralManager validates
 names and relation paths, then checks native field and related-row permissions
-before searching. It cannot prove that arbitrary Python projector code declared
-all its reads. Review the projector and declaration together. Unknown paths,
+before searching. Native foreign-key sources such as `entry_id` also require
+the referenced row and target identity field to be readable, just like
+`entry__id`; a null reference has no target row to check. It cannot prove that
+arbitrary Python projector code declared all its reads. Review the projector
+and declaration together. Unknown paths,
 missing keys, empty dependency sequences and undeclared native fallback reads
 fail closed. Even an empty candidate set does not excuse an invalid source path.
 An unchanged custom projector without a declaration remains unavailable to
