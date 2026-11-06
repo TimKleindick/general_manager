@@ -691,6 +691,39 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         assert len(result) == 2
         assert result[0] is calculation and result[1] is calculation
 
+    def test_snapshot_identity_membership_retains_native_container_grammar(self):
+        """Membership containers remain containers during related scalar casting."""
+        calculation = self.Calculation(
+            subject=self.subject.id, period=date(2026, 2, 28)
+        )
+        identifier = self.subject.id
+        for values in ([identifier], {identifier}, range(identifier, identifier + 1)):
+            with self.subTest(container=type(values).__name__):
+                predicate = CalculationBucket(self.Calculation).filter(
+                    subject__id__in=values
+                )
+                native = (
+                    self.Calculation.filter(
+                        subject__id__in=values, period__gte=date(2026, 2, 1)
+                    )
+                    .filter(subject__id__in=[identifier])
+                    .exclude(period=date(2026, 4, 30))
+                )
+                assert [item.period for item in native] == [
+                    date(2026, 2, 28),
+                    date(2026, 3, 31),
+                ]
+                selected = list(predicate.filter_instances([calculation, calculation]))
+                assert len(selected) == 2
+                assert selected[0] is calculation and selected[1] is calculation
+
+        for value in (identifier, str(identifier)):
+            with self.subTest(noncontainer=value):
+                predicate = CalculationBucket(self.Calculation).filter(
+                    subject__id__in=value
+                )
+                assert list(predicate.filter_instances([calculation])) == []
+
     def test_protected_result_filter_is_rejected_before_getters(self):
         """Denied computed operands fail before their getters affect membership."""
         self.Calculation.denied_query_fields.add("result")

@@ -885,7 +885,11 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 except AttributeError:
                     return False
 
-        if scalar_input is not None:
+        # Normalize JSON sequence operands through the native scalar contract;
+        # other membership containers retain the existing lookup grammar.
+        if scalar_input is not None and (
+            operator != "in" or isinstance(expected, (list, tuple))
+        ):
             if isinstance(expected, (list, tuple)) and not isinstance(
                 expected, scalar_input.type
             ):
