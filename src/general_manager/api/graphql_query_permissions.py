@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 from graphql import GraphQLError
@@ -51,6 +52,13 @@ _LOOKUPS = {
 }
 
 
+@dataclass(slots=True)
+class _NativePathNode:
+    """One shared native source prefix, without storing permission decisions."""
+
+    children: dict[str, _NativePathNode] = field(default_factory=dict)
+
+
 def authorize_query_fields(
     candidates: Iterable[GeneralManager],
     info: ResolveInfo,
@@ -64,6 +72,9 @@ def authorize_query_fields(
     Failure leaves the original candidate set unchanged and rejects the query.
     ``native_paths`` checks exact projection sources without backend aliases or
     lookup operators. Callers validate those paths statically before iteration.
+    Their shared prefixes are walked once for each candidate/member occurrence;
+    all child fields and related-row gates remain required. No decision is
+    reused between candidates, unrelated source branches or authorization calls.
     """
     from general_manager.api.graphql_relations import (
         resolve_general_manager_type,
@@ -82,9 +93,19 @@ def authorize_query_fields(
             normalized.add(tuple(parts))
     if not normalized:
         return
+    native_root = _NativePathNode()
+    if native_paths:
+        for native_parts in sorted(normalized):
+            node = native_root
+            for part in native_parts:
+                node = node.children.setdefault(part, _NativePathNode())
     decisions = 0
 
-    def check(instance: GeneralManager, parts: tuple[str, ...]) -> None:
+    def check(
+        instance: GeneralManager,
+        parts: tuple[str, ...],
+        native_node: _NativePathNode | None = None,
+    ) -> None:
         """Authorize one exact operand path, charging each visited field decision."""
         nonlocal decisions
         decisions += 1
@@ -157,7 +178,7 @@ def authorize_query_fields(
             if not isinstance(target_field, models.Field):
                 raise GraphQLError(_RELATION_ERROR)
             check(value, ("id" if target_field.primary_key else target_field.name,))
-        if not rest:
+        if not rest and not (native_node and native_node.children):
             return
         if len(aliases) > 1:
             raise GraphQLError(_AMBIGUOUS_ERROR)
@@ -220,7 +241,11 @@ def authorize_query_fields(
                 raise GraphQLError(_RELATION_ERROR)
             if not can_read_instance(member, info):
                 raise GraphQLError(_RELATION_ERROR)
-            check(member, tuple(rest))
+            if native_node is None:
+                check(member, tuple(rest))
+            else:
+                for child_field, child in sorted(native_node.children.items()):
+                    check(member, (child_field,), child)
         if (
             native_paths
             and isinstance(related, RequestBucket)
@@ -229,7 +254,11 @@ def authorize_query_fields(
             raise GraphQLError(INCOMPLETE_ERROR)
 
     for candidate in candidates:
-        for normalized_parts in sorted(normalized):
-            check(candidate, normalized_parts)
+        if native_paths:
+            for native_field, native_node in sorted(native_root.children.items()):
+                check(candidate, (native_field,), native_node)
+        else:
+            for normalized_parts in sorted(normalized):
+                check(candidate, normalized_parts)
     if isinstance(candidates, RequestBucket) and not candidates.response_is_complete:
         raise GraphQLError(INCOMPLETE_ERROR)

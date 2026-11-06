@@ -56,6 +56,13 @@ The conservative contract covers filter/sort-only fields too: a backend may use
 all serialized values for full-text matching. Native permission predicates are
 checked against the source instances rather than pushed into transformed
 document fields. Query results and totals still require native row permission.
+Exact native paths share their common prefixes within each candidate traversal:
+for example, `plant_floor__id` and `plant_floor__floor_name` check the owning
+`plant_floor` field and its related row once, then check both target fields.
+Every declared child path is still validated, including empty relations. This
+does not share grants between candidates, unrelated branches or requests. The
+1,000-decision limit remains in force for the resulting native field visits;
+dense relation populations can still exceed it.
 Changing dependencies changes the reconciliation fingerprint; use the existing
 reindex procedure and verify search, filters, ordering and denied related rows
 before consuming the upgraded projection.
