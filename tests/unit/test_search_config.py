@@ -114,3 +114,50 @@ def test_resolve_search_config_normalizes_invalidation_rules_to_tuple() -> None:
 
     assert spec is not None
     assert spec.invalidation_rules == (rule,)
+
+
+def test_projection_dependencies_are_owned_and_preserved_by_resolution() -> None:
+    dependencies = {"title": ["name"]}
+
+    class SearchConfig:
+        indexes = (IndexConfig(name="global", fields=["title"]),)
+        field_dependencies = dependencies
+        to_document = staticmethod(lambda instance: {"title": instance.name})
+
+    spec = resolve_search_config(SearchConfig)
+    dependencies["title"].append("secret")
+    assert spec is not None
+    assert spec.field_dependencies == {"title": ("name",)}
+
+
+def test_native_projection_cannot_be_relabelled_with_dependencies() -> None:
+    class SearchConfig:
+        indexes = (IndexConfig(name="global", fields=["name"]),)
+        field_dependencies: ClassVar[dict[str, tuple[str, ...]]] = {
+            "name": ("public_name",)
+        }
+
+    with pytest.raises(ValueError, match="custom to_document"):
+        resolve_search_config(SearchConfig)
+
+
+@pytest.mark.parametrize(
+    "dependencies",
+    [
+        [],
+        {"unknown": ("name",)},
+        {"title": "name"},
+        {"title": ()},
+        {"title": (None,)},
+        {"title": ("",)},
+        {"title": ("name__",)},
+    ],
+)
+def test_projection_dependencies_reject_invalid_declarations(dependencies) -> None:
+    class SearchConfig:
+        indexes = (IndexConfig(name="global", fields=["title"]),)
+        field_dependencies = dependencies
+        to_document = staticmethod(lambda instance: {"title": instance.name})
+
+    with pytest.raises(ValueError, match="dependencies"):
+        resolve_search_config(SearchConfig)

@@ -3,6 +3,70 @@
 This tutorial walks through enabling search with Meilisearch, indexing data, and
 querying via GraphQL. It assumes Django + the auto GraphQL schema are enabled.
 
+## Authorize custom document projections
+
+Keep your existing `to_document` aliases and transforms, and add
+`SearchConfig.field_dependencies`. Map **every serialized field** in the union
+of `IndexConfig.fields`, `filters`, and `sorts` to a nonempty tuple containing
+all native source paths used to derive it. All dependencies are required.
+
+For example, a WorkCenter projector that emits a plant name/ID and a normalized
+name sort key can declare:
+
+```python
+class SearchConfig:
+    indexes = [IndexConfig(
+        name="work_center_list",
+        fields=["name", "plant_name"],
+        filters=["plant_id"],
+        sorts=["name_sort"],
+        identity_fields={"plant_id": int},
+    )]
+    field_dependencies = {
+        "name": ("name",),
+        "plant_name": ("plant_floor__constellium_plant__name",),
+        "plant_id": ("plant_floor__constellium_plant__id",),
+        "name_sort": ("name", "id"),
+    }
+    to_document = staticmethod(build_work_center_search_document)
+```
+
+This is a reduced configuration example: the real WorkCenter configuration
+must also declare its ERP, supplier, officer, part-type and other configured
+fields. Include every source used by conditional branches and computed values,
+including the computed property's own field permission and its underlying
+sources. For a Project status alias produced by `str(project.status)`, use
+`"status": ("status",)`; the serialized string and its native source retain
+their respective types. `identity_fields` still declares native identity
+transport types independently.
+
+The declaration is trusted application configuration. GeneralManager validates
+names and relation paths, then checks native field and related-row permissions
+before searching. Native foreign-key sources such as `entry_id` also require
+the referenced row and target identity field to be readable, just like
+`entry__id`; a null reference has no target row to check. It cannot prove that
+arbitrary Python projector code declared all its reads. Review the projector
+and declaration together. Unknown paths,
+missing keys, empty dependency sequences and undeclared native fallback reads
+fail closed. Even an empty candidate set does not excuse an invalid source path.
+An unchanged custom projector without a declaration remains unavailable to
+GraphQL search.
+
+The conservative contract covers filter/sort-only fields too: a backend may use
+all serialized values for full-text matching. Native permission predicates are
+checked against the source instances rather than pushed into transformed
+document fields. Query results and totals still require native row permission.
+Exact native paths share their common prefixes within each candidate traversal:
+for example, `plant_floor__id` and `plant_floor__floor_name` check the owning
+`plant_floor` field and its related row once, then check both target fields.
+Every declared child path is still validated, including empty relations. This
+does not share grants between candidates, unrelated branches or requests. The
+1,000-decision limit remains in force for the resulting native field visits;
+dense relation populations can still exceed it.
+Changing dependencies changes the reconciliation fingerprint; use the existing
+reindex procedure and verify search, filters, ordering and denied related rows
+before consuming the upgraded projection.
+
 ## Reindex existing identity projections
 
 After upgrading to identity-aware search transport, rebuild every affected

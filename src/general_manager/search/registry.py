@@ -253,7 +253,8 @@ def validate_filter_keys(index_name: str, filters: Mapping[str, object]) -> None
             validation.
         filters: Mapping of filter keys to arbitrary values. Values are not
             inspected. Keys may include lookup suffixes separated by `"__"`;
-            only the portion before the first `"__"` is validated.
+            ordinary fields use the portion before the first `"__"`. Explicit
+            identity fields also accept their complete name and exact/in suffix.
 
     Raises:
         InvalidFilterFieldError: If a base filter field is not configured as
@@ -265,7 +266,26 @@ def validate_filter_keys(index_name: str, filters: Mapping[str, object]) -> None
     for key in filters.keys():
         base_key = key.split("__")[0]
         if base_key not in allowed:
-            raise InvalidFilterFieldError(base_key, index_name)
+            from general_manager.search.identity import (
+                get_search_identity_fields,
+                identity_lookup,
+            )
+
+            if not any(
+                identity_lookup(
+                    key,
+                    {
+                        name: kind
+                        for name, kind in get_search_identity_fields(
+                            manager_class, index_config
+                        ).items()
+                        if name in index_config.filters
+                    },
+                )
+                is not None
+                for manager_class, index_config in iter_index_configs(index_name)
+            ):
+                raise InvalidFilterFieldError(base_key, index_name)
 
 
 class InvalidFilterFieldError(ValueError):

@@ -13,6 +13,7 @@ from general_manager.search.config import SearchConfigSpec
 from general_manager.search.identity import (
     get_search_identity_fields,
 )
+from general_manager.search.projection import validate_projection_fallback
 from general_manager.search.registry import (
     collect_index_settings,
     get_index_config,
@@ -142,6 +143,7 @@ def _serialize_document(
         if field_name in provided_data:
             data[field_name] = provided_data[field_name]
         else:
+            validate_projection_fallback(config, field_name)
             data[field_name] = extract_value(instance, field_name)
 
     return SearchDocument(

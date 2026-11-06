@@ -691,6 +691,26 @@ Explicit `relation_kind` and `filter_lookup` metadata remains authoritative,
 including custom prefixes. Invalid nested values continue through the existing
 GraphQL input and bucket error paths; no new framework exception is introduced.
 
+Constructor scope is bound before enumeration for direct scalar inputs and
+confirmed manager identity exact/in predicates. Existing GraphQL requests for
+`project: {id: $projectId}` and scalar date comparisons require no new option.
+Related business-field predicates and computed values are authorized before
+they affect membership. Permission constraints intersect the frozen requested
+combinations; mixed exclusion groups remain atomic. The 1,000 field/path
+permission budget remains in force on that scope. A year-long window can still
+exceed it with multiple operands. Request smaller constructor windows (for
+example months), then collect every page within each window. Page size alone
+does not reduce the pre-page permission workload.
+
+`CalculationBucket.filter_instances(instances)` applies the bucket's parsed
+filter/exclude call groups to exact supplied manager instances. It retains Input
+normalization, order, duplicates and object identity, and does not enumerate
+constructor domains or rebuild managers. It returns an exact `Bucket` and does
+not authorize access. For an existing snapshot, GraphQL uses it to apply proven
+constructor constraints before permission checks. Permission prefilters retain
+the same native Input normalization on the frozen scope. Deferred result and
+related-field predicates run through it after operand and row checks.
+
 The [calculation concept guide](../concepts/interfaces/computed_data_interfaces.md#iterating-combinations)
 explains the model, the [task guide](../howto/expose_via_graphql.md#filter-calculation-managers-by-manager-input)
 shows the declaration, and the [cookbook recipe](../examples/graphql_queries.md#filter-a-calculation-by-manager-input)

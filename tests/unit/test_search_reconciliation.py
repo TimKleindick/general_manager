@@ -140,6 +140,31 @@ class SearchReconciliationDiscoveryTests(TestCase):
 
         assert original != changed
 
+    def test_fingerprint_tracks_projection_dependencies_canonically(self):
+        index = ReconcileProject.SearchConfig.indexes[0]
+        with (
+            patch.object(
+                ReconcileProject.SearchConfig, "to_document", lambda _: {}, create=True
+            ),
+            patch.object(
+                ReconcileProject.SearchConfig,
+                "field_dependencies",
+                {"name": ("name", "status"), "status": ("status",)},
+                create=True,
+            ),
+        ):
+            original = build_search_schema_fingerprint(ReconcileProject, index)
+            ReconcileProject.SearchConfig.field_dependencies = {
+                "status": ("status",),
+                "name": ("status", "name", "name"),
+            }
+            assert build_search_schema_fingerprint(ReconcileProject, index) == original
+            ReconcileProject.SearchConfig.field_dependencies = {
+                "name": ("name",),
+                "status": ("status",),
+            }
+            assert build_search_schema_fingerprint(ReconcileProject, index) != original
+
     def test_fingerprint_tracks_native_identity_metadata_and_alias_kind(self) -> None:
         index = ReconcileProject.SearchConfig.indexes[0]
         original = build_search_schema_fingerprint(ReconcileProject, index)

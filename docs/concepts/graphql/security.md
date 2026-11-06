@@ -195,16 +195,26 @@ This adds work proportional to candidates × distinct operand paths, plus relate
 rows visited. Duplicate lookup paths are consolidated. A request fails explicitly
 after 1,000 field/path authorization decisions. This is a permission-work limit,
 not a bound on database bucket materialization or the preceding row authorization.
-No permission cache is shared across requests or users. Calculation queries now
-check the full row-authorized input domain before client input predicates; their
-row/field check counts can therefore increase even for a narrow input filter.
+No permission cache is shared across requests or users. Calculation lists first
+constrain the requested constructor domain using direct scalar inputs and
+confirmed manager identity equalities/membership. Those combinations are frozen
+before permission constraints and row authorization. Every operand is still
+checked on the row-visible requested scope. Related business fields and computed
+result predicates cannot narrow that scope before permission checks. Static
+deny-all plans never enumerate a constructor domain. This exception does not
+apply to ordinary persisted ORM result fields; pagination does not reduce their
+operand-check workload.
 
-Search checks the configured searchable document fields (including searchable
-attributes shared by other types in the index), plus requested filters and sorts,
-before calling the search backend. Custom `SearchConfig.to_document` projections
-are rejected by GraphQL search: arbitrary remapping has no trustworthy mapping
-back to native field permissions. Use the standard attribute projection for
-GraphQL search. Output masking alone does not authorize custom projections.
+Search checks searchable document fields plus requested filters and sorts before
+calling the backend. A custom `SearchConfig.to_document` requires a complete
+`field_dependencies` declaration for **all** serialized fields, including
+filter/sort-only aliases. Exact native source paths are validated independently
+of candidate data. Each declared source field, relation and related row must be
+readable; unknown/missing dependencies fail closed. The declaration must cover
+every projector branch and is trusted application code, not an automatically
+inferred proof of arbitrary Python reads. Native permission predicates are not
+pushed into transformed document fields. See [the projection migration
+guide](../../howto/search.md#authorize-custom-document-projections).
 All query operands on incomplete remote candidate sets fail explicitly, including
 public permissions, because a partial upstream page cannot establish permission
 across all possible matches. Statically denied managers are the exception. They

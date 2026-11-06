@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Historical decision; refined by the [current constructor-scope and operand
+authorization contract](../concepts/graphql/filters_pagination.md#query-arguments).
+Only safe constructor values and confirmed manager identity predicates now bind
+before authorization. Arbitrary input-manager business fields remain deferred,
+and every exclusion mapping retains its conjunction. The original root-only
+classification below does not describe the current implementation.
 
 ## Context
 

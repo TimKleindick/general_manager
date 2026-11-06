@@ -192,6 +192,321 @@ class BestEffortTotalSearchBackend(CountingDevSearchBackend):
 
 
 class GraphQLSearchTests(SimpleTestCase):
+    def _install_declared_projection(self, dependencies=None, *, fields=None):
+        """Install a real alias projection and index the two canonical fixtures."""
+        indexes = [
+            IndexConfig(
+                name="global",
+                fields=["title", "snippet"] if fields is None else fields,
+                filters=["label"],
+                sorts=["sort_name"],
+            )
+        ]
+        if dependencies is None:
+            dependencies = {
+                "title": ("name",),
+                "snippet": ("name", "status"),
+                "label": ("status",),
+                "sort_name": ("name",),
+            }
+        for name, value in {
+            "indexes": indexes,
+            "field_dependencies": dependencies,
+            "to_document": staticmethod(
+                lambda instance: {
+                    "title": instance.name,
+                    "snippet": f"{instance.name} {instance.status}",
+                    "label": "published" if instance.status == "public" else "draft",
+                    "sort_name": instance.name.lower(),
+                }
+            ),
+        }.items():
+            patcher = patch.object(Project.SearchConfig, name, value, create=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        GraphQL._query_fields.pop("search", None)
+        GraphQL.register_search_query()
+        backend = CountingDevSearchBackend()
+        configure_search_backend(backend)
+        SearchIndexer(backend).index_instance(Project(id=1))
+        SearchIndexer(backend).index_instance(Project(id=2))
+        return backend
+
+    def test_declared_projection_searches_aliases_filters_and_sorts(self) -> None:
+        """Projection filters remove a visible match and order the retained matches."""
+        with patch.object(
+            ProjectInterface,
+            "data_store",
+            {
+                1: {"name": "Alpha", "status": "public"},
+                2: {"name": "Beta", "status": "public"},
+                3: {"name": "Gamma", "status": "public"},
+            },
+        ):
+            backend = self._install_declared_projection(
+                {
+                    "title": ("name",),
+                    "snippet": ("name", "status"),
+                    "label": ("name",),
+                    "sort_name": ("name",),
+                }
+            )
+            with patch.object(
+                Project.SearchConfig,
+                "to_document",
+                staticmethod(
+                    lambda instance: {
+                        "title": "shared",
+                        "snippet": instance.name,
+                        "label": "drop" if instance.name == "Beta" else "keep",
+                        "sort_name": {"Alpha": "z", "Beta": "m", "Gamma": "a"}[
+                            instance.name
+                        ],
+                    }
+                ),
+            ):
+                indexer = SearchIndexer(backend)
+                for identifier in (1, 2, 3):
+                    indexer.index_instance(Project(id=identifier))
+                schema = graphene.Schema(
+                    query=type(
+                        "ProjectionQuery", (graphene.ObjectType,), GraphQL._query_fields
+                    )
+                )
+                result = schema.execute(
+                    '{ search(query: "shared", types: ["Project"], '
+                    'filters: "{\\"label__in\\": [\\"keep\\"]}", '
+                    "orderBy: [{field: sortName, direction: ASC}]) "
+                    "{ total results { ... on ProjectType { name status } } } }",
+                    context_value=SimpleNamespace(user=AnonymousUser()),
+                )
+        assert result.errors is None, result.errors
+        assert result.data["search"] == {
+            "total": 2,
+            "results": [
+                {"name": "Gamma", "status": "public"},
+                {"name": "Alpha", "status": "public"},
+            ],
+        }
+        assert backend.search_calls
+        assert all(
+            call["kwargs"]["sort"] == ("sort_name",) for call in backend.search_calls
+        )
+
+    def test_declared_projection_uses_native_permissions_before_backend(self) -> None:
+        backend = self._install_declared_projection()
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        checked = []
+
+        def permission(instance, _info, field):
+            checked.append((instance.identification["id"], field))
+            return field != "status"
+
+        with (
+            patch(
+                "general_manager.api.graphql_resolvers.check_read_permission",
+                side_effect=permission,
+            ),
+            self.assertRaisesRegex(
+                GraphQLError, "Permission denied to use query field"
+            ),
+        ):
+            GraphQL._query_fields["search"].resolver(
+                None, info, query="Alpha", types=["Project"]
+            )
+        assert (1, "status") in checked
+        assert backend.search_calls == []
+
+    def test_declared_projection_rejects_unknown_path_on_empty_domain(self) -> None:
+        self._install_declared_projection(
+            {
+                "title": ("missing",),
+                "snippet": ("name", "status"),
+                "label": ("status",),
+                "sort_name": ("name",),
+            }
+        )
+        ProjectInterface.data_store = {}
+        with self.assertRaisesRegex(GraphQLError, "source path"):
+            GraphQL._query_fields["search"].resolver(
+                None,
+                SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+                query="Alpha",
+                types=["Project"],
+            )
+
+    def test_declared_projection_does_not_push_native_permission_filters(self) -> None:
+        """Native source prefilters cannot be sent to transformed document aliases."""
+        self._install_declared_projection()
+        result = GraphQL._query_fields["search"].resolver(
+            None,
+            SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+            query="Alpha",
+            types=["Project"],
+            filters={"label": "published"},
+        )
+        assert result["total"] == 1
+        assert [instance.identification for instance in result["results"]] == [
+            {"id": 1}
+        ]
+
+    def test_projection_authorizes_filter_only_fields_searched_by_dev_backend(
+        self,
+    ) -> None:
+        backend = self._install_declared_projection(
+            {
+                "title": ("name",),
+                "label": ("status",),
+                "sort_name": ("name",),
+            },
+            fields=["title"],
+        )
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        with (
+            patch(
+                "general_manager.api.graphql_resolvers.check_read_permission",
+                side_effect=lambda _instance, _info, field: field != "status",
+            ),
+            self.assertRaisesRegex(
+                GraphQLError, "Permission denied to use query field"
+            ),
+        ):
+            GraphQL._query_fields["search"].resolver(
+                None, info, query="published", types=["Project"]
+            )
+        assert backend.search_calls == []
+
+    def test_declared_projection_checks_conditionally_denied_nonmatches(self) -> None:
+        backend = self._install_declared_projection()
+        ProjectInterface.data_store[2] = {
+            **ProjectInterface.data_store[2],
+            "status": "public",
+        }
+        checked = []
+
+        def permission(instance, _info, _field):
+            checked.append(instance.identification["id"])
+            return instance.identification["id"] == 1
+
+        with (
+            patch(
+                "general_manager.api.graphql_resolvers.check_read_permission",
+                side_effect=permission,
+            ),
+            self.assertRaisesRegex(
+                GraphQLError, "Permission denied to use query field"
+            ),
+        ):
+            GraphQL._query_fields["search"].resolver(
+                None,
+                SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+                query="Alpha",
+                types=["Project"],
+            )
+        assert set(checked) == {1, 2}
+        assert backend.search_calls == []
+
+    def test_declared_projection_requires_filter_only_dependency_without_filter(
+        self,
+    ) -> None:
+        backend = self._install_declared_projection(
+            {
+                "title": ("name",),
+                "snippet": ("name", "status"),
+                "sort_name": ("name",),
+            }
+        )
+        with self.assertRaisesRegex(GraphQLError, "dependencies for 'label'"):
+            GraphQL._query_fields["search"].resolver(
+                None,
+                SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+                query="Alpha",
+                types=["Project"],
+            )
+        assert backend.search_calls == []
+
+    def test_declared_projection_requires_sort_only_native_source_permission(
+        self,
+    ) -> None:
+        backend = self._install_declared_projection(
+            {
+                "title": ("name",),
+                "snippet": ("name", "status"),
+                "label": ("status",),
+                "sort_name": ("name", "id"),
+            }
+        )
+        with (
+            patch(
+                "general_manager.api.graphql_resolvers.check_read_permission",
+                side_effect=lambda _instance, _info, field: field != "id",
+            ),
+            self.assertRaisesRegex(GraphQLError, "query field 'id'"),
+        ):
+            GraphQL._query_fields["search"].resolver(
+                None,
+                SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+                query="Alpha",
+                types=["Project"],
+            )
+        assert backend.search_calls == []
+
+    def test_projection_preserves_nested_document_identity_filter_names(self) -> None:
+        """Declared identity aliases keep their complete document lookup names."""
+        index = IndexConfig(
+            name="global",
+            fields=["title"],
+            filters=["owner__key"],
+            identity_fields={"owner__key": int},
+        )
+        with (
+            patch.object(Project.SearchConfig, "indexes", [index]),
+            patch.object(
+                Project.SearchConfig,
+                "field_dependencies",
+                {"title": ("name",), "owner__key": ("id",)},
+                create=True,
+            ),
+            patch.object(
+                Project.SearchConfig,
+                "to_document",
+                staticmethod(
+                    lambda instance: {
+                        "title": instance.name,
+                        "owner__key": instance.identification["id"],
+                    }
+                ),
+                create=True,
+            ),
+        ):
+            backend = CountingDevSearchBackend()
+            configure_search_backend(backend)
+            SearchIndexer(backend).index_instance(Project(id=1))
+            SearchIndexer(backend).index_instance(Project(id=2))
+            result = GraphQL._query_fields["search"].resolver(
+                None,
+                SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+                query="Alpha",
+                types=["Project"],
+                filters={"owner__key__in": [1]},
+            )
+        assert result["total"] == 1
+        assert [item.identification for item in result["results"]] == [{"id": 1}]
+
+    def test_projection_rejects_unknown_document_filter_suffix_before_backend(
+        self,
+    ) -> None:
+        backend = self._install_declared_projection()
+        with self.assertRaisesRegex(GraphQLError, "document filter"):
+            GraphQL._query_fields["search"].resolver(
+                None,
+                SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+                query="Alpha",
+                types=["Project"],
+                filters={"label__unknown": "published"},
+            )
+        assert backend.search_calls == []
+
     def setUp(self) -> None:
         """
         Prepare test environment for GraphQL search tests.

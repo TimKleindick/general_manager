@@ -71,6 +71,8 @@ These helpers are optional and only required if your adapter needs them.
 - `document_id`: Callable used to produce a stable document identifier.
 - `type_label`: Explicit label for multi-manager search unions.
 - `to_document`: Callable that serializes a manager instance into a document.
+- `field_dependencies`: Complete native source paths for custom document fields;
+  required to use a custom projection through GraphQL search.
 - `update_strategy`: Adapter-specific hook for sync vs async (not used by built-in
   backends today).
 
@@ -79,6 +81,7 @@ class Project(GeneralManager):
     class SearchConfig:
         indexes = [IndexConfig(name="global", fields=["name"])]
         type_label = "Project"
+        field_dependencies = {"name": ("name",)}
 
         @staticmethod
         def document_id(instance: "Project") -> str:
@@ -88,13 +91,15 @@ class Project(GeneralManager):
         def to_document(instance: "Project") -> dict:
             return {
                 "name": instance.name,
-                "status": instance.status,
             }
 ```
 
 `to_document` should only return keys configured on the `IndexConfig` used for
-indexing. Filter fields listed in `filters` are included automatically if not
-present in the returned mapping.
+indexing. Fields, filters and sorts omitted from the mapping use native attribute
+extraction. With `field_dependencies`, that fallback is allowed only when the
+field itself is an explicit dependency. See [custom projection
+authorization](../howto/search.md#authorize-custom-document-projections) before
+enabling a custom projector through GraphQL.
 
 ### Related-data invalidation
 

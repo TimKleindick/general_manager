@@ -46,6 +46,7 @@ from general_manager.search.utils import normalize_identification
 from general_manager.search.identity import SearchFilters, build_search_filters
 from general_manager.search.registry import (
     get_search_config,
+    get_index_config,
     collect_index_settings,
     get_type_label,
     validate_filter_keys,
@@ -1442,7 +1443,6 @@ def register_search_query(
                 continue
             from general_manager.api.graphql_query_permissions import (
                 authorize_query_fields,
-                CUSTOM_PROJECTION_ERROR,
                 INCOMPLETE_ERROR,
             )
             from general_manager.bucket.request_bucket import RequestBucket
@@ -1450,8 +1450,7 @@ def register_search_query(
             authorized_instances: dict[str, GeneralManager] = {}
             search_config = get_search_config(manager_class)
             if search_config is not None:
-                if search_config.to_document is not None:
-                    raise GraphQLError(CUSTOM_PROJECTION_ERROR)
+                custom_projection = search_config.to_document is not None
                 operand_paths = set(parsed_filters)
                 operand_paths.update(term.field for term in ordering_terms)
                 for index_config in search_config.indexes:
@@ -1463,18 +1462,17 @@ def register_search_query(
                         document_fields.update(index_config.sorts)
                         # Searchable attributes are shared across all types in
                         # an index, including fields only used as filters here.
-                        operand_paths.update(
-                            document_fields.intersection(
-                                collect_index_settings(index_name).searchable_fields
+                        if custom_projection:
+                            # The backend protocol does not promise matching
+                            # only searchable_fields; DevSearch scores every
+                            # serialized field, including filter/sort-only keys.
+                            operand_paths.update(document_fields)
+                        else:
+                            operand_paths.update(
+                                document_fields.intersection(
+                                    collect_index_settings(index_name).searchable_fields
+                                )
                             )
-                        )
-                source_candidates = manager_class.all()
-                # Search permission constraints use native instance predicates,
-                # including properties that are not public bucket filters.
-                # Reuse that exact gate before evaluating client operands.
-                candidates = list(
-                    authorized_source_candidates(source_candidates, permission_plan)
-                )
                 # The index envelope exposes a synthetic manager-type filter.
                 # A real manager attribute with that name still needs permission.
                 if not any(
@@ -1491,7 +1489,44 @@ def register_search_query(
                         for path in operand_paths
                         if path.split("__", 1)[0] != "type"
                     }
-                authorize_query_fields(candidates, info, operand_paths)
+                if custom_projection:
+                    from general_manager.search.projection import (
+                        SearchProjectionError,
+                        projection_filter_fields,
+                        projection_source_paths,
+                    )
+
+                    document_operands = {
+                        path for path in operand_paths if path not in parsed_filters
+                    }
+                    try:
+                        document_operands.update(
+                            projection_filter_fields(
+                                manager_class,
+                                get_index_config(manager_class, index_name),
+                                (
+                                    path
+                                    for path in parsed_filters
+                                    if path in operand_paths
+                                ),
+                            )
+                        )
+                        operand_paths = set(
+                            projection_source_paths(
+                                manager_class, search_config, document_operands
+                            )
+                        )
+                    except SearchProjectionError as exc:
+                        raise GraphQLError(str(exc)) from exc
+                source_candidates = manager_class.all()
+                # Native row authorization precedes operand checks. Projection
+                # provenance never substitutes for the source instance gate.
+                candidates = list(
+                    authorized_source_candidates(source_candidates, permission_plan)
+                )
+                authorize_query_fields(
+                    candidates, info, operand_paths, native_paths=custom_projection
+                )
                 # Search indexes may contain explicitly indexed calculations or
                 # newly inserted rows outside this authorized native domain.
                 # Retain its instances, not just IDs, so hits cannot replace the
@@ -1507,10 +1542,17 @@ def register_search_query(
                     raise GraphQLError(INCOMPLETE_ERROR)
             # Shared indexes may give the same field different native types.
             # Keep parsed user filters and permission constraints untouched.
-            manager_filters = {
-                key: normalize_id_filter_value(manager_class, key, value)
-                for key, value in parsed_filters.items()
-            }
+            custom_projection = (
+                search_config is not None and search_config.to_document is not None
+            )
+            manager_filters = (
+                dict(parsed_filters)
+                if custom_projection
+                else {
+                    key: normalize_id_filter_value(manager_class, key, value)
+                    for key, value in parsed_filters.items()
+                }
+            )
             backend_shape = get_backend_shape(manager_class)
             instance_check_reasons = resolve_instance_check_reasons(
                 permission_plan,
@@ -1518,7 +1560,7 @@ def register_search_query(
             )
             filter_groups: SearchFilters = (
                 manager_filters or None
-                if decision == "allow_all"
+                if decision == "allow_all" or custom_projection
                 else merge_permission_filters(
                     manager_filters,
                     permission_plan.filters,
