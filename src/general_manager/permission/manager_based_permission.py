@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from inspect import getattr_static
 from typing import TYPE_CHECKING, ClassVar, Literal, cast
 
 from general_manager.permission.base_permission import (
@@ -579,15 +580,7 @@ class _ConfiguredManagerPermission(BasePermission):
     def __get_attribute_permissions(
         self,
     ) -> dict[str, dict[permission_type, list[str]]]:
-        attribute_permissions: dict[str, dict[permission_type, list[str]]] = {}
-        for permission_class in reversed(self.__class__.__mro__):
-            for attribute, value in vars(permission_class).items():
-                if attribute.startswith("__") or not isinstance(value, dict):
-                    continue
-                attribute_permissions[attribute] = cast(
-                    dict[permission_type, list[str]], value
-                )
-        return attribute_permissions
+        return _attribute_permission_definitions(self.__class__)
 
     def _get_base_permissions(self, action: permission_type) -> list[str]:
         if action == "create":
@@ -885,6 +878,67 @@ class OverrideManagerPermission(_ConfiguredManagerPermission):
 
 class ManagerBasedPermission(AdditiveManagerPermission):
     """Deprecated compatibility alias for `AdditiveManagerPermission`."""
+
+
+def _attribute_permission_definitions(
+    permission_class: type[BasePermission],
+) -> dict[str, dict[permission_type, list[str]]]:
+    """Share the effective MRO/dictionary merge with static projection analysis."""
+    definitions: dict[str, dict[permission_type, list[str]]] = {}
+    for cls in reversed(permission_class.__mro__):
+        for attribute, value in vars(cls).items():
+            if not attribute.startswith("__") and isinstance(value, dict):
+                definitions[attribute] = cast(dict[permission_type, list[str]], value)
+    return definitions
+
+
+def additional_local_read_permission(
+    permission_class: type[BasePermission] | None, attribute: str
+) -> bool | None:
+    """Compare declarative field rules with the row gate without evaluating users.
+
+    Only the built-in additive/override implementation has known semantics.
+    Custom executable policies require runtime field checks. The caller must
+    also inspect any delegated policy on its owning manager.
+    Rule lists are OR alternatives: an empty list or a superset of the row
+    alternatives cannot further restrict a row which already passed its gate.
+    """
+    if permission_class is None:
+        return False
+    implementations = (
+        _ConfiguredManagerPermission,
+        AdditiveManagerPermission,
+        OverrideManagerPermission,
+        ManagerBasedPermission,
+    )
+    if not issubclass(
+        permission_class, (AdditiveManagerPermission, OverrideManagerPermission)
+    ):
+        return None
+    if type(permission_class) is not type(AdditiveManagerPermission):
+        return None
+    for cls in permission_class.__mro__:
+        if cls in implementations or cls in BasePermission.__mro__:
+            continue
+        if any(
+            callable(value) or getattr_static(value, "__get__", None) is not None
+            for value in vars(cls).values()
+        ):
+            return None
+    base = (
+        _get_default_permissions()["read"]
+        if permission_class in implementations
+        else permission_class.__read__
+    )
+    field_rules = _attribute_permission_definitions(permission_class).get(attribute)
+    if not isinstance(field_rules, dict) or "read" not in field_rules:
+        return False
+    field = field_rules["read"]
+    if not isinstance(field, (list, tuple)) or not isinstance(base, (list, tuple)):
+        return None
+    if not all(isinstance(rule, str) for rule in (*base, *field)):
+        return None
+    return bool(field) and (not base or not set(base).issubset(field))
 
 
 __all__ = [

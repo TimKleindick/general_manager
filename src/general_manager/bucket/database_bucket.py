@@ -40,6 +40,10 @@ from general_manager.measurement.measurement_field import MeasurementField
 from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     _instance_attribute_accessor,
 )
+from general_manager.interface.capabilities.orm_utils.collection_probes import (
+    NativeCollectionProbe,
+    collection_probe,
+)
 from general_manager.utils.filter_parser import create_filter_function
 
 if TYPE_CHECKING:
@@ -308,6 +312,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             _QUERY_SIGNATURE_NOT_COMPUTED
         )
         self._trusted_query_signature: Hashable | None = None
+        self._empty_relation_probes: tuple[tuple[str, NativeCollectionProbe], ...] = ()
 
     def _ensure_as_of_compatible(self) -> None:
         """Reject use of a bucket that represents another effective instant."""
@@ -456,8 +461,61 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         )
         manager_hydrate = self._manager_class._from_trusted_orm_instance
         if callable(interface_hydrate) and self._can_trust_orm_instance(instance):
+            if self._empty_relation_probes:
+                instance.__dict__["_gm_empty_collection_probes"] = frozenset(
+                    probe
+                    for annotation, probe in self._empty_relation_probes
+                    if vars(instance).get(annotation) is False
+                )
             return manager_hydrate(instance, search_date=self._search_date)
         return self._build_manager_from_primary_key(instance.pk)
+
+    def _with_empty_relation_probes(
+        self, attributes: Iterable[str]
+    ) -> DatabaseBucket[GeneralManagerType]:
+        """Fold native first-hop collection emptiness into candidate hydration.
+
+        Positive EXISTS results change nothing. Only an empty physical relation
+        may avoid a subsequent SELECT, through its original native accessor.
+        Historical, custom and cross-database sources retain normal hydration.
+        """
+        self._ensure_as_of_compatible()
+        if (
+            self._search_date is not None
+            or type(self._data) is not models.QuerySet
+            or self._data.query.combinator
+            or not self._can_cache_run_scoped_managers()
+        ):
+            return self
+        sources = vars(self._manager_class).get("_attributes", {})
+        annotations: dict[str, models.Exists] = {}
+        probes: list[tuple[str, NativeCollectionProbe]] = []
+        for attribute in sorted(set(attributes)):
+            probe = collection_probe(sources.get(attribute))
+            if (
+                probe is None
+                or probe.source_model is not self._data.model
+                or not probe.can_probe(self._data.db)
+            ):
+                continue
+            annotation = f"_gm_collection_exists_{len(probes)}"
+            if annotation in self._data.query.annotations or hasattr(
+                self._data.model, annotation
+            ):
+                continue
+            annotations[annotation] = probe.expression(self._data.db)
+            probes.append((annotation, probe))
+        if not probes:
+            return self
+        bucket = self.all()
+        bucket._data = self._data.annotate(**annotations)
+        bucket._empty_relation_probes = tuple(probes)
+        bucket._set_trusted_query_signature(
+            self._trusted_query_signature_with(
+                "empty-collection-probes", {"relations": tuple(probes)}
+            )
+        )
+        return bucket
 
     def _build_manager(self, value: LookupValue) -> GeneralManagerType:
         if isinstance(value, models.Model):

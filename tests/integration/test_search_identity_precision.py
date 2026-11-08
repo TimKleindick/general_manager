@@ -79,10 +79,26 @@ def precision_index(request, monkeypatch):
 
     manager = PrecisionRecord532
     fields = ("customer_id", "business_number", "literal_key", "external_id")
+    all_field_dependencies = {
+        "customer_id": ("id",),
+        "related_ids": ("id",),
+        "nullable_key": ("id",),
+        "uuid_key": ("id",),
+        "opaque_key": ("id",),
+        "opaque_zero": ("id",),
+        "business_number": ("id",),
+        "literal_key": ("id",),
+        "external_id": ("id",),
+    }
+    field_dependencies = {field: all_field_dependencies[field] for field in fields}
     manager.SearchConfig = type(
         "SearchConfig",
         (),
-        {"indexes": [IndexConfig(name=index_name, fields=fields, filters=fields)]},
+        {
+            "indexes": [IndexConfig(name=index_name, fields=fields, filters=fields)],
+            "field_dependencies": field_dependencies,
+            "all_field_dependencies": all_field_dependencies,
+        },
     )
     if request.param == "meilisearch":
         url = os.getenv("MEILISEARCH_URL")
@@ -113,6 +129,9 @@ def reindex_fields(backend, manager, index_name, fields):
     manager.SearchConfig.indexes = [
         IndexConfig(name=index_name, fields=fields, filters=fields)
     ]
+    manager.SearchConfig.field_dependencies = {
+        field: manager.SearchConfig.all_field_dependencies[field] for field in fields
+    }
     for key in (A, B):
         SearchIndexer(backend).index_instance(manager(key))
 
@@ -298,7 +317,8 @@ def test_shared_index_native_kinds_and_business_roles_are_scoped(precision_index
                         fields=["customer_id"],
                         filters=["customer_id"],
                     )
-                ]
+                ],
+                "field_dependencies": {"customer_id": ("id",)},
             },
         )
         SearchIndexer(backend).reindex_manager(manager)

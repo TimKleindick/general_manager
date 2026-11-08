@@ -326,7 +326,7 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
         self.assertEqual(names, ["Aardvark Team", "Alpha Project"])
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 1})
-    def test_graphql_search_bounded_total_exposes_exactness_flag(self):
+    def test_graphql_search_bounded_total_raises_at_scan_limit(self):
         query = """
         query {
             search(
@@ -346,11 +346,13 @@ class TestGraphQLSearchIntegration(GeneralManagerTransactionTestCase):
         }
         """
         response = self.query(query)
-        self.assertResponseNoErrors(response)
-        payload = response.json()["data"]["search"]
-        self.assertEqual(payload["total"], 1)
-        self.assertFalse(payload["totalIsExact"])
-        self.assertEqual(len(payload["results"]), 1)
+        self.assertResponseHasErrors(response)
+        error = response.json()["errors"][0]
+        self.assertIn("scan limit", error["message"])
+        self.assertEqual(
+            error.get("extensions", {}).get("code"), "SEARCH_SCAN_LIMIT_EXCEEDED"
+        )
+        self.assertIsNone(response.json()["data"]["search"])
 
     def test_graphql_search_invalid_total_mode_returns_bad_user_input(self):
         query = """

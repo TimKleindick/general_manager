@@ -220,6 +220,10 @@ class SearchConfigProtocol(Protocol):
     return a mapping of document field names to arbitrary payload values.
     `invalidation_rules` declares source managers and optional owner relations
     whose changes may invalidate documents from this manager.
+    `field_dependencies` asserts complete native sources, including property,
+    filter-only and sort-only dependencies. Native projections also retain
+    their actual serialized field gates. Arbitrary serializer/property accesses
+    remain trusted application code covered by this declaration.
     """
 
     indexes: Sequence[IndexConfig]
@@ -228,6 +232,7 @@ class SearchConfigProtocol(Protocol):
     type_label: str | None
     to_document: Callable[[GeneralManager], Mapping[str, object]] | None
     update_strategy: str | None
+    field_dependencies: Mapping[str, tuple[str, ...]] | None
 
 
 @dataclass(frozen=True)
@@ -245,6 +250,13 @@ class SearchConfigSpec:
         to_document: Optional callable receiving a manager instance and
             returning a mapping of document field names to payload values.
         update_strategy: Optional backend/indexer strategy marker.
+        field_dependencies: Complete native source paths for each configured
+            document field, including filter-only and sort-only fields. This
+            trusted application assertion covers every serializer branch; it
+            does not assert equality with source values. Missing declarations
+            keep custom projections and opaque native properties unavailable
+            to GraphQL. Native fields cannot relabel away their own gate. An
+            omitted custom key may use the native fallback only if declared.
     """
 
     indexes: tuple[IndexConfig, ...]
@@ -253,6 +265,17 @@ class SearchConfigSpec:
     type_label: str | None = None
     to_document: Callable[[GeneralManager], Mapping[str, object]] | None = None
     update_strategy: str | None = None
+    field_dependencies: Mapping[str, tuple[str, ...]] | None = None
+
+    def __post_init__(self) -> None:
+        """Own and validate the optional projection provenance declaration."""
+        from general_manager.search.projection import normalize_field_dependencies
+
+        object.__setattr__(
+            self,
+            "field_dependencies",
+            normalize_field_dependencies(self.indexes, self.field_dependencies),
+        )
 
 
 def resolve_search_config(config: object | None) -> SearchConfigSpec | None:
@@ -262,9 +285,11 @@ def resolve_search_config(config: object | None) -> SearchConfigSpec | None:
     If `config` is `None`, returns `None`. If `config` is already a
     `SearchConfigSpec`, returns it unchanged. Otherwise, extracts `indexes`,
     `invalidation_rules`, `document_id`, `type_label`, `to_document`, and
-    `update_strategy` attributes from `config`, using default values when
-    attributes are missing. Missing `indexes` and `invalidation_rules` resolve
-    to empty tuples.
+    `update_strategy` plus `field_dependencies` attributes from `config`, using
+    default values when attributes are missing. Missing `indexes` and
+    `invalidation_rules` resolve to empty tuples. Dependency mappings are copied
+    into immutable tuple-valued snapshots; invalid declarations raise
+    `ValueError`. Native paths are additionally checked at GraphQL query time.
 
     Args:
         config: Configuration object or resolved spec to normalize.
@@ -296,6 +321,7 @@ def resolve_search_config(config: object | None) -> SearchConfigSpec | None:
         getattr(config, "to_document", None),
     )
     update_strategy = getattr(config, "update_strategy", None)
+    field_dependencies = getattr(config, "field_dependencies", None)
 
     return SearchConfigSpec(
         indexes=indexes,
@@ -304,6 +330,7 @@ def resolve_search_config(config: object | None) -> SearchConfigSpec | None:
         type_label=type_label,
         to_document=to_document,
         update_strategy=update_strategy,
+        field_dependencies=field_dependencies,
     )
 
 

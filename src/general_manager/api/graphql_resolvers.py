@@ -1210,6 +1210,8 @@ def _grouped_field_declaration(
 def relation_id_alias_field(
     manager_class: type[GeneralManager],
     field_name: str,
+    *,
+    native_source: bool = False,
 ) -> str | None:
     """Resolve ``relation_id`` aliases backed by a declared singular relation."""
     if not field_name.endswith("_id"):
@@ -1221,6 +1223,27 @@ def relation_id_alias_field(
     annotation = field_info.get("type")
     if resolve_general_manager_type(annotation, get_graphql_manager_registry()) is None:
         return None
+    if native_source:
+        from django.core.exceptions import FieldDoesNotExist
+        from django.db import models
+        from general_manager.interface.orm_interface import OrmInterfaceBase
+
+        interface = manager_class.Interface
+        if (
+            field_name in interface.input_fields
+            or field_name in interface.get_graph_ql_properties()
+            or not safe_issubclass(interface, OrmInterfaceBase)
+        ):
+            return None
+        # Exact scalar sources do not inherit another field's relation by
+        # spelling. Keep genuine ORM aliases tied to their declared attname.
+        orm_interface = cast(type[OrmInterfaceBase[models.Model]], interface)
+        try:
+            native_field = orm_interface._model._meta.get_field(relation_field)
+        except FieldDoesNotExist:
+            return None
+        if getattr(native_field, "attname", None) != field_name:
+            return None
     return relation_field
 
 

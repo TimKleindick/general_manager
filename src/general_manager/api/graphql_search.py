@@ -7,6 +7,7 @@ exposes them as thin classmethods / staticmethods for backward compatibility.
 """
 
 from __future__ import annotations
+from dataclasses import replace
 
 import json
 from collections.abc import Callable, Generator, Iterable, Mapping
@@ -44,9 +45,10 @@ from general_manager.search.backend_registry import get_search_backend
 from general_manager.search.backend import SearchHit
 from general_manager.search.utils import normalize_identification
 from general_manager.search.identity import SearchFilters, build_search_filters
+from general_manager.search.authorization import analyze_search_projection
+from general_manager.search.config import SearchConfigSpec
 from general_manager.search.registry import (
     get_search_config,
-    collect_index_settings,
     get_type_label,
     validate_filter_keys,
 )
@@ -109,10 +111,13 @@ SEARCH_TOTAL_SCAN_LIMIT_ERROR = (
 
 _SEARCH_SCAN_LIMIT_EXCEEDED = (
     "Exact search total cannot be established within the server scan limit; "
-    "narrow the query or use totalMode: bounded."
+    "narrow the query. Partial search pages cannot safely exclude unreadable content."
 )
 _SEARCH_BACKEND_SCAN_LIMIT_EXCEEDED = (
     "Search backend exceeded the requested scan limit."
+)
+_SEARCH_STORED_DATA_REQUIRED = (
+    "Search backend must return complete stored data to authorize search projections."
 )
 
 
@@ -1297,11 +1302,11 @@ def register_search_query(
 
     Manager search order follows ``manager_registry.values()`` filtered to
     managers with search configuration, unless the resolver receives ``types``;
-    unknown names in ``types`` are ignored. In exact total mode, ``total`` in
-    the resolver payload is the post-permission authorized total, not the
-    backend raw total. In bounded mode, ``total`` is the authorized count found
-    before the per-manager scan cap and ``total_is_exact`` tells callers whether
-    that count is exact. Typed ordering validates selected search-index
+    unknown names in ``types`` are ignored. ``total`` is the post-permission
+    authorized total, never the backend raw total. Both total modes fail on
+    scan-budget exhaustion: a partial raw prefix can depend on unreadable
+    content. ``total_is_exact`` remains true on successful responses.
+    Typed ordering validates selected search-index
     capabilities before any backend request. Configured filter-key validation
     runs on the parsed top-level search filters before permission
     filters or relation normalizers are applied; exclude-derived permission keys
@@ -1328,10 +1333,37 @@ def register_search_query(
     if "search" in query_fields:
         return search_union, search_result_type
 
-    type_map = {
-        manager_class.__name__: manager_class
+    search_configs = {
+        manager_class: config
         for manager_class in manager_registry.values()
-        if get_search_config(manager_class) is not None
+        if (config := get_search_config(manager_class)) is not None
+    }
+
+    def index_definitions(config: SearchConfigSpec | None) -> tuple[object, ...]:
+        # IndexConfig is frozen, but its application-supplied sequences/mapping
+        # can be mutable. Detach the values used to guard startup proof reuse.
+        return (
+            tuple(
+                (
+                    item.name,
+                    tuple(item.fields),
+                    tuple(item.filters),
+                    tuple(item.sorts),
+                    item.boost,
+                    item.min_score,
+                    frozenset(item.identity_fields.items()),
+                )
+                for item in config.indexes
+            )
+            if config is not None
+            else ()
+        )
+
+    configured_indexes = {
+        manager: index_definitions(config) for manager, config in search_configs.items()
+    }
+    type_map = {
+        manager_class.__name__: manager_class for manager_class in search_configs
     }
     if not type_map:
         return search_union, search_result_type
@@ -1347,6 +1379,20 @@ def register_search_query(
         scope="",
         field_paths=sortable_union,
     )
+    # Classify definitions once per schema. No user or object decisions survive
+    # a request, and rebuilding the schema rebuilds every projection proof.
+    projection_plans = {
+        (manager, index_config.name): analyze_search_projection(
+            manager, config, index_config, manager_registry
+        )
+        for manager, config in search_configs.items()
+        for index_config in config.indexes
+    }
+    projection_indexes = {
+        (manager, name): next(index for index in config.indexes if index.name == name)
+        for manager, config in search_configs.items()
+        for name in {index.name for index in config.indexes}
+    }
 
     def resolver(
         _root: object,
@@ -1363,11 +1409,12 @@ def register_search_query(
         """
         Execute a cross-manager full-text search with permission filtering.
 
-        The resolver parses user filters, validates configured filter keys,
-        searches each selected manager type, matches hit identification to its
-        field-authorized source snapshot, applies native instance checks, and
-        returns paginated source instances. Individually indexed instances outside
-        the enumerable native domain cannot contribute results or totals. Omitted ``page`` and
+        Static projection proofs permit database candidate batches; other
+        projections retain full source and operand authorization. Both paths
+        retain native instance membership and runtime relation gates before
+        counting and pagination. Index freshness belongs to index maintenance.
+        Individually indexed
+        instances outside the native domain cannot contribute results or totals. Omitted ``page`` and
         ``page_size`` values default to ``1`` and ``10`` respectively. Supplied
         non-positive values raise a ``GraphQLError``.
         """
@@ -1412,10 +1459,9 @@ def register_search_query(
         took_ms: int | None = None
         requested_count = offset + limit
         fetch_limit = max(requested_count, limit)
-        resolved_total_mode = normalize_search_total_mode(total_mode)
+        normalize_search_total_mode(total_mode)
         total_scan_limit = get_graphql_search_total_scan_limit()
         scanned_hits = 0
-        total_is_exact = True
 
         from general_manager.api.graphql_query_permissions import (
             MAX_QUERY_PERMISSION_CANDIDATES,
@@ -1442,16 +1488,52 @@ def register_search_query(
                 continue
             from general_manager.api.graphql_query_permissions import (
                 authorize_query_fields,
-                CUSTOM_PROJECTION_ERROR,
                 INCOMPLETE_ERROR,
+                QueryRelationPermissionError,
             )
             from general_manager.bucket.request_bucket import RequestBucket
+            from general_manager.bucket.database_bucket import DatabaseBucket
 
             authorized_instances: dict[str, GeneralManager] = {}
             search_config = get_search_config(manager_class)
+            projection_plan = projection_plans.get((manager_class, index_name))
+            selected_index = projection_indexes.get((manager_class, index_name))
+            if search_config != search_configs.get(manager_class) or index_definitions(
+                search_config
+            ) != configured_indexes.get(manager_class):
+                # Changed projection definitions cannot inherit a startup fast
+                # approval. Keep the existing validation errors and full checks
+                # until the schema is rebuilt with the new configuration.
+                selected_index = (
+                    next(
+                        (
+                            item
+                            for item in search_config.indexes
+                            if item.name == index_name
+                        ),
+                        None,
+                    )
+                    if search_config is not None
+                    else None
+                )
+                projection_plan = (
+                    replace(
+                        analyze_search_projection(
+                            manager_class,
+                            search_config,
+                            selected_index,
+                            manager_registry,
+                        ),
+                        fast=False,
+                    )
+                    if search_config is not None and selected_index is not None
+                    else None
+                )
+            fast_source = None
+            if projection_plan is not None and projection_plan.error is not None:
+                raise GraphQLError(projection_plan.error)
             if search_config is not None:
-                if search_config.to_document is not None:
-                    raise GraphQLError(CUSTOM_PROJECTION_ERROR)
+                custom_projection = search_config.to_document is not None
                 operand_paths = set(parsed_filters)
                 operand_paths.update(term.field for term in ordering_terms)
                 for index_config in search_config.indexes:
@@ -1463,18 +1545,9 @@ def register_search_query(
                         document_fields.update(index_config.sorts)
                         # Searchable attributes are shared across all types in
                         # an index, including fields only used as filters here.
-                        operand_paths.update(
-                            document_fields.intersection(
-                                collect_index_settings(index_name).searchable_fields
-                            )
-                        )
-                source_candidates = manager_class.all()
-                # Search permission constraints use native instance predicates,
-                # including properties that are not public bucket filters.
-                # Reuse that exact gate before evaluating client operands.
-                candidates = list(
-                    authorized_source_candidates(source_candidates, permission_plan)
-                )
+                        # DevSearch scores every serialized value; other types
+                        # also share searchable attributes in the same index.
+                        operand_paths.update(document_fields)
                 # The index envelope exposes a synthetic manager-type filter.
                 # A real manager attribute with that name still needs permission.
                 if not any(
@@ -1491,15 +1564,93 @@ def register_search_query(
                         for path in operand_paths
                         if path.split("__", 1)[0] != "type"
                     }
-                authorize_query_fields(candidates, info, operand_paths)
-                # Search indexes may contain explicitly indexed calculations or
-                # newly inserted rows outside this authorized native domain.
-                # Retain its instances, not just IDs, so hits cannot replace the
-                # objects whose operand permissions were checked.
-                authorized_instances = {
-                    normalize_identification(candidate.identification): candidate
-                    for candidate in candidates
-                }
+                if custom_projection:
+                    from general_manager.search.projection import (
+                        SearchProjectionError,
+                        projection_filter_fields,
+                        projection_source_paths,
+                    )
+
+                    document_operands = {
+                        path for path in operand_paths if path not in parsed_filters
+                    }
+                    try:
+                        document_operands.update(
+                            projection_filter_fields(
+                                manager_class,
+                                selected_index,
+                                (
+                                    path
+                                    for path in parsed_filters
+                                    if path in operand_paths
+                                ),
+                            )
+                        )
+                        if (
+                            projection_plan is not None
+                            and document_operands <= projection_plan.document_fields
+                        ):
+                            # The schema already validated all configured sources.
+                            # Reuse definitions only; runtime row/field/relation
+                            # authorization still happens below for each actor.
+                            operand_paths = set(projection_plan.paths)
+                        else:
+                            operand_paths = set(
+                                projection_source_paths(
+                                    manager_class, search_config, document_operands
+                                )
+                            )
+                    except SearchProjectionError as exc:
+                        raise GraphQLError(str(exc)) from exc
+                source_candidates = manager_class.all()
+                from general_manager.search.projection import (
+                    SearchProjectionError,
+                    projection_filter_fields,
+                )
+
+                requested_fields_proven = True
+                try:
+                    projection_filter_fields(
+                        manager_class,
+                        selected_index,
+                        (path for path in parsed_filters if path in operand_paths),
+                    )
+                except SearchProjectionError:
+                    # Aggregate index metadata may admit a key configured only
+                    # by another manager; it has no proof on this projection.
+                    requested_fields_proven = False
+                # Native row authorization precedes operand checks. Projection
+                # provenance never substitutes for the source instance gate.
+                if (
+                    projection_plan is not None
+                    and projection_plan.fast
+                    and requested_fields_proven
+                    and type(source_candidates) is DatabaseBucket
+                    and set(manager_class.Interface.input_fields) == {"id"}
+                ):
+                    fast_source = source_candidates
+                else:
+                    candidates = list(
+                        authorized_source_candidates(source_candidates, permission_plan)
+                    )
+                    if projection_plan is not None:
+                        authorize_query_fields(
+                            candidates, info, projection_plan.paths, native_paths=True
+                        )
+                    if not custom_projection:
+                        # Backend lookup grammar is separate from exact indexed
+                        # source paths, including relation identity leaves.
+                        requested_operands = set(parsed_filters).intersection(
+                            operand_paths
+                        )
+                        requested_operands.update(term.field for term in ordering_terms)
+                        authorize_query_fields(candidates, info, requested_operands)
+                    # Preserve the exact authorized instances, including
+                    # calculation input domains and remote completeness.
+                    authorized_instances = {
+                        normalize_identification(candidate.identification): candidate
+                        for candidate in candidates
+                    }
                 if (
                     isinstance(source_candidates, RequestBucket)
                     and not source_candidates.response_is_complete
@@ -1507,10 +1658,17 @@ def register_search_query(
                     raise GraphQLError(INCOMPLETE_ERROR)
             # Shared indexes may give the same field different native types.
             # Keep parsed user filters and permission constraints untouched.
-            manager_filters = {
-                key: normalize_id_filter_value(manager_class, key, value)
-                for key, value in parsed_filters.items()
-            }
+            custom_projection = (
+                search_config is not None and search_config.to_document is not None
+            )
+            manager_filters = (
+                dict(parsed_filters)
+                if custom_projection
+                else {
+                    key: normalize_id_filter_value(manager_class, key, value)
+                    for key, value in parsed_filters.items()
+                }
+            )
             backend_shape = get_backend_shape(manager_class)
             instance_check_reasons = resolve_instance_check_reasons(
                 permission_plan,
@@ -1518,7 +1676,7 @@ def register_search_query(
             )
             filter_groups: SearchFilters = (
                 manager_filters or None
-                if decision == "allow_all"
+                if decision == "allow_all" or custom_projection
                 else merge_permission_filters(
                     manager_filters,
                     permission_plan.filters,
@@ -1562,6 +1720,37 @@ def register_search_query(
                     )
                 scanned_hits += len(result.hits)
                 offset_cursor += len(result.hits)
+                if fast_source is not None:
+                    identifiers = []
+                    for hit in result.hits:
+                        if hit.type != type_label or set(hit.identification) != {"id"}:
+                            continue
+                        try:
+                            identifiers.append(
+                                normalize_id_filter_value(
+                                    manager_class, "id", hit.identification["id"]
+                                )
+                            )
+                        except (TypeError, ValueError, KeyError):
+                            continue
+                    # Bucket filtering keeps the native source restriction and
+                    # reuses its batch ORM hydration. Arbitrary indexed IDs never
+                    # acquire membership by construction.
+                    candidate_source = fast_source.filter(pk__in=identifiers)
+                    if projection_plan is not None and projection_plan.has_relations:
+                        candidate_source = candidate_source._with_empty_relation_probes(
+                            path.split("__", 1)[0] for path in projection_plan.paths
+                        )
+                    authorized_instances = (
+                        {
+                            normalize_identification(
+                                candidate.identification
+                            ): candidate
+                            for candidate in candidate_source
+                        }
+                        if identifiers
+                        else {}
+                    )
                 for hit in result.hits:
                     if hit.type != type_label:
                         logger.debug(
@@ -1602,6 +1791,33 @@ def register_search_query(
                         permission_plan=permission_plan,
                     ):
                         continue
+                    if hit.data is None:
+                        raise GraphQLError(_SEARCH_STORED_DATA_REQUIRED)
+                    if (
+                        projection_plan is not None
+                        and set(hit.data) != projection_plan.document_fields
+                    ):
+                        # A document from an older schema may retain fields
+                        # absent from today's proof. Those values can still
+                        # affect backend matching and rank until reindexing.
+                        continue
+                    if (
+                        fast_source is not None
+                        and projection_plan is not None
+                        and projection_plan.has_relations
+                    ):
+                        try:
+                            authorize_query_fields(
+                                [instance],
+                                info,
+                                projection_plan.paths,
+                                native_paths=True,
+                            )
+                        except QueryRelationPermissionError:
+                            # Remove the entire projection before count, ranking
+                            # and pagination. Filtering nested output alone leaves
+                            # hidden text in the index and is insufficient.
+                            continue
                     total_hits_for_manager += 1
                     hits.append((hit.score, hit, instance))
                 trim_search_hit_entries_to_window(
@@ -1616,14 +1832,12 @@ def register_search_query(
                     break
             total += total_hits_for_manager
             if not manager_total_is_exact:
-                if resolved_total_mode == "exact":
-                    # Backend totals may be estimates; without observing exhaustion,
-                    # a full budget cannot establish an exact authorized count.
-                    raise GraphQLError(
-                        _SEARCH_SCAN_LIMIT_EXCEEDED,
-                        extensions={"code": "SEARCH_SCAN_LIMIT_EXCEEDED"},
-                    )
-                total_is_exact = False
+                # A raw scan prefix can change with unreadable values. Even
+                # bounded mode must not expose that prefix as an authorized page.
+                raise GraphQLError(
+                    _SEARCH_SCAN_LIMIT_EXCEEDED,
+                    extensions={"code": "SEARCH_SCAN_LIMIT_EXCEEDED"},
+                )
             if decision == "conditional" and permission_plan.requires_instance_check:
                 logger.info(
                     "graphql read authorization summary",
@@ -1651,14 +1865,12 @@ def register_search_query(
         return {
             "results": items,
             "total": total,
-            "total_is_exact": total_is_exact,
+            "total_is_exact": True,
             "page_info": {
-                "total_count": total if total_is_exact else None,
+                "total_count": total,
                 "page_size": limit,
                 "current_page": current_page,
-                "total_pages": (
-                    (total + limit - 1) // limit if total_is_exact else None
-                ),
+                "total_pages": (total + limit - 1) // limit,
             },
             "took_ms": took_ms,
         }
