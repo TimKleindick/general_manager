@@ -93,8 +93,9 @@ class Project(GeneralManager):
 ```
 
 `to_document` should only return keys configured on the `IndexConfig` used for
-indexing. Filter fields listed in `filters` are included automatically if not
-present in the returned mapping.
+indexing. Filter and sort fields are included automatically if not present in the returned
+mapping. For GraphQL search, custom projections must declare complete native
+provenance using `field_dependencies` (see below).
 
 ### Related-data invalidation
 
@@ -218,19 +219,88 @@ filters prefilter hits, exclude mappings and unfilterable rules are resolved by
 the later permission pass, and aggregate authorization logging occurs only when
 that pass requires an instance check.
 
-Search authorization is also an identity boundary. For each selected manager
-that is not statically denied (`deny_all`), the resolver first enumerates the
-field-authorized native source domain and keeps those source instances keyed by
-normalized identification. A backend hit
-contributes to `results` or `total` only when its type and identification match
-that authorized source snapshot; hits with missing or out-of-domain identities
-and unexpected types are ignored. Search documents therefore cannot grant access
-to an object merely because an identification was indexed, and the resolver does
-not instantiate a new manager from an arbitrary hit before authorization. An incomplete remote
-source page is an error rather than permission to return an unbounded result.
-Identity membership does not verify indexed text or filter freshness: an older
-indexed match for a still-authorized instance can remain until reindexing,
-while the returned instance comes from the current source snapshot.
+Search authorization is also an identity boundary. When the GraphQL schema is
+built, each manager/index projection is classified from its definitions. The fast
+route requires proof that relevant fields add no read restrictions beyond the
+manager's row rules. Inherited rules and field-rule OR alternatives that include all row-rule
+alternatives do not count as additional restrictions. Additional field rules,
+custom executable permission rules, and unknown definitions retain the thorough
+route; invalid provenance raises before backend search. This classification
+lasts for the schema lifetime and assumes immutable definitions. Restart and
+rebuild the schema after changing permissions or search configuration. It caches
+no user or object authorization decisions.
+
+Every configured serialized searchable, filterable, and sortable key is covered,
+even when a request does not filter or sort on it. DevSearch scores all serialized
+values, and shared indexes can make fields searchable across manager types.
+
+The fast runtime route applies only to the native `DatabaseBucket` with standard
+`id` identification. It loads the current native source instances for each hit
+batch and applies the existing row authorization. The thorough route enumerates
+the row-authorized source domain and checks required field paths before backend
+search. Calculation and remote managers retain full-source authorization and
+completeness checks even when their static classification is fast. Calculation
+sources require an enumerable `possible_values` domain; incomplete remote pages
+fail explicitly.
+
+Hits with missing, malformed, out-of-domain identities or unexpected types never
+contribute to results or totals. Fast related projections use the existing native
+permission traversal on each hit: denial of a referenced object removes the
+entire owner projection before counting, sorting, or pagination. The thorough
+route still raises when access needed for an operand is denied.
+
+Every hit must include stored `SearchHit.data` containing exactly the configured
+searchable, filterable, and sortable keys. Missing stored data raises an error;
+extra or missing keys cause the hit to be skipped until reindexing. This prevents
+removed restricted fields in older documents from influencing current search.
+Index maintenance owns value freshness for every projection. Search never
+reserializes source rows or compares their values with the index. Invalidation
+and reconciliation must remove obsolete content, including text from former
+relation targets, before it can influence search. Current-source authorization
+alone cannot detect values left over from a replaced relation.
+
+For supported native collection relations, the fast candidate SELECT can also
+prove emptiness with correlated `EXISTS` expressions. Only proven empty
+collections avoid a subsequent SELECT. Populated, custom, historical and
+cross-database relations retain their normal loading and permission checks.
+Validated projection paths are reused from schema construction; runtime field
+and relation checks still run. A changed search configuration, including an
+in-place edit to an index's fields, filters or sorts, cannot reuse the old fast
+approval and uses thorough validation until the schema is rebuilt.
+
+### Projection dependencies
+
+`SearchConfig.field_dependencies` maps each configured document key to a nonempty
+sequence of exact native paths. It is a trusted application assertion of **all**
+sources read across every serializer/property branch, including indirect helpers;
+the framework cannot infer arbitrary Python data access. It declares provenance,
+not value equality, so a custom alias can transform or combine its sources.
+
+```python
+class Project(GeneralManager):
+    class SearchConfig:
+        indexes = [IndexConfig(name="global", fields=["label"])]
+        field_dependencies = {"label": ("name", "customer__name")}
+
+        @staticmethod
+        def to_document(instance):
+            return {"label": f"{instance.name}: {instance.customer.name}"}
+```
+
+Custom projections require a declaration for every configured searchable,
+filterable, and sortable key. If a custom mapping omits a key and indexing falls
+back to the native field, that actual field must also appear in its declaration.
+Custom document filters are not pushed down as native permission filters: a
+transformed value need not equal any source value.
+
+The same contract supports native projections and properties. Native projection
+authorization always includes the actual serialized field as well as every
+declared source; a declaration cannot relabel away its permission. Properties
+without complete dependencies fail before backend search. When dependencies are
+provided, cover every configured key, not only the property. Source paths must
+resolve through native relations to supported scalar leaves. Unknown or invalid
+paths never qualify for the fast route. Dependency declarations do not replace
+[related-data invalidation](#related-data-invalidation); keep both accurate.
 
 The `types` argument selects manager classes. Synthetic `type` filter keys are
 forwarded to the backend and retain its native filter semantics. For example,
@@ -255,16 +325,14 @@ Results are returned as a union of manager GraphQL types:
 - `results`: nullable GraphQL list field containing the authorized manager instances as the generated union type.
 - `total`: nullable integer field containing the post-permission authorized hit count, not the backend raw total.
 - `totalIsExact`: nullable boolean field. `true` means `total` is the exact
-  post-permission count; `false` means bounded mode stopped scanning before it
-  could prove no more backend hits remain, so `total` is a lower bound.
+  post-permission count. Retained for compatibility, it is always `true` on a
+  successful response.
 - `tookMs`: nullable integer field containing accumulated backend search time in milliseconds when reported.
 
 Omitted `page` defaults to `1` and omitted `pageSize` defaults to `10`.
 Explicit `0` or negative pagination values are rejected as GraphQL
-`BAD_USER_INPUT` errors. The resolver enumerates the field-authorized source
-domain for each selected manager, matches backend hits to those canonical
-instances by normalized identification, and then applies any required
-per-instance read checks before counting and returning results. Manager search
+`BAD_USER_INPUT` errors. The resolver uses the authorized native source instances described above and
+applies required per-instance read checks before counting and returning results. Manager search
 order follows GraphQL's manager registry order filtered to managers with search
 config. When `types` is supplied, unknown manager class names are ignored.
 Malformed or out-of-domain hit identification is skipped rather than hydrated.
@@ -291,19 +359,17 @@ Both total modes obey it. Client-selected `page`, `pageSize`, `types`, and
 remaining budget, and returned hits consume it before hydration or authorization;
 denied, stale, and unexpected-type hits also count.
 
-Exact mode scans until all selected types are exhausted. If the budget is
-consumed before exhaustion is established, it raises a GraphQL error with code
-`SEARCH_SCAN_LIMIT_EXCEEDED` and returns no partial exact result. This is
+Both modes scan until all selected types are exhausted. If the budget is
+consumed before exhaustion is established, either mode raises a GraphQL error
+with code `SEARCH_SCAN_LIMIT_EXCEEDED` and returns no partial result. This is
 conservative at the boundary: a full final backend page does not prove that
 there are no more hits, even when a backend's best-effort total equals the cap.
-Narrow the query or select bounded mode instead.
+Narrow the query or increase the server-owned budget when appropriate.
 
-Bounded mode returns the authorized hits found within the same budget and sets
-`totalIsExact` to `false` if exhaustion was not observed. In that case,
-`pageInfo.totalCount` and `pageInfo.totalPages` are `null`. A requested page beyond
-the budget can be incomplete or empty. Cross-type searches spend the budget in
-the existing manager iteration order; bounded results therefore represent only
-the scanned candidates, not a globally complete ranked page.
+**Compatibility change:** `bounded` remains an accepted setting and request value,
+but no longer releases a partially authorized scan prefix. Successful responses
+always have exact totals and `totalIsExact: true`; clients must handle the limit
+error in both modes. Switching to bounded mode cannot avoid it.
 
 Clients may choose `totalMode: "exact"` or `totalMode: "bounded"` but cannot
 disable the limit. Invalid modes and non-positive limits are rejected as GraphQL

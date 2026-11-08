@@ -199,27 +199,47 @@ No permission cache is shared across requests or users. Calculation queries now
 check the full row-authorized input domain before client input predicates; their
 row/field check counts can therefore increase even for a narrow input filter.
 
-Search checks the configured searchable document fields (including searchable
-attributes shared by other types in the index), plus requested filters and sorts,
-before calling the search backend. Custom `SearchConfig.to_document` projections
-are rejected by GraphQL search: arbitrary remapping has no trustworthy mapping
-back to native field permissions. Use the standard attribute projection for
-GraphQL search. Output masking alone does not authorize custom projections.
-All query operands on incomplete remote candidate sets fail explicitly, including
-public permissions, because a partial upstream page cannot establish permission
-across all possible matches. Statically denied managers are the exception. They
-return no rows before source inspection and skip operand checks.
-Search over calculation managers requires an enumerable `possible_values` domain;
-indexing isolated instances alone does not establish the authorization scope.
+Search authorizes every configured serialized searchable, filterable, and sortable
+key, including keys unused by request filters or ordering. DevSearch scores all
+serialized values. At schema construction, manager/index definitions are
+classified: fields with no extra read restrictions can use the fast route;
+additional field rules or unknown/custom executable rules require the thorough
+route. Inherited rules and field-rule OR alternatives that include all manager
+row-rule alternatives are not extra restrictions. Definitions are assumed immutable until schema rebuild after
+restart. Classification stores no user or object permission results.
 
-Search additionally caps source authorization at 1,000 candidates across all
-selected manager types, counting denied rows before their native permission
-checks. Exhaustion raises an explicit error. This source-work budget is separate
-from backend hit scanning and field/path decisions; it does not bound SQL bucket
-materialization that occurs before iteration.
+Only a native `DatabaseBucket` with standard `id` identification uses fast
+hit-batch source hydration. Row authorization remains enforced. Related fast
+hits use native permission traversal; a denied referenced object removes the
+entire owner projection before count, sort, and pagination. Thorough checks still
+fail when any row-authorized candidate denies required operand access.
+Calculation and remote sources retain full-source checks, even for static fast
+classifications. Incomplete remote sources fail explicitly, and calculation
+sources require an enumerable `possible_values` domain. Statically denied
+managers skip source and backend inspection.
 
-Search hits are matched to canonical identities in the field-authorized source
-domain and reuse those source instances. Individually indexing a calculation
-outside its enumerable `possible_values` domain does not make it visible to
-GraphQL search. Stale or out-of-domain index entries are ignored for results and
-counts independently of their field values.
+Custom `SearchConfig.to_document` projections require complete trusted
+`field_dependencies` for every configured key. The same contract supports native
+properties; actual native serialized fields always remain authorized alongside
+declared dependencies. Missing property provenance and invalid paths fail before
+backend search. Declarations describe sources, not equality, so custom document
+filters cannot become native permission pushdown. See
+[projection dependencies](../search.md#projection-dependencies) for the contract.
+
+Source authorization on the thorough route caps work at 1,000 candidates across
+selected manager types, counting denied rows before native permission checks.
+This budget is separate from backend scanning and field/path decisions and does
+not bound preceding SQL bucket materialization. Fast hit batches remain subject
+to the backend candidate budget and related field/path authorization budget.
+
+Hits must match current authorized native source identities. Every hit requires
+stored `SearchHit.data` with exactly the configured search/filter/sort keys. Missing
+stored data is an error; extra or missing keys skip the hit pending reindexing so
+removed restricted fields cannot influence search. Value freshness belongs to
+the separate indexing/invalidation pipeline; the search resolver does not
+reserialize documents. That pipeline must remove obsolete content from former
+relation targets: permission checks against current sources cannot identify
+those old values. Indexing a calculation outside its source domain never
+grants access. Both `exact` and `bounded` total modes raise
+`SEARCH_SCAN_LIMIT_EXCEEDED` on exhausted scan budgets; neither releases a partial
+prefix, and successful responses always have `totalIsExact: true`.

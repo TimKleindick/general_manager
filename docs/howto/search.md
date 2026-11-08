@@ -281,28 +281,27 @@ By default, GraphQL search returns exact post-permission totals. Exact totals
 preserve existing behavior, but permission-filtered searches may need to scan
 additional backend pages after the current result page is already filled.
 
-Choose a positive server-owned scan limit. Both exact and bounded modes obey it;
-bounded mode permits a partial result instead of an error at the limit:
+Choose a positive server-owned scan limit. Both exact and bounded modes obey it
+and fail rather than return a partial result when it is exhausted:
 
 ```python
 GENERAL_MANAGER = {
     **GENERAL_MANAGER,
-    "GRAPHQL_SEARCH_TOTAL_MODE": "bounded",
+    "GRAPHQL_SEARCH_TOTAL_MODE": "exact",
     "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 1000,
 }
 ```
 
-The limit is shared across all selected manager types per search resolver call.
-It counts backend candidates before permission checks. Large `page` or `pageSize`
-values do not enlarge it. In bounded mode, `total` is the authorized count found
-within the budget, and `totalIsExact` is `false` unless all selected sources were
-exhausted. Inexact results have null `pageInfo.totalCount` and
-`pageInfo.totalPages`; deep pages may be incomplete or empty.
+The limit is shared across selected manager types per resolver call and counts
+backend candidates before permission checks, including denied and stale hits.
+Large `page` or `pageSize` values do not enlarge it. Both modes raise
+`SEARCH_SCAN_LIMIT_EXCEEDED` if the full authorized total cannot be established,
+including a full page exactly at the scan boundary. Narrow the query or increase
+the server budget when appropriate.
 
-Exact mode raises `SEARCH_SCAN_LIMIT_EXCEEDED` if it cannot establish the full
-authorized total within the budget, including a full page exactly at the scan
-boundary. It does not return a partial result labelled exact. Narrow the query
-or use bounded mode when this occurs.
+**Compatibility change:** bounded mode no longer returns partial counts or pages.
+`totalIsExact` is always `true` on success. Update clients that previously relied
+on `false` or on switching to bounded mode to avoid the limit error.
 
 Clients can override the setting per request:
 
@@ -324,23 +323,39 @@ query {
 }
 ```
 
-Use `totalMode: "exact"` when a request requires an exact count or an explicit
-limit error even if the deployment default is bounded. It cannot disable the
-server scan limit. Invalid `totalMode` values are GraphQL user-input errors.
+Both `totalMode: "exact"` and `totalMode: "bounded"` require complete totals and
+cannot disable the server scan limit. Invalid values are GraphQL user-input errors.
 
-Search results stay inside the authorized native source domain. The resolver
-checks the requested filter operands, enumerates the field-authorized source
-instances, and matches indexed hits to those canonical instances by normalized
-identification. Documents with missing or out-of-scope identities and
-unexpected manager types are ignored for both `results` and `total`; an indexed
-identification cannot grant access by itself. If a remote source cannot return a
-complete authorized page, the search fails instead of treating the incomplete
-page as the full domain. The identity check does not refresh indexed content;
-older text or filter values for a still-authorized identity can keep matching
-until reindexing. Use the `types` argument to select manager classes. Synthetic
-`type` filter keys retain the selected backend's matching semantics and are
-excluded from operand permission checks unless that manager really exposes a
-field named `type`.
+Search results stay inside the authorized native source domain. Static projection
+classification is built with the GraphQL schema; restart and rebuild the schema
+after changing definitions. Native database projections proven to add no field
+restrictions use hit-batch authorization. Other projections use thorough field
+checks, and calculation/remote sources always retain full-domain and completeness
+checks. Missing, malformed, out-of-scope, or unexpected-type hits are ignored for
+both results and totals. Fast related hits whose referenced object is denied are
+removed entirely before counting, sorting, or pagination; thorough denied operand
+checks still raise.
+
+For custom `to_document` mappings or native properties, declare complete
+`SearchConfig.field_dependencies` for every configured search/filter/sort key,
+covering all sources read in every branch. Native fields retain their own checks
+alongside declared dependencies. See
+[projection dependencies](../concepts/search.md#projection-dependencies) for an
+example. Missing property provenance and invalid declarations fail before backend
+search. Custom document filters are not treated as native permission filters.
+
+Backends must return stored `SearchHit.data` for every hit, with exactly the
+configured searchable, filterable, and sortable keys. Missing stored data raises
+an error; extra or missing keys skip the hit until reindexing, preventing removed
+restricted fields from influencing search. Keep invalidation and reconciliation
+configured for every projection, including changes of relation targets. This
+separate index-maintenance path owns value freshness; search neither reserializes
+documents nor compares stored values with current values. In particular, remove
+obsolete content from former relation targets before it can influence search.
+
+Use `types` to select manager classes. Synthetic `type` filter keys retain backend
+matching semantics and are excluded from operand checks unless the manager really
+exposes a field named `type`.
 
 ## Step 5: Async indexing (optional)
 

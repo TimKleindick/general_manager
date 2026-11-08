@@ -94,7 +94,13 @@ class _AuthenticatedPrecisionTests(GeneralManagerTransactionTestCase):
                                 "business_number",
                             ],
                         )
-                    ]
+                    ],
+                    "field_dependencies": {
+                        "key": ("key",),
+                        "customer_id": ("key",),
+                        "reference_id": ("reference_id",),
+                        "business_number": ("business_number",),
+                    },
                 },
             )
 
@@ -176,7 +182,12 @@ class _AuthenticatedPrecisionTests(GeneralManagerTransactionTestCase):
                     )
                     self.assertEqual(
                         self.Record.Permission.checked,
-                        [(self.user.pk, A), (self.user.pk, B), (self.user.pk, A)],
+                        [
+                            (self.user.pk, A),
+                            (self.user.pk, B),
+                            (self.user.pk, A),
+                            (self.user.pk, A),
+                        ],
                     )
 
     def test_native_permission_constraints_conflicts_or_and_counts(self):

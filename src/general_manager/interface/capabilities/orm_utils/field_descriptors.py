@@ -28,6 +28,11 @@ from django.db.models.query import prefetch_related_objects
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.interface.base_interface import AttributeTypedDict
 from general_manager.interface.utils.errors import DuplicateFieldNameError
+from general_manager.interface.capabilities.orm_utils.collection_probes import (
+    NativeCollectionProbe,
+    collection_is_proven_empty,
+    register_collection_probe,
+)
 from general_manager.measurement.measurement import Measurement
 from general_manager.measurement.measurement_field import MeasurementField
 
@@ -1028,6 +1033,14 @@ def _general_manager_many_accessor(
             if getattr(rel, "related_model", None) == source_model
         ]
 
+    probe = NativeCollectionProbe(
+        source_model,
+        cast("type[GeneralManager]", general_manager_class),
+        (relation_filter_name,)
+        if relation_filter_name is not None
+        else tuple(field.name for field in related_fields),
+    )
+
     def getter(self: OrmInterfaceInstance) -> object:
         """
         Obtain related objects filtered by this interface instance's primary key.
@@ -1037,6 +1050,17 @@ def _general_manager_many_accessor(
         """
         manager_cls = cast("type[GeneralManager]", general_manager_class)
         search_date = getattr(self, "_search_date", None)
+        source_row = getattr(self, "_instance", None)
+        if (
+            search_date is None
+            and isinstance(source_row, source_model)
+            and collection_is_proven_empty(source_row, probe)
+            and probe.can_probe(source_row._state.db or "default")
+        ):
+            # Keep the native bucket's filters and dependency tracking. Only
+            # physical emptiness from the candidate SELECT avoids loading rows;
+            # populated/unknown relations still take the existing path below.
+            return manager_cls.filter(**dict.fromkeys(probe.filters, self.pk)).none()
         if is_many_to_many and search_date is not None:
             from general_manager.bucket.database_bucket import DatabaseBucket
 
@@ -1088,6 +1112,8 @@ def _general_manager_many_accessor(
             filter_kwargs["search_date"] = search_date
         return manager_cls.filter(**filter_kwargs)
 
+    if probe.filters:
+        register_collection_probe(getter, probe)
     return getter
 
 

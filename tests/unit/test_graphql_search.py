@@ -595,27 +595,21 @@ class GraphQLSearchTests(SimpleTestCase):
         info = MagicMock()
         info.context.user = AnonymousUser()
 
-        response = field.resolver(
-            None,
-            info,
-            query="",
-            index="global",
-            types=None,
-            filters=None,
-            page=1,
-            page_size=1,
-        )
+        with self.assertRaisesRegex(GraphQLError, "scan limit") as caught:
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=None,
+                filters=None,
+                page=1,
+                page_size=1,
+            )
 
-        assert response["total"] == 1
-        assert response["total_is_exact"] is False
-        assert len(response["results"]) == 1
+        assert caught.exception.extensions == {"code": "SEARCH_SCAN_LIMIT_EXCEEDED"}
         assert len(backend.search_calls) == 1
-        assert response["page_info"] == {
-            "total_count": None,
-            "page_size": 1,
-            "current_page": 1,
-            "total_pages": None,
-        }
+        assert backend.search_calls[0]["kwargs"]["limit"] == 1
 
     def test_graphql_search_exact_total_ignores_best_effort_backend_total(self) -> None:
         backend = self._configure_counting_backend_with_public_rows(
@@ -796,21 +790,21 @@ class GraphQLSearchTests(SimpleTestCase):
         info = MagicMock()
         info.context.user = AnonymousUser()
 
-        response = field.resolver(
-            None,
-            info,
-            query="",
-            index="global",
-            types=None,
-            filters=None,
-            page=1,
-            page_size=1,
-        )
+        with self.assertRaisesRegex(GraphQLError, "scan limit") as caught:
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=None,
+                filters=None,
+                page=1,
+                page_size=1,
+            )
 
-        assert response["total"] == 5
-        assert response["total_is_exact"] is False
-        assert len(response["results"]) == 1
+        assert caught.exception.extensions == {"code": "SEARCH_SCAN_LIMIT_EXCEEDED"}
         assert len(backend.search_calls) == 5
+        assert all(call["kwargs"]["limit"] == 1 for call in backend.search_calls)
 
     @override_settings(
         GENERAL_MANAGER={
@@ -826,21 +820,21 @@ class GraphQLSearchTests(SimpleTestCase):
         info = MagicMock()
         info.context.user = AnonymousUser()
 
-        response = field.resolver(
-            None,
-            info,
-            query="",
-            index="global",
-            types=None,
-            filters=None,
-            page=1,
-            page_size=1,
-        )
+        with self.assertRaisesRegex(GraphQLError, "scan limit") as caught:
+            field.resolver(
+                None,
+                info,
+                query="",
+                index="global",
+                types=None,
+                filters=None,
+                page=1,
+                page_size=1,
+            )
 
-        assert response["total"] == 5
-        assert response["total_is_exact"] is False
-        assert len(response["results"]) == 1
+        assert caught.exception.extensions == {"code": "SEARCH_SCAN_LIMIT_EXCEEDED"}
         assert len(backend.search_calls) == 5
+        assert all(call["kwargs"]["limit"] == 1 for call in backend.search_calls)
 
     @override_settings(
         GENERAL_MANAGER={
@@ -880,17 +874,18 @@ class GraphQLSearchTests(SimpleTestCase):
         for page, page_size in ((1, 1000000), (1000000, 1)):
             with self.subTest(page=page, page_size=page_size):
                 backend.search_calls.clear()
-                response = field.resolver(
-                    None,
-                    info,
-                    query="",
-                    total_mode="bounded",
-                    page=page,
-                    page_size=page_size,
-                )
-                assert response["total"] == 2
-                assert response["total_is_exact"] is False
-                assert response["page_info"]["total_count"] is None
+                with self.assertRaisesRegex(GraphQLError, "scan limit") as caught:
+                    field.resolver(
+                        None,
+                        info,
+                        query="",
+                        total_mode="bounded",
+                        page=page,
+                        page_size=page_size,
+                    )
+                assert caught.exception.extensions == {
+                    "code": "SEARCH_SCAN_LIMIT_EXCEEDED"
+                }
                 assert len(backend.search_calls) == 1
                 assert backend.search_calls[0]["kwargs"]["limit"] == 2
 
@@ -939,16 +934,16 @@ class GraphQLSearchTests(SimpleTestCase):
         backend = self._configure_counting_backend_with_public_rows(public_count=2)
         SearchIndexer(backend).index_instance(AlternateProject(id=3))
         info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
-        response = GraphQL._query_fields["search"].resolver(
-            None,
-            info,
-            query="",
-            types=["Project", "AlternateProject"],
-            page_size=100,
-            total_mode="bounded",
-        )
-        assert response["total"] == 3
-        assert response["total_is_exact"] is False
+        with self.assertRaisesRegex(GraphQLError, "scan limit") as caught:
+            GraphQL._query_fields["search"].resolver(
+                None,
+                info,
+                query="",
+                types=["Project", "AlternateProject"],
+                page_size=100,
+                total_mode="bounded",
+            )
+        assert caught.exception.extensions == {"code": "SEARCH_SCAN_LIMIT_EXCEEDED"}
         assert [call["kwargs"]["limit"] for call in backend.search_calls] == [3, 1]
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 2})
@@ -1625,7 +1620,11 @@ class GraphQLSearchTests(SimpleTestCase):
                         - "name": {"type": str}
                         - "rank": {"type": int}
                 """
-                return {"name": {"type": str}, "rank": {"type": int}}
+                return {
+                    "name": {"type": str},
+                    "rank": {"type": int},
+                    "start_date": {"type": str},
+                }
 
             @classmethod
             def get_attributes(cls):

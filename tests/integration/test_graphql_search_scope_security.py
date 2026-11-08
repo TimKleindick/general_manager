@@ -37,6 +37,9 @@ class TestGraphQLSearchScopeSecurity(GeneralManagerTransactionTestCase):
                 indexes: ClassVar[list] = [
                     IndexConfig(name="global", fields=["secret"])
                 ]
+                field_dependencies: ClassVar[dict[str, tuple[str, ...]]] = {
+                    "secret": ("key",)
+                }
 
             @graph_ql_property
             def secret(self) -> str:
@@ -54,6 +57,9 @@ class TestGraphQLSearchScopeSecurity(GeneralManagerTransactionTestCase):
 
             class SearchConfig:
                 indexes: ClassVar[list] = [IndexConfig(name="global", fields=["label"])]
+                field_dependencies: ClassVar[dict[str, tuple[str, ...]]] = {
+                    "label": ("key",)
+                }
 
             @graph_ql_property
             def label(self) -> str:

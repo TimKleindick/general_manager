@@ -3,6 +3,7 @@
 from datetime import date
 from decimal import Decimal
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -13,6 +14,11 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
 from general_manager.cache.signals import post_data_change
+from general_manager.cache.run_context import CalculationRunContext
+from general_manager.api.graphql_query_permissions import (
+    QueryRelationPermissionError,
+    authorize_query_fields,
+)
 
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
@@ -226,6 +232,29 @@ class NoopUpdateTests(GeneralManagerTransactionTestCase):
             ),
             ["second"],
         )
+
+    def test_empty_collection_probe_preserves_non_pk_through_membership(self):
+        self.record.update(coded_targets_id_list=["first"], ignore_permission=True)
+        with CalculationRunContext(), CaptureQueriesContext(connection) as queries:
+            bucket = self.Record.filter(id=self.record.id)._with_empty_relation_probes(
+                ["coded_targets_list"]
+            )
+            candidate = next(iter(bucket))
+            self.assertEqual(
+                [target.name for target in candidate.coded_targets_list], ["first"]
+            )
+            with patch(
+                "general_manager.api.graphql_resolvers.can_read_instance",
+                return_value=False,
+            ):
+                with self.assertRaises(QueryRelationPermissionError):
+                    authorize_query_fields(
+                        [candidate],
+                        SimpleNamespace(context=SimpleNamespace(user=self.user)),
+                        ["coded_targets_list__name"],
+                        native_paths=True,
+                    )
+        self.assertEqual(len(queries), 2)
 
     def test_replacement_file_with_same_name_still_saves(self):
         with TemporaryDirectory() as directory, override_settings(MEDIA_ROOT=directory):

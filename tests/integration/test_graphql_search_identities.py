@@ -38,14 +38,20 @@ class SearchIdentityPermission(ManagerBasedPermission):
     __read__: ClassVar[list[str]] = ["public"]
 
 
-def search_config(*fields):
+def search_config(
+    *fields,
+    property_dependencies: dict[str, tuple[str, ...]] | None = None,
+):
+    dependencies = {field: (field,) for field in fields}
+    dependencies.update(property_dependencies or {})
     return type(
         "SearchConfig",
         (),
         {
             "indexes": [
                 IndexConfig(name="global", fields=list(fields), filters=list(fields))
-            ]
+            ],
+            "field_dependencies": dependencies,
         },
     )
 
@@ -72,6 +78,10 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
                 "record_key",
                 "record_keys",
                 "status",
+                property_dependencies={
+                    "record_key": ("code",),
+                    "record_keys": ("code",),
+                },
             )
 
             @graph_ql_property(is_identifier=True)
@@ -130,6 +140,16 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
                 "absent_keys",
                 "inferred_key",
                 "business_ids",
+                property_dependencies={
+                    "record_key": ("key",),
+                    "record_keys": ("key",),
+                    "key_tuple": ("key",),
+                    "key_set": ("key",),
+                    "optional_keys": ("key",),
+                    "absent_keys": ("key",),
+                    "inferred_key": ("key",),
+                    "business_ids": ("business_number",),
+                },
             )
 
             @graph_ql_property(
@@ -172,7 +192,15 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
                 token = models.UUIDField(primary_key=True)
 
             Permission = SearchIdentityPermission
-            SearchConfig = search_config("token", "record_key", "record_keys")
+            SearchConfig = search_config(
+                "token",
+                "record_key",
+                "record_keys",
+                property_dependencies={
+                    "record_key": ("token",),
+                    "record_keys": ("token",),
+                },
+            )
 
             @graph_ql_property(is_identifier=True)
             def record_key(self) -> UUID:
@@ -196,7 +224,15 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
                 account = Input(str, possible_values=["007"])
 
             Permission = SearchIdentityPermission
-            SearchConfig = search_config("account", "external_id", "record_key")
+            SearchConfig = search_config(
+                "account",
+                "external_id",
+                "record_key",
+                property_dependencies={
+                    "external_id": ("id",),
+                    "record_key": ("id",),
+                },
+            )
 
             @graph_ql_property
             def external_id(self) -> int:

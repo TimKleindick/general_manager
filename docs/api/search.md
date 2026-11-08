@@ -31,6 +31,17 @@ be non-negative when provided.
 `FieldConfig(name=...)` while preserving field order, and `field_boosts()` keeps
 only explicit field boosts.
 
+`SearchConfig.field_dependencies` is an optional mapping from configured document
+keys to nonempty sequences of exact native source paths. Resolution freezes it
+as a mapping of tuples. For GraphQL search, custom `to_document` projections and
+native properties require complete provenance for every configured searchable,
+filterable, and sortable key. It is a trusted application assertion covering all
+branches and indirect reads, not an assertion that output values equal source
+values. Native projections always authorize their actual serialized fields in
+addition to the declared paths. Custom native fallback fields must be included
+in their own dependencies. Invalid or incomplete provenance fails before backend
+search. See [projection dependencies](../concepts/search.md#projection-dependencies).
+
 `SearchInvalidationRule` declares a source manager whose lifecycle changes can
 invalidate search documents owned by the manager containing the rule. Sources
 may be manager classes or dotted import paths; dotted paths remain unchanged in
@@ -206,31 +217,49 @@ The result exposes `results`, `total`, `totalIsExact`, `pageInfo`, and `tookMs`.
 Omitted `index`, `page`, and `pageSize` use `global`, `1`, and `10`; non-positive
 `page` or `pageSize` values are `BAD_USER_INPUT`. `totalMode` is `exact` by
 default for compatibility or `bounded` when selected per request or by
-`GENERAL_MANAGER["GRAPHQL_SEARCH_TOTAL_MODE"]`. Exact mode raises
-`SEARCH_SCAN_LIMIT_EXCEEDED` rather than returning a partial exact total when
-the server-owned `GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT` is exhausted. Bounded mode
-returns the authorized count found within that budget and sets `totalIsExact` to
-`false` when the scan budget is exhausted before backend exhaustion can be
-proved. It remains `true` when all backend scans finish before reaching the
-budget.
+`GENERAL_MANAGER["GRAPHQL_SEARCH_TOTAL_MODE"]`. Both modes raise
+`SEARCH_SCAN_LIMIT_EXCEEDED` when the server-owned
+`GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT` is exhausted before source exhaustion is
+established, including a full final backend page at the boundary. Neither returns
+partial results. **Compatibility change:** bounded mode no longer returns a
+partial count or page; `totalIsExact` remains in the schema and is always `true`
+on success. The positive candidate budget defaults to `1000` and is shared
+across selected manager types; denied and stale hits consume it too.
 
 `orderBy` is present when the registered searchable managers expose sortable
 fields; its `SearchOrderBy` input uses the generated sortable-field enum and
 `ASC`/`DESC` directions.
 
-Authorization is performed against the current field-authorized native source
-domain before backend hits are hydrated. A hit contributes only when its type
-and normalized identification match a canonical authorized source instance;
-hits with missing or out-of-domain identities, malformed identification, or
-unexpected types are skipped. This checks native identity membership; indexed
-text and filter values can remain stale until reindexing. An incomplete remote
-source page is an error. The synthetic `type` filter is
-removed from operand authorization unless the manager exposes an actual field
-named `type`; an actual field remains permission-checked. The `types` argument
-selects manager classes, while `type` filter matching retains the selected
-backend's native semantics. Invalid configured filter keys and invalid ordering
-terms are GraphQL errors. Backend, source
-authorization, permission, and sort errors propagate.
+Schema construction classifies each manager/index projection from immutable
+definitions. Proven absence of additional relevant field restrictions enables
+fast routing; extra field restrictions and unknown/custom executable permission
+rules retain thorough checks. Rebuild the schema after restarting with changed
+definitions. This classification caches no user or object decisions.
+
+All serialized search/filter/sort keys are authorized, even if unused by request
+operands. Only native `DatabaseBucket` sources with standard `id` identification
+use fast hit-batch hydration; calculation and remote sources retain full-domain
+checks and remote completeness requirements. Hits must match canonical authorized
+native instances. Missing or out-of-domain identities, malformed identification,
+and unexpected types are skipped. On fast related hits, denial of a referenced
+object removes the whole owner projection before count, sorting, and pagination;
+the thorough route raises on denied required operand access.
+
+Every hit must supply stored `SearchHit.data` with exactly the configured
+searchable, filterable, and sortable keys. Missing stored data raises an error;
+extra or missing keys skip the hit pending reindexing, preventing removed
+restricted fields from influencing search. The separate indexing/invalidation
+pipeline owns value freshness, including obsolete content from former relation
+targets. Search does not reserialize documents or compare their values with
+current source values. Custom projection filters are not
+native permission pushdown because declared sources need not equal mapped values.
+
+The synthetic `type` filter is removed from operand authorization unless the
+manager exposes an actual field named `type`; an actual field remains checked.
+The `types` argument selects manager classes, while `type` filter matching retains
+the backend's native semantics. Invalid configured filter keys and ordering terms
+are GraphQL errors. Backend, source authorization, permission, and sort errors
+propagate.
 
 DevSearch honors explicit groups without changing its existing scalar/list
 comparison rules; plain mappings keep raw comparisons. Meilisearch binds plain
