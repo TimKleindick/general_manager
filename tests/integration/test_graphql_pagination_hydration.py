@@ -1,6 +1,8 @@
 """Paged native lists count matches without hydrating the complete result twice."""
 
 from datetime import UTC, datetime
+from collections.abc import Iterator
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
@@ -19,6 +21,22 @@ from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 from general_manager.permission import OverrideManagerPermission
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
+
+
+@contextmanager
+def record_hydrations(model: type[models.Model]) -> Iterator[list[models.Model]]:
+    """Observe real loads while preserving Django's classmethod protocol."""
+    hydrated: list[models.Model] = []
+    original = model.from_db.__func__
+
+    def from_db(cls, *args, **kwargs):
+        instance = original(cls, *args, **kwargs)
+        hydrated.append(instance)
+        return instance
+
+    # Django 6.1 inspects from_db.__func__ before choosing a fetch strategy.
+    with patch.object(model, "from_db", classmethod(from_db)):
+        yield hydrated
 
 
 class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
@@ -51,7 +69,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
     def test_paged_list_hydrates_operand_domain_and_page_only(self) -> None:
         with (
             CalculationRunContext(),
-            patch.object(self.model, "from_db", wraps=self.model.from_db) as hydrate,
+            record_hydrations(self.model) as hydrated,
         ):
             result = self.resolver(
                 None,
@@ -71,7 +89,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
         }
         # Every source row is still inspected for operands. Only returned rows
         # need a second hydration; counting the filtered domain does not.
-        assert hydrate.call_count == 12 + 3
+        assert len(hydrated) == 12 + 3
 
     def test_denied_nonmatch_or_offpage_row_still_rejects(self) -> None:
         for denied_rank in (0, 11):
@@ -104,7 +122,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
     def test_unpaged_list_keeps_existing_materialized_count(self) -> None:
         with (
             CalculationRunContext(),
-            patch.object(self.model, "from_db", wraps=self.model.from_db) as hydrate,
+            record_hydrations(self.model) as hydrated,
         ):
             result = self.resolver(
                 None,
@@ -120,7 +138,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
             "current_page": 1,
             "total_pages": 1,
         }
-        assert hydrate.call_count == 12 + 10
+        assert len(hydrated) == 12 + 10
 
     def test_custom_count_and_length_remain_authoritative(self) -> None:
         class CustomCount(DatabaseBucket):

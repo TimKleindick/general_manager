@@ -324,5 +324,29 @@
         "calls": 11140
       }
     ]
+  },
+  "ci_test_instrumentation_followup": {
+    "observed_run": "https://github.com/TimKleindick/general_manager/actions/runs/42621587693",
+    "failure": "Two new hydration observers used bare mocks lacking the from_db.__func__ descriptor required by Django 6.1; 16569 other tests passed in Python 3.13.",
+    "change": "Test-only observer now uses a real classmethod that delegates to the original method; all result and hydration assertions remain.",
+    "production_source_unchanged": true,
+    "original_full_run_input_manifest_preserved": true,
+    "updated_test_sha256": "1f7ca9b0728c71c8b60a2ecd030339f4c34e9b284f57725c82f6756e8a97a756",
+    "django52": "7 passed, 5 subtests",
+    "django61": "7 passed, 5 subtests",
+    "django61_focused": "139 passed, 23 subtests",
+    "prior_source_regression": "Same repaired observer against 4f220906 fails with 25 rather than 15 hydrations.",
+    "logs": {
+      "hydration-django52-after.log": "2a6b0e21b096b7f3ffd55bd26bccaeb1c0f57828c5677db982cb817bf7f81a06",
+      "hydration-django61-after.log": "51e9ce4bfafcd4863dbc053a9e7200c8e000558ab035814066b18d773548bb79",
+      "followup-django61.log": "7e99882ecd7b2553acb3015491ed0194e1d967dda8fd6df578ae410d247bfc06",
+      "hydration-django61-regression.log": "0b322714876937e0d8dfc29af15ec18141e345eaa034feae90b84142a098f193"
+    },
+    "commands": [
+      ".venv/bin/python -m pytest tests/integration/test_graphql_pagination_hydration.py -q --tb=short",
+      "PYTHONPATH=src /tmp/kh-pr10933/gm906cd0b-performance-venv/bin/python -m pytest tests/integration/test_graphql_pagination_hydration.py -q --tb=short",
+      "PYTHONPATH=src /tmp/kh-pr10933/gm906cd0b-performance-venv/bin/python -m pytest tests/unit/test_permission_definition_metadata.py tests/unit/test_manager_based_permission.py tests/integration/test_graphql_list_permission_budget.py tests/integration/test_graphql_field_query_permissions.py tests/integration/test_graphql_pagination_hydration.py -q --tb=short",
+      "/tmp/kh-pr10933/gm906cd0b-performance-venv/bin/python -m pytest -o pythonpath=/tmp/kh-gm583-list-optimization/before/src tests/integration/test_graphql_pagination_hydration.py::TestGraphQLPaginationHydration::test_paged_list_hydrates_operand_domain_and_page_only -q --tb=short"
+    ]
   }
 }
