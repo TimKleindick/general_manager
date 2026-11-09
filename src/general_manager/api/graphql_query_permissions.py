@@ -120,9 +120,10 @@ def authorize_query_fields(
             normalized.add(tuple(parts))
     if not normalized:
         return
+    normalized_paths = sorted(normalized)
     native_root = _NativePathNode()
     if native_paths:
-        for native_parts in sorted(normalized):
+        for native_parts in normalized_paths:
             node = native_root
             for part in native_parts:
                 node = node.children.setdefault(part, _NativePathNode())
@@ -317,7 +318,7 @@ def authorize_query_fields(
             for native_field, native_node in sorted(native_root.children.items()):
                 check(candidate, (native_field,), native_node)
         else:
-            for normalized_parts in sorted(normalized):
+            for normalized_parts in normalized_paths:
                 check(candidate, normalized_parts)
     if isinstance(candidates, RequestBucket) and not candidates.response_is_complete:
         raise GraphQLError(INCOMPLETE_ERROR)

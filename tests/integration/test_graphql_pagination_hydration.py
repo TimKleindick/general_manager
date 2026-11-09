@@ -1,0 +1,197 @@
+"""Paged native lists count matches without hydrating the complete result twice."""
+
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import ClassVar
+from unittest.mock import patch
+
+from django.contrib.auth.models import AnonymousUser
+from django.db import models
+from graphql import GraphQLError
+
+from general_manager.api import graphql_resolvers
+from general_manager.api.graphql_resolvers import create_list_resolver
+from general_manager.as_of import HistoricalContextConflictError, as_of
+from general_manager.bucket.database_bucket import DatabaseBucket
+from general_manager.cache.cache_tracker import DependencyTracker
+from general_manager.cache.run_context import CalculationRunContext
+from general_manager.interface import DatabaseInterface
+from general_manager.manager import GeneralManager
+from general_manager.permission import OverrideManagerPermission
+from general_manager.utils.testing import GeneralManagerTransactionTestCase
+
+
+class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        class PaginationHydrationRecord(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=30)
+                rank = models.IntegerField()
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
+        cls.Record = PaginationHydrationRecord
+        cls.general_manager_classes = [PaginationHydrationRecord]
+        super().setUpClass()
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.model = self.Record.Interface._model
+        self.model.objects.bulk_create(
+            [
+                self.model(name="match" if rank < 10 else "outside", rank=rank)
+                for rank in range(12)
+            ]
+        )
+        self.info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        self.resolver = create_list_resolver(lambda *_: self.Record.all(), self.Record)
+
+    def test_paged_list_hydrates_operand_domain_and_page_only(self) -> None:
+        with (
+            CalculationRunContext(),
+            patch.object(self.model, "from_db", wraps=self.model.from_db) as hydrate,
+        ):
+            result = self.resolver(
+                None,
+                self.info,
+                filter={"name": "match"},
+                order_by=[{"field": "rank", "direction": "DESC"}],
+                page=2,
+                page_size=3,
+            )
+
+        assert [item.rank for item in result["items"]] == [6, 5, 4]
+        assert result["pageInfo"] == {
+            "total_count": 10,
+            "page_size": 3,
+            "current_page": 2,
+            "total_pages": 4,
+        }
+        # Every source row is still inspected for operands. Only returned rows
+        # need a second hydration; counting the filtered domain does not.
+        assert hydrate.call_count == 12 + 3
+
+    def test_denied_nonmatch_or_offpage_row_still_rejects(self) -> None:
+        for denied_rank in (0, 11):
+            with self.subTest(denied_rank=denied_rank):
+                seen = []
+
+                def check(
+                    instance, _info, field, *, seen=seen, denied_rank=denied_rank
+                ):
+                    seen.append(instance.rank)
+                    return instance.rank != denied_rank
+
+                with (
+                    CalculationRunContext(),
+                    patch.object(
+                        graphql_resolvers, "check_read_permission", side_effect=check
+                    ),
+                    self.assertRaisesMessage(GraphQLError, "query field"),
+                ):
+                    self.resolver(
+                        None,
+                        self.info,
+                        filter={"name": "match"},
+                        order_by=[{"field": "rank", "direction": "DESC"}],
+                        page=1,
+                        page_size=3,
+                    )
+                assert denied_rank in seen
+
+    def test_unpaged_list_keeps_existing_materialized_count(self) -> None:
+        with (
+            CalculationRunContext(),
+            patch.object(self.model, "from_db", wraps=self.model.from_db) as hydrate,
+        ):
+            result = self.resolver(
+                None,
+                self.info,
+                filter={"name": "match"},
+                order_by=[{"field": "rank", "direction": "DESC"}],
+            )
+
+        assert [item.rank for item in result["items"]] == list(range(9, -1, -1))
+        assert result["pageInfo"] == {
+            "total_count": 10,
+            "page_size": None,
+            "current_page": 1,
+            "total_pages": 1,
+        }
+        assert hydrate.call_count == 12 + 10
+
+    def test_custom_count_and_length_remain_authoritative(self) -> None:
+        class CustomCount(DatabaseBucket):
+            def count(self) -> int:
+                return 31
+
+        class CustomLength(DatabaseBucket):
+            def __len__(self) -> int:
+                return 41
+
+        class DynamicCount(DatabaseBucket):
+            def __getattribute__(self, name):
+                if name == "count":
+                    return lambda: 51
+                return super().__getattribute__(name)
+
+        for bucket_class, expected_count in (
+            (CustomCount, 31),
+            (CustomLength, 41),
+            (DynamicCount, 51),
+        ):
+            with self.subTest(bucket_class=bucket_class.__name__):
+                source = bucket_class(self.model.objects.all(), self.Record)
+                resolver = create_list_resolver(
+                    lambda *_, source=source: source, self.Record
+                )
+                with CalculationRunContext():
+                    result = resolver(
+                        None,
+                        self.info,
+                        filter={"name": "match"},
+                        order_by=[{"field": "rank", "direction": "DESC"}],
+                        page=1,
+                        page_size=3,
+                    )
+                assert result["pageInfo"]["total_count"] == expected_count
+                assert [item.rank for item in result["items"]] == [9, 8, 7]
+
+    def test_page_count_reuses_exact_snapshots_and_honors_invalidation(self) -> None:
+        source = self.Record.filter(name="match")
+        with CalculationRunContext() as context:
+            tuple(source)
+            with self.assertNumQueries(0), DependencyTracker() as dependencies:
+                assert source._count_for_page() == 10
+            assert any(item[1] == "filter" for item in dependencies)
+
+            # A primary-key-only snapshot is sufficient to answer the count.
+            context.clear_orm_bucket_results()
+            source._get_run_scoped_primary_keys()
+            with self.assertNumQueries(0):
+                assert source._count_for_page() == 10
+
+            self.model.objects.filter(rank=0).update(name="outside")
+            context.clear_orm_bucket_results()
+            with self.assertNumQueries(1):
+                assert source._count_for_page() == 9
+
+    def test_instance_count_override_remains_authoritative(self) -> None:
+        source = self.Record.all()
+        resolver = create_list_resolver(lambda *_: source, self.Record)
+        with patch.object(source, "count", return_value=31) as count:
+            result = resolver(None, self.info, page=1, page_size=3)
+        count.assert_called_once_with()
+        assert result["pageInfo"]["total_count"] == 31
+        assert len(result["items"]) == 3
+
+    def test_page_count_rejects_incompatible_historical_context(self) -> None:
+        source = self.Record.all()
+        with (
+            as_of(datetime(2025, 1, 1, tzinfo=UTC)),
+            self.assertNumQueries(0),
+            self.assertRaises(HistoricalContextConflictError),
+        ):
+            source._count_for_page()

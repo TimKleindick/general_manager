@@ -6,6 +6,13 @@ blockers in the earlier [search report](kh-pr-validation.md). GM is based on
 `origin/main` at `715c942f2a94a5b2cf1435dd06b71228cb730448`; the existing PR is
 [#583](https://github.com/TimKleindick/general_manager/pull/583). PR #582 remains closed.
 
+The later [native list optimization](list-optimization.md) contains the current
+performance measurements and repeated GM/KH backend validation. It reduces the
+raw 1,000-booking flow from 2.340 to 1.103 seconds with identical results. The
+comparison below records the earlier compatibility checkpoint at `4f220906`;
+its 8.3× raw-flow gap is superseded by the new measured 3.9× gap. Contracts and
+the unchanged frontend evidence remain applicable.
+
 ## Contracts and ownership
 
 - Omitted `page` **and** `pageSize` return the complete local list. Supplying
@@ -139,7 +146,7 @@ This is not a claim of flake-free E2E behavior.
 source/lockfile hashes, the repaired-file manifest and the initial/final results.
 Full raw reports remain under `/tmp/kh-gm583-followup/frontend-validation/`.
 
-## Balanced performance comparison
+## Earlier balanced comparison at `4f220906`
 
 The unchanged supplied harness and the same KH source run in A–B–C–C–B–A order:
 GM 0.86.4, the earlier fix `906cd0be89b8ee9172ee7e83c875c3d3c4a25eca`, and this
@@ -173,7 +180,7 @@ The simple search still uses **two SQL statements**. Its median is about 2.4×
 The previous [four-to-two-query audit](sql-optimization.md) remains a separate
 measurement of that earlier optimization stage.
 
-**The 1,000-booking raw flow remains a performance gap:** 2.328 seconds versus
+**At this checkpoint the 1,000-booking raw flow retained a performance gap:** 2.328 seconds versus
 0.281 seconds (about 8.3×), and 170 versus 160 SQL statements over ten pages.
 It is functionally correct and passes the original test, but this is not a
 performance-parity result. List operand checks still cover the authorized source

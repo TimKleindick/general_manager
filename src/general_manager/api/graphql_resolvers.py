@@ -1989,7 +1989,25 @@ def create_list_resolver(
             qs_sorted = apply_sorting(qs_grouped, effective_ordering)
 
         if request_provenance is None or request_provenance.is_complete:
-            total_count: int | None = len(qs_sorted)
+            from inspect import getattr_static
+
+            from general_manager.bucket.database_bucket import DatabaseBucket
+
+            total_count: int | None
+            if (
+                effective_pagination.requested
+                and isinstance(qs_sorted, DatabaseBucket)
+                and getattr_static(type(qs_sorted), "__getattribute__", None)
+                is object.__getattribute__
+                and getattr_static(qs_sorted, "count", None) is DatabaseBucket.count
+                and getattr_static(type(qs_sorted), "__len__", None)
+                is DatabaseBucket.__len__
+            ):
+                # A page slice reads its own rows. Avoid loading the complete
+                # filtered result just to count it, while honoring custom counts.
+                total_count = qs_sorted._count_for_page()
+            else:
+                total_count = len(qs_sorted)
         elif authorization_result.requires_instance_check:
             total_count = None
         else:
