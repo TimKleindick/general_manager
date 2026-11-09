@@ -10,7 +10,10 @@ from django.contrib.auth import get_user_model
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 
-from general_manager.cache.run_context import CalculationRunContext
+from general_manager.cache.run_context import (
+    CalculationRunContext,
+    current_calculation_run_context,
+)
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
@@ -247,6 +250,254 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
             assert context.orm_bucket_invalidation_generation > generation
 
             assert [item.id for item in retained_owner.children_list] == [child.id]
+
+    def test_retained_search_result_reloads_many_to_many_after_direct_update(
+        self,
+    ) -> None:
+        owner = self.Owner.Factory.create(name="empty sources")
+        source = self.Source.Factory.create(name="new source", visibility="public")
+        self.index(owner)
+
+        with CalculationRunContext() as context:
+            retained_owner = self.search(query="sources")["results"][0]
+            assert list(retained_owner.sources_list) == []
+            generation = context.orm_bucket_invalidation_generation
+
+            self.Owner.get(id=owner.id)._interface.update(sources_id_list=[source.id])
+
+            assert context.orm_bucket_invalidation_generation > generation
+            assert [item.id for item in retained_owner.sources_list] == [source.id]
+
+    def test_retained_search_result_reloads_many_to_many_after_manager_update(
+        self,
+    ) -> None:
+        owner = self.Owner.Factory.create(name="empty manager sources")
+        source = self.Source.Factory.create(name="new source", visibility="public")
+        self.index(owner)
+
+        with CalculationRunContext() as context:
+            retained_owner = self.search(query="manager sources")["results"][0]
+            assert list(retained_owner.sources_list) == []
+            generation = context.orm_bucket_invalidation_generation
+
+            self.Owner.get(id=owner.id).update(
+                ignore_permission=True,
+                sources_id_list=[source.id],
+            )
+
+            assert context.orm_bucket_invalidation_generation > generation
+            assert [item.id for item in retained_owner.sources_list] == [source.id]
+
+    def test_cached_row_probe_does_not_cross_mutation_generation(self) -> None:
+        first = self.Owner.Factory.create(name="first")
+        second = self.Owner.Factory.create(name="second")
+        source = self.Source.Factory.create(name="new source", visibility="public")
+        original_hydrate = self.Owner._from_trusted_orm_instance
+        mutated = False
+
+        def hydrate(
+            cls: type[GeneralManager],
+            instance: models.Model,
+            *,
+            search_date: object = None,
+        ) -> GeneralManager:
+            nonlocal mutated
+            if not mutated:
+                self.Owner.Interface._model.objects.get(pk=second.id).sources.add(
+                    source.id
+                )
+                context = current_calculation_run_context()
+                assert context is not None
+                context.clear_orm_bucket_results()
+                mutated = True
+            return original_hydrate(instance, search_date=search_date)
+
+        with CalculationRunContext():
+            bucket = self.Owner.filter(id__in=[first.id, second.id])
+            bucket = bucket._with_empty_relation_probes(["sources_list"])
+            with patch.object(
+                self.Owner,
+                "_from_trusted_orm_instance",
+                classmethod(hydrate),
+            ):
+                result = list(bucket)
+
+            second_result = next(item for item in result if item.id == second.id)
+            assert [item.id for item in second_result.sources_list] == [source.id]
+
+            # Django retains the over-cap queryset's rows. Their witness must
+            # stay tied to the first iterator's snapshot generation rather than
+            # being rebound by the later iterator after the mutation.
+            repeated_result = list(bucket)
+            repeated_second = next(
+                item for item in repeated_result if item.id == second.id
+            )
+            assert [item.id for item in repeated_second.sources_list] == [source.id]
+
+    def test_uncached_row_probe_does_not_cross_mutation_generation(self) -> None:
+        first = self.Owner.Factory.create(name="first")
+        second = self.Owner.Factory.create(name="second")
+        source = self.Source.Factory.create(name="new source", visibility="public")
+        original_hydrate = self.Owner._from_trusted_orm_instance
+        mutated = False
+
+        def hydrate(
+            cls: type[GeneralManager],
+            instance: models.Model,
+            *,
+            search_date: object = None,
+        ) -> GeneralManager:
+            nonlocal mutated
+            if not mutated:
+                self.Owner.Interface._model.objects.get(pk=second.id).sources.add(
+                    source.id
+                )
+                context = current_calculation_run_context()
+                assert context is not None
+                context.clear_orm_bucket_results()
+                mutated = True
+            return original_hydrate(instance, search_date=search_date)
+
+        with (
+            CalculationRunContext(),
+            patch(
+                "general_manager.bucket.database_bucket."
+                "MAX_RUN_SCOPED_BUCKET_RESULT_ROWS",
+                1,
+            ),
+        ):
+            bucket = self.Owner.filter(id__in=[first.id, second.id])
+            bucket = bucket._with_empty_relation_probes(["sources_list"])
+            with patch.object(
+                self.Owner,
+                "_from_trusted_orm_instance",
+                classmethod(hydrate),
+            ):
+                result = list(bucket)
+
+            second_result = next(item for item in result if item.id == second.id)
+            assert [item.id for item in second_result.sources_list] == [source.id]
+
+            # The direct iterator populated Django's queryset cache before the
+            # mutation. A later iteration must keep the old row provenance
+            # instead of binding its stale EXISTS annotation to the new run
+            # generation.
+            repeated_result = list(bucket)
+            repeated_second = next(
+                item for item in repeated_result if item.id == second.id
+            )
+            assert [item.id for item in repeated_second.sources_list] == [source.id]
+
+    def test_uncached_queryset_rows_keep_original_probe_generation(self) -> None:
+        first = self.Owner.Factory.create(name="first")
+        second = self.Owner.Factory.create(name="second")
+        source = self.Source.Factory.create(name="new source", visibility="public")
+
+        with (
+            CalculationRunContext() as context,
+            patch(
+                "general_manager.bucket.database_bucket."
+                "MAX_RUN_SCOPED_BUCKET_RESULT_ROWS",
+                1,
+            ),
+        ):
+            bucket = self.Owner.filter(id__in=[first.id, second.id])
+            bucket = bucket._with_empty_relation_probes(["sources_list"])
+            initial = list(bucket)
+            initial_second = next(item for item in initial if item.id == second.id)
+            assert list(initial_second.sources_list) == []
+
+            self.Owner.Interface._model.objects.get(pk=second.id).sources.add(source.id)
+            context.clear_orm_bucket_results()
+
+            result = list(bucket)
+            second_result = next(item for item in result if item.id == second.id)
+            assert [item.id for item in second_result.sources_list] == [source.id]
+
+    def test_uncached_queryset_rows_do_not_cross_context_lifetimes(self) -> None:
+        first = self.Owner.Factory.create(name="first")
+        second = self.Owner.Factory.create(name="second")
+        source = self.Source.Factory.create(name="new source", visibility="public")
+
+        with patch(
+            "general_manager.bucket.database_bucket.MAX_RUN_SCOPED_BUCKET_RESULT_ROWS",
+            1,
+        ):
+            bucket = self.Owner.filter(id__in=[first.id, second.id])
+            bucket = bucket._with_empty_relation_probes(["sources_list"])
+            with CalculationRunContext():
+                initial = list(bucket)
+                initial_second = next(item for item in initial if item.id == second.id)
+                assert list(initial_second.sources_list) == []
+
+            self.Owner.Interface._model.objects.get(pk=second.id).sources.add(source.id)
+
+            # Both runs begin at invalidation generation zero. Only a witness
+            # bound to the original context lifetime can distinguish the stale
+            # queryset rows from a new SQL snapshot.
+            with CalculationRunContext():
+                result = list(bucket)
+                second_result = next(item for item in result if item.id == second.id)
+                assert [item.id for item in second_result.sources_list] == [source.id]
+
+    def test_uncached_queryset_rows_do_not_cross_context_reentry(self) -> None:
+        first = self.Owner.Factory.create(name="first")
+        second = self.Owner.Factory.create(name="second")
+        source = self.Source.Factory.create(name="new source", visibility="public")
+        context = CalculationRunContext()
+
+        with patch(
+            "general_manager.bucket.database_bucket.MAX_RUN_SCOPED_BUCKET_RESULT_ROWS",
+            1,
+        ):
+            bucket = self.Owner.filter(id__in=[first.id, second.id])
+            bucket = bucket._with_empty_relation_probes(["sources_list"])
+            with context:
+                initial = list(bucket)
+                initial_second = next(item for item in initial if item.id == second.id)
+                assert list(initial_second.sources_list) == []
+
+            self.Owner.Interface._model.objects.get(pk=second.id).sources.add(source.id)
+
+            with context:
+                result = list(bucket)
+                second_result = next(item for item in result if item.id == second.id)
+                assert [item.id for item in second_result.sources_list] == [source.id]
+
+    def test_uncached_queryset_rows_from_outside_context_stay_untrusted(self) -> None:
+        first = self.Owner.Factory.create(name="first")
+        second = self.Owner.Factory.create(name="second")
+        source = self.Source.Factory.create(name="new source", visibility="public")
+
+        with patch(
+            "general_manager.bucket.database_bucket.MAX_RUN_SCOPED_BUCKET_RESULT_ROWS",
+            1,
+        ):
+            bucket = self.Owner.filter(id__in=[first.id, second.id])
+            bucket = bucket._with_empty_relation_probes(["sources_list"])
+            initial = list(bucket)
+            initial_second = next(item for item in initial if item.id == second.id)
+            assert list(initial_second.sources_list) == []
+
+            self.Owner.Interface._model.objects.get(pk=second.id).sources.add(source.id)
+
+            with CalculationRunContext():
+                result = list(bucket)
+                second_result = next(item for item in result if item.id == second.id)
+                assert [item.id for item in second_result.sources_list] == [source.id]
+
+    def test_count_uses_retained_rows_after_primary_key_eviction(self) -> None:
+        self.Owner.Factory.create(name="first")
+        self.Owner.Factory.create(name="second")
+
+        with CalculationRunContext() as context:
+            bucket = self.Owner.filter()
+            assert len(list(bucket)) == 2
+            context.discard_prefix(("orm_bucket_result",))
+            with CaptureQueriesContext(connection) as queries:
+                assert bucket.count() == 2
+
+        assert len(queries) == 0
 
     def test_retained_search_result_expires_hint_after_context_exit(self) -> None:
         owner = self.Owner.Factory.create(name="context owner")

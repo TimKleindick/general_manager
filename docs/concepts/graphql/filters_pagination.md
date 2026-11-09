@@ -40,13 +40,15 @@ dictionary key named `none` at any depth under `exclude`, including a top-level
 `UnsupportedExcludeNoneRelationFilterError` because the resolver cannot invert
 that relation shape safely. For non-calculation, non-request lists, permission filters and
 any required per-instance row gate run before user filters. Calculation lists
-also apply permission filtering and the row gate first. When query operands
-are present, they freeze the authorized rows as an exact subset before applying
-predicates rooted at declared calculation inputs, then computed-property
-predicates. User input filters therefore cannot replace permission constraints
-and reintroduce unauthorized candidates. Computed-property predicates are
-evaluated only after per-instance authorization; declared-input predicates do
-not reduce the candidate set before that authorization step.
+first apply only proven plain constructor-input constraints that need no input
+normalization callback (apart from a native daily date range with identity
+normalization) to restrict their possible candidate domain, then apply permission
+filtering and the row gate. An exclusion mapping moves into that early phase only
+when every member is such a constraint, so its NOT(AND) meaning stays atomic. The
+authorized rows are frozen before all remaining declared-input
+and computed-property predicates run. User input
+filters therefore cannot replace permission constraints and reintroduce
+unauthorized candidates.
 
 Native database lists authorize filter and sort operands across the row-visible
 source before applying those operands or pagination. For ordinary ORM scalar
@@ -70,11 +72,11 @@ calculation paths retain their existing behavior.
 The resolver parses and normalizes all query arguments before authorization. For
 non-calculation, non-request lists, permission prefilters and the row gate run first, then
 normalized positive filter predicates, explicit excludes, and the accumulated
-relation-derived exclusions from both inputs. For calculation lists, that
-predicate order is preserved within two phases after row authorization:
-declared-input predicates first, then deferred computed-property predicates.
-Grouping, sorting, total-count calculation, and pagination follow both predicate
-phases. Filter
+relation-derived exclusions from both inputs. Calculation lists have an early
+plain-constructor phase (including proven native daily date ranges) before authorization, followed by remaining
+declared-input predicates and then deferred computed-property predicates on the
+frozen, authorized rows. Grouping, sorting, total-count calculation, and pagination
+follow all applicable phases. Filter
 normalizers receive the parsed object mapping for the current `filter` or
 `exclude` input and must return both `filter` and `exclude` mappings; missing
 keys propagate the resulting Python `KeyError`.

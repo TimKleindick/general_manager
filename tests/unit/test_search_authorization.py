@@ -136,6 +136,50 @@ def test_invalid_dependency_in_another_index_does_not_change_this_projection() -
     assert unresolved.error is not None
 
 
+@pytest.mark.parametrize("field_type", [list, tuple, set, frozenset, dict])
+def test_untyped_container_source_remains_an_unknown_projection(
+    field_type: type,
+) -> None:
+    """A container's declaration must prove its elements without reading rows."""
+
+    class ContainerInterface(BaseTestInterface):
+        @classmethod
+        def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
+            return {"values": _attribute(field_type)}
+
+    class Manager(GeneralManager):
+        Interface = ContainerInterface
+
+    result = _analyze(Manager, IndexConfig("global", ["values"]))
+
+    assert not result.fast
+    assert result.reasons == ("unknown dependencies",)
+    assert result.error is not None
+    assert "values" in result.error
+
+
+@pytest.mark.parametrize(
+    "field_type", [list[str], tuple[int, ...], set[str], frozenset[int], dict[str, int]]
+)
+def test_typed_scalar_container_has_complete_source_provenance(
+    field_type: object,
+) -> None:
+    """Typed scalar members do not hide an unexamined manager relation."""
+
+    class ContainerInterface(BaseTestInterface):
+        @classmethod
+        def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
+            return {"values": _attribute(cast(type, field_type))}
+
+    class Manager(GeneralManager):
+        Interface = ContainerInterface
+
+    result = _analyze(Manager, IndexConfig("global", ["values"]))
+
+    assert result.error is None
+    assert result.paths == ("values",)
+
+
 @pytest.mark.parametrize(
     "field_rules",
     [

@@ -1243,6 +1243,10 @@ def discard_orm_instance_cache(
     """
     context = current_calculation_run_context()
     if context is not None:
+        # Direct interface mutations do not necessarily pass through the
+        # manager-level data-change wrapper. Advance the ORM snapshot generation
+        # so retained collection witnesses cannot survive a relation update.
+        context.clear_orm_bucket_results()
         context.discard_prefix(("orm_instance", interface_cls, pk))
 
 

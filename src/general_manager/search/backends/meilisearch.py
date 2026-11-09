@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from importlib import import_module
 from inspect import signature
 from typing import Literal, Mapping, Protocol, Sequence, cast
@@ -135,6 +136,20 @@ class _MeilisearchClientWithGetTask(_MeilisearchClient, Protocol):
     def get_task(self, task_uid: object) -> object: ...
 
 
+class _MeilisearchClientWithVersion(Protocol):
+    """Client variant that can attest the connected server version."""
+
+    def get_version(self) -> object: ...
+
+
+@dataclass(frozen=True)
+class _SearchCutoffPolicy:
+    """Validated cutoff evidence, including the supported no-cutoff legacy case."""
+
+    cutoff_ms: int | None
+    legacy_no_cutoff: bool = False
+
+
 class MeilisearchBackend:
     """
     Meilisearch implementation of the SearchBackend protocol.
@@ -155,6 +170,8 @@ class MeilisearchBackend:
         api_key: str | None = None,
         client: _MeilisearchClient | None = None,
         task_timeout_in_ms: int = 5000,
+        *,
+        metadata_client: _MeilisearchClient | None = None,
     ) -> None:
         """
         Initialize the backend with a provided Meilisearch client or a new one.
@@ -172,6 +189,11 @@ class MeilisearchBackend:
                 `wait_for_task` method. Defaults to 5000 (five seconds). Does not
                 affect fallback polling for clients exposing only `get_task`
                 or legacy clients whose wait method does not accept the timeout.
+            metadata_client: Optional read-only client used only to retrieve
+                index settings and, when a cutoff setting is absent, the server
+                version. It defaults to `client`. Searches, index hydration,
+                and writes continue to use `client`, allowing a separately
+                scoped metadata key.
 
         Raises:
             SearchBackendClientMissingError: The `meilisearch` package is not
@@ -185,6 +207,9 @@ class MeilisearchBackend:
             client_factory = cast(_MeilisearchModule, meilisearch_module).Client
             client = client_factory(url, api_key)
         self._client = client
+        self._metadata_client = (
+            metadata_client if metadata_client is not None else client
+        )
         self._task_timeout_in_ms = task_timeout_in_ms
 
     def ensure_index(self, index_name: str, settings: Mapping[str, object]) -> None:
@@ -409,12 +434,14 @@ class MeilisearchBackend:
             `filter_expression` bypasses identity transport.
             ``sort`` is normalized as signed field names
             and forwarded as ordered Meilisearch ``field:direction`` entries.
-            Every query reads the index settings once. A sorted query raises
+            Every query reads index settings once through the authorized
+            metadata client. A sorted query raises
             ``MeilisearchOrderingConfigurationError`` unless ``sort`` has the
             highest ranking-rule priority. The returned ``SearchResult`` sets
             ``exhausted=True`` only when a well-formed raw short page is below
-            the configured ``pagination.maxTotalHits`` cap and the response
-            completed before the effective ``searchCutoffMs``. A missing or
+            the configured ``pagination.maxTotalHits`` cap and either completed
+            before the effective ``searchCutoffMs`` or is attested by a stable
+            Meilisearch 1.7 server that predates cutoff support. A missing or
             malformed pagination cap or hit list yields ``exhausted=False``;
             neither ``estimatedTotalHits`` nor ``totalHits`` proves
             completeness because Meilisearch caps both. An explicitly degraded
@@ -433,7 +460,12 @@ class MeilisearchBackend:
         """
         index = self._get_or_create_index(index_name)
         terms = normalize_ordering(sort if sort is not None else ())
-        settings = self._as_mapping(index.get_settings())
+        metadata_index = (
+            index
+            if self._metadata_client is self._client
+            else self._metadata_client.get_index(index_name)
+        )
+        settings = self._as_mapping(metadata_index.get_settings())
         if terms and not self._sort_has_priority(settings):
             raise MeilisearchOrderingConfigurationError(index_name)
         payload: dict[str, object] = {
@@ -455,6 +487,7 @@ class MeilisearchBackend:
             ]
 
         response = self._as_mapping(index.search(query, payload))
+        cutoff_policy = self._search_cutoff_policy(settings, self._metadata_client)
         effective_page = self._effective_response_page(
             response,
             limit=limit,
@@ -462,7 +495,7 @@ class MeilisearchBackend:
         )
         self._raise_for_incomplete_search(
             response,
-            settings,
+            cutoff_policy,
             limit=effective_page[0] if effective_page is not None else None,
         )
         hits = [
@@ -488,6 +521,7 @@ class MeilisearchBackend:
             exhausted=self._search_exhausted(
                 response,
                 settings,
+                cutoff_policy,
                 limit=effective_page[0] if effective_page is not None else None,
                 offset=effective_page[1] if effective_page is not None else None,
             ),
@@ -520,20 +554,22 @@ class MeilisearchBackend:
     @staticmethod
     def _raise_for_incomplete_search(
         response: Mapping[str, object],
-        settings: Mapping[str, object],
+        cutoff_policy: _SearchCutoffPolicy | None,
         *,
         limit: int | None,
     ) -> None:
         """Reject responses Meilisearch may have truncated before producing hits."""
         if response.get("degraded") is True:
             raise MeilisearchSearchCompletenessError("degraded")
-        cutoff = MeilisearchBackend._search_cutoff_ms(settings)
-        if cutoff is None:
+        if cutoff_policy is None:
             raise MeilisearchSearchCompletenessError("cutoff_evidence")
         processing_time = MeilisearchBackend._int_field(response, "processingTimeMs")
         if processing_time is None or processing_time < 0:
             raise MeilisearchSearchCompletenessError("processing_time")
-        if processing_time >= cutoff:
+        if (
+            cutoff_policy.cutoff_ms is not None
+            and processing_time >= cutoff_policy.cutoff_ms
+        ):
             raise MeilisearchSearchCompletenessError("cutoff")
         raw_hit_count = MeilisearchBackend._raw_search_hit_count(response)
         if (
@@ -583,6 +619,7 @@ class MeilisearchBackend:
     def _search_exhausted(
         response: Mapping[str, object],
         settings: Mapping[str, object],
+        cutoff_policy: _SearchCutoffPolicy | None,
         *,
         limit: int | None,
         offset: int | None,
@@ -590,12 +627,11 @@ class MeilisearchBackend:
         """Return whether response evidence proves the configured result set ended."""
         raw_hit_count = MeilisearchBackend._well_formed_search_hit_count(response)
         max_total_hits = MeilisearchBackend._max_total_hits(settings)
-        cutoff = MeilisearchBackend._search_cutoff_ms(settings)
         processing_time = MeilisearchBackend._int_field(response, "processingTimeMs")
         if (
             raw_hit_count is None
             or max_total_hits is None
-            or cutoff is None
+            or cutoff_policy is None
             or processing_time is None
             or limit is None
             or offset is None
@@ -605,11 +641,12 @@ class MeilisearchBackend:
             or offset < 0
         ):
             return False
-        return (
-            raw_hit_count < limit
-            and offset + raw_hit_count < max_total_hits
-            and processing_time < cutoff
-        )
+        if not cutoff_policy.legacy_no_cutoff and (
+            cutoff_policy.cutoff_ms is None
+            or processing_time >= cutoff_policy.cutoff_ms
+        ):
+            return False
+        return raw_hit_count < limit and offset + raw_hit_count < max_total_hits
 
     @staticmethod
     def _well_formed_search_hit_count(response: Mapping[str, object]) -> int | None:
@@ -641,16 +678,48 @@ class MeilisearchBackend:
         return max_total_hits if max_total_hits >= 0 else None
 
     @staticmethod
-    def _search_cutoff_ms(settings: Mapping[str, object]) -> int | None:
-        """Read a valid cutoff, preserving Meilisearch's 1500 ms null default."""
+    def _search_cutoff_policy(
+        settings: Mapping[str, object], metadata_client: _MeilisearchClient
+    ) -> _SearchCutoffPolicy | None:
+        """Attest cutoff provenance from settings or a supported legacy server."""
         if "searchCutoffMs" not in settings:
-            return None
+            return (
+                _SearchCutoffPolicy(cutoff_ms=None, legacy_no_cutoff=True)
+                if MeilisearchBackend._is_known_v1_7(metadata_client)
+                else None
+            )
         configured = settings.get("searchCutoffMs")
         if configured is None:
-            return 1500
+            return _SearchCutoffPolicy(cutoff_ms=1500)
         if isinstance(configured, bool) or not isinstance(configured, int):
             return None
-        return configured if configured >= 0 else None
+        return _SearchCutoffPolicy(cutoff_ms=configured) if configured >= 0 else None
+
+    @staticmethod
+    def _is_known_v1_7(metadata_client: _MeilisearchClient) -> bool:
+        """Return whether a successful metadata read attests a stable 1.7 server."""
+        if not hasattr(metadata_client, "get_version"):
+            return False
+        version = cast(_MeilisearchClientWithVersion, metadata_client).get_version()
+        version_data = MeilisearchBackend._as_mapping(version)
+        pkg_version = version_data.get("pkgVersion")
+        if not isinstance(pkg_version, str):
+            return False
+        pieces = pkg_version.split(".")
+        return (
+            len(pieces) == 3
+            and pieces[0] == "1"
+            and pieces[1] == "7"
+            and (
+                pieces[2] == "0"
+                or (
+                    bool(pieces[2])
+                    and pieces[2][0] in "123456789"
+                    and pieces[2].isascii()
+                    and pieces[2].isdigit()
+                )
+            )
+        )
 
     def _get_or_create_index(self, index_name: str) -> _MeilisearchIndex:
         """

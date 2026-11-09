@@ -41,9 +41,11 @@ from general_manager.interface.capabilities.orm_utils.field_descriptors import (
     _instance_attribute_accessor,
 )
 from general_manager.interface.capabilities.orm_utils.collection_probes import (
+    CollectionProbeHint,
     NativeCollectionProbe,
     bind_collection_probe_hint,
     collection_probe,
+    collection_probe_hint_is_current,
 )
 from general_manager.utils.filter_parser import create_filter_function
 
@@ -64,6 +66,8 @@ MAX_RUN_SCOPED_BUCKET_RESULT_ROWS = 1000
 _QUERY_SIGNATURE_NOT_COMPUTED = object()
 _FIRST_ROW_CACHE_MISS = object()
 _FIRST_ROW_CACHE_NONE = object()
+_EMPTY_RELATION_PROBE_SNAPSHOT = "_gm_empty_relation_probe_snapshot"
+_UNTRUSTED_EMPTY_RELATION_PROBE_SNAPSHOT = object()
 
 
 def _ordering_path_getter(field: str) -> Callable[[object], object]:
@@ -452,6 +456,33 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return False
         return True
 
+    def _empty_relation_probe_snapshot(
+        self,
+    ) -> CollectionProbeHint | object | None:
+        """Return provenance for annotations produced by this queryset evaluation.
+
+        The annotation itself is only an SQL fact.  Its applicability also
+        depends on the active calculation context and on its cache lifetime.
+        Queryset rows can outlive both, so rows observed without an active
+        context receive an explicit untrusted marker rather than being adopted
+        by the next context that happens to hydrate them.
+        """
+        if not self._empty_relation_probes:
+            return None
+        hint = bind_collection_probe_hint(self._empty_relation_probes[0][1])
+        return hint if hint is not None else _UNTRUSTED_EMPTY_RELATION_PROBE_SNAPSHOT
+
+    @staticmethod
+    def _stamp_empty_relation_probe_snapshot(
+        rows: Iterable[models.Model],
+        snapshot: CollectionProbeHint | object | None,
+    ) -> None:
+        """Bind rows to their original SQL evaluation without overwriting it."""
+        if snapshot is None:
+            return
+        for row in rows:
+            row.__dict__.setdefault(_EMPTY_RELATION_PROBE_SNAPSHOT, snapshot)
+
     def _build_manager_from_instance(
         self,
         instance: models.Model,
@@ -462,13 +493,26 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         )
         manager_hydrate = self._manager_class._from_trusted_orm_instance
         if callable(interface_hydrate) and self._can_trust_orm_instance(instance):
-            if self._empty_relation_probes:
+            snapshot = vars(instance).get(
+                _EMPTY_RELATION_PROBE_SNAPSHOT,
+                None,
+            )
+            snapshot_is_current = isinstance(
+                snapshot, CollectionProbeHint
+            ) and collection_probe_hint_is_current(snapshot)
+            if self._empty_relation_probes and snapshot_is_current:
                 instance.__dict__["_gm_empty_collection_probes"] = frozenset(
                     hint
                     for annotation, probe in self._empty_relation_probes
                     if vars(instance).get(annotation) is False
                     if (hint := bind_collection_probe_hint(probe)) is not None
                 )
+            elif not snapshot_is_current:
+                # Cached ORM rows can survive in a local tuple while a trusted
+                # hydration hook changes data and invalidates the run cache.
+                # Their SQL witnesses belong to the old snapshot, never the
+                # post-mutation generation.
+                instance.__dict__.pop("_gm_empty_collection_probes", None)
             return manager_hydrate(instance, search_date=self._search_date)
         return self._build_manager_from_primary_key(instance.pk)
 
@@ -689,9 +733,19 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if cached is not None:
             return cast(tuple[models.Model, ...], cached)
 
+        queryset_was_evaluated = getattr(self._data, "_result_cache", None) is not None
         rows = tuple(self._data[: MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1])
         if len(rows) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS:
             return None
+        # A pre-evaluated queryset can have been materialized by another
+        # context (or outside every context). Missing provenance is therefore
+        # deliberately untrusted, not retroactively bound to this run.
+        snapshot = (
+            _UNTRUSTED_EMPTY_RELATION_PROBE_SNAPSHOT
+            if queryset_was_evaluated
+            else self._empty_relation_probe_snapshot()
+        )
+        self._stamp_empty_relation_probe_snapshot(rows, snapshot)
         primary_keys = tuple(row.pk for row in rows)
         context.set_orm_bucket_rows(signature, rows)
         context.set_orm_bucket_result(signature, primary_keys)
@@ -1109,7 +1163,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             for primary_key in primary_keys:
                 yield self._build_manager_from_primary_key(primary_key)
             return
+        queryset_was_evaluated = getattr(self._data, "_result_cache", None) is not None
+        snapshot = (
+            _UNTRUSTED_EMPTY_RELATION_PROBE_SNAPSHOT
+            if queryset_was_evaluated
+            else self._empty_relation_probe_snapshot()
+        )
         for item in self._data:
+            self._stamp_empty_relation_probe_snapshot((item,), snapshot)
             yield self._build_manager_from_instance(item)
 
     def __or__(
@@ -1504,12 +1565,14 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         """Share count dependencies, snapshot reuse and the native fallback."""
         self._ensure_as_of_compatible()
         self._track_effective_dependencies()
+        # Primary-key entries can be evicted independently of their already
+        # materialized trusted row snapshot. The rows still prove this bucket's
+        # exact count and avoid an unnecessary second count query.
+        rows = self._peek_run_scoped_rows()
+        if rows is not None:
+            return len(rows)
         if materialize_rows and self._can_materialize_count_snapshot():
             rows = self._get_run_scoped_rows()
-            if rows is not None:
-                return len(rows)
-        elif not materialize_rows:
-            rows = self._peek_run_scoped_rows()
             if rows is not None:
                 return len(rows)
         primary_keys = self._peek_run_scoped_primary_keys()

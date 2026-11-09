@@ -301,8 +301,14 @@ authorization always includes the actual serialized field as well as every
 declared source; a declaration cannot relabel away its permission. Properties
 without complete dependencies fail before backend search. When dependencies are
 provided, cover every configured key, not only the property. Source paths must
-resolve through native relations to supported scalar leaves. Unknown or invalid
-paths never qualify for the fast route. Dependency declarations do not replace
+resolve through native relations to supported scalar leaves. Typed scalar
+containers such as `list[str]` and `dict[str, int]` are supported. Bare `list`,
+`tuple`, `set`, `frozenset`, and `dict` declarations (including
+`RequestField(list)`) cannot establish the permissions of their elements. They
+are rejected even when the current value is empty or contains only scalars;
+runtime contents do not replace a complete dependency declaration. Unknown or
+invalid source paths raise a GraphQL error before backend search, including on
+the thorough route. Dependency declarations do not replace
 [related-data invalidation](#related-data-invalidation); keep both accurate.
 
 The `types` argument selects manager classes. Synthetic `type` filter keys are
@@ -864,6 +870,32 @@ Production notes:
 - Ensure your index settings are created with `python manage.py search_index`
   and reindex with `--reindex` after schema changes.
 - Keep the Meilisearch image pinned to a known-good version to avoid drift.
+
+For a least-privilege deployment, construct the backend with a search client
+and a separate read-only metadata client:
+
+```python
+from meilisearch import Client
+
+from general_manager.search.backends.meilisearch import MeilisearchBackend
+
+backend = MeilisearchBackend(
+    client=Client("http://127.0.0.1:7700", search_key),
+    metadata_client=Client("http://127.0.0.1:7700", metadata_key),
+)
+```
+
+The search client remains the only client used for searches, index hydration,
+and writes; it needs `search` and `indexes.get` actions because the SDK resolves
+the index before searching. The metadata client is used only for the
+authoritative index settings read shared by ordering and completeness checks; it
+needs `indexes.get` and `settings.get`. Both clients must address the same
+trusted server and index. When `searchCutoffMs` is absent, the metadata client
+also needs the `version` action. An absent cutoff is accepted only when that
+version response has a stable ASCII-semver `pkgVersion` in the supported `1.7.x`
+range, which predates cutoff support. Missing, malformed, or newer version
+evidence fails closed rather than treating a short page as complete. If both
+clients use the same key, omit `metadata_client`.
 
 Adapter behavior:
 - The backend stores the original GeneralManager document id in

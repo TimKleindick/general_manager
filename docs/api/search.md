@@ -395,12 +395,23 @@ timeouts in the fallback `get_task()` polling loop raise
 method, including its timeout errors, propagate unchanged.
 
 `MeilisearchBackend.search()` reads settings once per backend call, sharing the
-read between ordering validation and completeness checks. A short page is
-attested as exhausted only below `pagination.maxTotalHits` with valid response
-provenance. Reaching the cap cannot establish a complete authorized total.
-Degraded responses, responses reaching the search cutoff, missing timing proof
-and raw page overdelivery fail explicitly. This inspects backend pagination and
-response metadata; it does not check indexed content freshness.
+read between ordering validation and completeness checks. Its optional
+keyword-only `metadata_client` supplies that authoritative settings read; it
+defaults to `client`. Search, index hydration, and writes always remain on
+`client`, so deployments can use a `search` + `indexes.get` key there and a
+separate `indexes.get` + `settings.get` metadata key for `metadata_client`.
+Both clients must address the same trusted server and index. When
+`searchCutoffMs` is absent, the metadata client must also authorize
+`get_version()` and attest an exact stable `1.7.x` `pkgVersion`; that is the
+supported pre-cutoff compatibility range. Unknown, malformed, or newer versions
+cannot establish completeness.
+
+A short page is attested as exhausted only below `pagination.maxTotalHits` with
+valid response provenance. Reaching the cap cannot establish a complete
+authorized total. Degraded responses, responses reaching the search cutoff,
+missing timing proof and raw page overdelivery fail explicitly. This inspects
+backend pagination and response metadata; it does not check indexed content
+freshness.
 
 Custom adapters can set `SearchResult.exhausted` to attest complete enumeration
 (`True`) or to prevent a short page being treated as complete (`False`). The

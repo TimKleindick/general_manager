@@ -5,6 +5,7 @@ import inspect
 from types import MappingProxyType
 from types import SimpleNamespace
 from unittest import mock
+from datetime import date
 
 import pytest
 import graphene  # type: ignore[import]
@@ -38,7 +39,7 @@ from typing import ClassVar
 from general_manager.apps import GeneralmanagerConfig
 from general_manager.interface import CalculationInterface
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.manager.input import Input
+from general_manager.manager.input import DateRangeDomain, Input
 from general_manager.manager.meta import GeneralManagerMeta
 from general_manager.permission.base_permission import (
     BasePermission,
@@ -524,6 +525,92 @@ class GraphQLHelperTests(SimpleTestCase):
 
         assert scope.filters == {}
         assert deferred.filters == {"subject__id": 7}
+
+    def test_partition_calculation_query_plan_scopes_only_native_daily_date_ranges(
+        self,
+    ) -> None:
+        class DailyRangeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                as_of = Input(
+                    date,
+                    possible_values=DateRangeDomain(
+                        date(2022, 1, 1), date(2031, 12, 31)
+                    ),
+                )
+
+        class MonthlyRangeCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                as_of = Input(
+                    date,
+                    possible_values=DateRangeDomain(
+                        date(2022, 1, 1),
+                        date(2031, 12, 31),
+                        frequency="month_end",
+                    ),
+                )
+
+        plan = QueryParameterPlan(
+            filters={"as_of__gte": date(2025, 5, 1)},
+            excludes={},
+            normalized_excludes={},
+        )
+        scope, deferred = partition_calculation_query_plan(DailyRangeCalculation, plan)
+        assert scope.filters == plan.filters
+        assert deferred.filters == {}
+
+        scope, deferred = partition_calculation_query_plan(
+            MonthlyRangeCalculation, plan
+        )
+        assert scope.filters == {}
+        assert deferred.filters == plan.filters
+
+        original_contains = DateRangeDomain.contains
+
+        def custom_contains(self, value):
+            return original_contains(self, value)
+
+        with mock.patch.object(DateRangeDomain, "contains", custom_contains):
+            scope, deferred = partition_calculation_query_plan(
+                DailyRangeCalculation, plan
+            )
+        assert scope.filters == {}
+        assert deferred.filters == plan.filters
+
+        original_dunder_contains = DateRangeDomain.__contains__
+
+        def custom_dunder_contains(self, value):
+            return original_dunder_contains(self, value)
+
+        with mock.patch.object(DateRangeDomain, "__contains__", custom_dunder_contains):
+            scope, deferred = partition_calculation_query_plan(
+                DailyRangeCalculation, plan
+            )
+        assert scope.filters == {}
+        assert deferred.filters == plan.filters
+
+        original_normalize = DateRangeDomain.normalize
+
+        def custom_normalize(self, value):
+            return original_normalize(self, value)
+
+        with mock.patch.object(DateRangeDomain, "normalize", custom_normalize):
+            scope, deferred = partition_calculation_query_plan(
+                DailyRangeCalculation, plan
+            )
+        assert scope.filters == {}
+        assert deferred.filters == plan.filters
+
+        original_iter = DateRangeDomain.__iter__
+
+        def custom_iter(self):
+            yield from original_iter(self)
+
+        with mock.patch.object(DateRangeDomain, "__iter__", custom_iter):
+            scope, deferred = partition_calculation_query_plan(
+                DailyRangeCalculation, plan
+            )
+        assert scope.filters == {}
+        assert deferred.filters == plan.filters
 
     def test_partition_calculation_query_plan_defers_replaced_input_getters(
         self,
