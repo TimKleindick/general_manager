@@ -1,7 +1,7 @@
 """Backend-first search must preserve native membership and related read gates."""
 
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import ClassVar, cast
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -283,6 +283,21 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
             == 0
         )
 
+    def test_fast_path_relation_authorization_shares_one_resolver_budget(self):
+        for text in ("first", "second"):
+            related = self.Related.Factory.create(text=text, visibility="public")
+            self.Owner.Factory.create(name="owner", related=related)
+        SearchIndexer(self.backend).reindex_manager(self.Owner)
+
+        with (
+            patch(
+                "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+                3,
+            ),
+            self.assertRaisesMessage(GraphQLError, "candidate limit"),
+        ):
+            self.search(index="relations", types=["RouteOwner"], query="")
+
     def test_nullable_related_source_remains_searchable(self):
         owner = self.Owner.Factory.create(name="needle", related=None)
         SearchIndexer(self.backend).index_instance(owner)
@@ -447,6 +462,30 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         with patch.object(self.backend, "search", return_value=result):
             with self.assertRaisesRegex(GraphQLError, "complete stored data"):
                 self.search(query="private-needle")
+
+    def test_malformed_fast_path_identifications_are_discarded(self):
+        self.Record.Factory.create(name="ordinary", visibility="public")
+        expected_data = {"name": "ordinary", "visibility": "public"}
+        for malformed_identification in (True, {"id": True}):
+            with self.subTest(identification=malformed_identification):
+                result = SearchResult(
+                    hits=[
+                        SearchHit(
+                            id="malformed",
+                            type="RouteRecord",
+                            identification=cast(
+                                dict[str, object], malformed_identification
+                            ),
+                            data=expected_data,
+                        )
+                    ],
+                    total=1,
+                )
+                with patch.object(self.backend, "search", return_value=result):
+                    response = self.search(query="ordinary")
+
+                assert response["results"] == []
+                assert response["total"] == 0
 
     def test_replaced_native_descriptor_requires_complete_dependencies(self):
         from general_manager.api.graphql_search import register_search_query

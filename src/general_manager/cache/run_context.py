@@ -151,6 +151,8 @@ class CalculationRunContext:
         ] = {}
         self._dependency_cache_publish_batch_size = dependency_cache_publish_batch_size
         self._tokens: list[Token[CalculationRunContext | None]] = []
+        self._lifetime_generation = 0
+        self._orm_bucket_invalidation_generation = 0
         self._run_cache_touch_lock = RLock()
         self._pending_run_cache_touches: dict[PendingRunCacheTouch, None] = {}
         self._last_pending_run_cache_touch: PendingRunCacheTouch | None = None
@@ -367,6 +369,7 @@ class CalculationRunContext:
     def __enter__(self) -> "CalculationRunContext":
         """Activate this context and return it for the `with` block."""
         if not self._tokens:
+            self._lifetime_generation += 1
             max_bytes = resolve_run_context_cache_max_bytes()
             with self._run_cache_touch_lock:
                 self._pending_run_cache_touches.clear()
@@ -838,7 +841,8 @@ class CalculationRunContext:
         self.set((ORM_BUCKET_EXISTS_PREFIX, key), value)
 
     def clear_orm_bucket_results(self) -> None:
-        """Discard all run-scoped ORM bucket result entries."""
+        """Discard ORM bucket results and advance their invalidation generation."""
+        self._orm_bucket_invalidation_generation += 1
         self.discard_prefix((ORM_BUCKET_RESULT_PREFIX,))
         self.discard_prefix((ORM_BUCKET_ROW_RESULT_PREFIX,))
         self.discard_prefix((ORM_BUCKET_MANAGER_RESULT_PREFIX,))
@@ -848,6 +852,16 @@ class CalculationRunContext:
         self.discard_prefix((ORM_RELATION_MANAGER_PREFIX,))
         self.discard_prefix((ORM_QUERY_BUCKET_PREFIX,))
         self.discard_prefix((ORM_BUCKET_EXISTS_PREFIX,))
+
+    @property
+    def lifetime_generation(self) -> int:
+        """Return the current activation lifetime for request-local witnesses."""
+        return self._lifetime_generation
+
+    @property
+    def orm_bucket_invalidation_generation(self) -> int:
+        """Return the generation invalidated with ORM bucket results."""
+        return self._orm_bucket_invalidation_generation
 
     def _bucket_index_cache_key(
         self,

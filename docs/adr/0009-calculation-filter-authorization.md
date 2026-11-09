@@ -4,6 +4,23 @@
 
 Accepted
 
+## Current contract
+
+The original design below is narrowed by the current
+[query-operand authorization contract](../concepts/graphql/security.md#query-operands-and-search-projections).
+Early constructor constraints require proven native scalar inputs or native
+manager-identity inputs. Other related fields, custom getters and computed
+properties remain deferred until operand authorization. Exclusion mappings stay
+atomic; a mixed constructor/computed exclusion cannot be split.
+
+The requested constructor domain is frozen as exact instances before permission
+constraints are intersected. `CalculationBucket.filter_instances()` owns native
+input normalization and grouped predicates on these snapshots; ORM-backed
+related predicates retain their owning database's lookup semantics. No predicate
+may widen the frozen source or replace a same-key client constraint. Runtime
+field checks cover the complete row-visible requested domain before filtering
+by computed values, ordering, grouping or pagination.
+
 ## Context
 
 Generated GraphQL calculation-list resolvers currently obtain the complete base

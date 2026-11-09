@@ -1,5 +1,9 @@
 # Search permission routing validation
 
+This records the initial search implementation. Subsequent KH compatibility
+changes, restored omission semantics and final release-gate results are tracked
+in [KH compatibility validation](kh-compatibility-validation.md).
+
 Base: `origin/main` at `715c942f2a94a5b2cf1435dd06b71228cb730448`.
 Working branch: `tk/search-permission-routing`. Related performance issue: #304.
 No version number, release or production data was changed.

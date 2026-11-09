@@ -140,6 +140,79 @@ class SearchReconciliationDiscoveryTests(TestCase):
 
         assert original != changed
 
+    def test_fingerprint_tracks_canonical_projection_dependencies(self) -> None:
+        """Projection sources change the document schema independently of order."""
+        index = ReconcileProject.SearchConfig.indexes[0]
+        dependencies = {
+            "name": ("name", "status"),
+            "status": ("status",),
+        }
+        reordered = {
+            name: tuple(reversed(paths))
+            for name, paths in reversed(list(dependencies.items()))
+        }
+        changed = {
+            "name": ("name",),
+            "status": ("status",),
+        }
+        missing_source = {"name": ("name", "status")}
+        without_declaration = build_search_schema_fingerprint(ReconcileProject, index)
+
+        with patch.object(
+            ReconcileProject.SearchConfig,
+            "field_dependencies",
+            dependencies,
+            create=True,
+        ):
+            declared = build_search_schema_fingerprint(ReconcileProject, index)
+        with patch.object(
+            ReconcileProject.SearchConfig,
+            "field_dependencies",
+            reordered,
+            create=True,
+        ):
+            canonical = build_search_schema_fingerprint(ReconcileProject, index)
+        with patch.object(
+            ReconcileProject.SearchConfig,
+            "field_dependencies",
+            changed,
+            create=True,
+        ):
+            changed_fingerprint = build_search_schema_fingerprint(
+                ReconcileProject, index
+            )
+        with patch.object(
+            ReconcileProject.SearchConfig,
+            "field_dependencies",
+            missing_source,
+            create=True,
+        ):
+            missing_fingerprint = build_search_schema_fingerprint(
+                ReconcileProject, index
+            )
+
+        assert declared != without_declaration
+        assert canonical == declared
+        assert changed_fingerprint != declared
+        assert missing_fingerprint != declared
+
+    def test_no_dependency_declaration_preserves_legacy_fingerprint_state(self) -> None:
+        """Existing native indexes stay clean when their schema has not changed."""
+        SearchIndexState.objects.create(
+            manager_path=manager_import_path(ReconcileProject),
+            index_name="global",
+            schema_fingerprint=(
+                "0e4a8fd6c8b0a118358da37dbabbac480d5ff6cdc9016d75b1f821c767d2ff33"
+            ),
+        )
+
+        result = ensure_search_index_states()
+        state = SearchIndexState.objects.get()
+
+        assert result.unchanged == 1
+        assert state.dirty_since is None
+        assert state.dirty_reason == ""
+
     def test_fingerprint_tracks_native_identity_metadata_and_alias_kind(self) -> None:
         index = ReconcileProject.SearchConfig.indexes[0]
         original = build_search_schema_fingerprint(ReconcileProject, index)

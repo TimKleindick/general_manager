@@ -263,6 +263,9 @@ For supported native collection relations, the fast candidate SELECT can also
 prove emptiness with correlated `EXISTS` expressions. Only proven empty
 collections avoid a subsequent SELECT. Populated, custom, historical and
 cross-database relations retain their normal loading and permission checks.
+Empty-collection proofs belong to their calculation run and expire when that
+run ends or the existing data-change invalidation clears its ORM results.
+Retained managers cannot reuse a cached empty value derived from an expired proof.
 Validated projection paths are reused from schema construction; runtime field
 and relation checks still run. A changed search configuration, including an
 in-place edit to an index's fields, filters or sorts, cannot reuse the old fast

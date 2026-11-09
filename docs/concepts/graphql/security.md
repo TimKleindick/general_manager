@@ -192,12 +192,34 @@ Relation paths require permission on the relation and on the related row and
 field. Relation-ID aliases also check the canonical relation permission.
 
 This adds work proportional to candidates × distinct operand paths, plus related
-rows visited. Duplicate lookup paths are consolidated. A request fails explicitly
-after 1,000 field/path authorization decisions. This is a permission-work limit,
-not a bound on database bucket materialization or the preceding row authorization.
-No permission cache is shared across requests or users. Calculation queries now
-check the full row-authorized input domain before client input predicates; their
-row/field check counts can therefore increase even for a narrow input filter.
+rows visited. Duplicate lookup paths are consolidated. Native list resolvers
+budget at most 1,000 field/path visits with additional, unknown, custom or
+delegated read policies. A field whose current local policy demonstrably adds no
+restriction beyond its object's read rule does not consume that budget. **Every
+runtime field check still runs**, including checks on nonmatching and off-page
+rows. Related-row checks also remain in place. Policy inspection uses the actual
+instance's Permission class at each visit; it does not reuse user/object results
+or Permission instances between field checks. This permits ordinary large lists
+without relaxing denials or increasing the additional-policy budget.
+
+Search, request-backed list sources and direct calls to the operand authorizer
+retain the strict default limit of 1,000 field/path visits. Search shares that
+counter across its projection checks and hit batches within one resolver call;
+it never shares permission decisions. Neither budget bounds
+database materialization or preceding row authorization. Pagination does not
+reduce the operand-authorization domain. No permission cache is shared across
+requests or users.
+
+Calculation lists first restrict the **requested constructor domain** using
+proven native scalar inputs or manager-identity input constraints. They freeze
+that exact domain before intersecting permission filters and applying row
+checks. Permission and client constraints cannot replace one another, including
+constraints on the same input. Operand checks then cover the entire row-visible
+requested domain before computed-property or related-value predicates, sorting
+and pagination. Custom getters and nonidentity relation fields are not safe
+constructor constraints; exclusions remain atomic conjunctions. This deliberately
+changes the former full-domain enumeration contract: calculations outside the
+requested native constructor scope are no longer constructed or authorized.
 
 Search authorizes every configured serialized searchable, filterable, and sortable
 key, including keys unused by request filters or ordering. DevSearch scores all

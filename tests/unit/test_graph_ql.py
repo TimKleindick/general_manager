@@ -2849,7 +2849,7 @@ class GraphQLTests(TestCase):
 
     def test_list_resolver_with_invalid_filter_exclude(self):
         """
-        Invalid JSON leaves predicates unapplied while retaining default pagination.
+        Invalid JSON leaves predicates unapplied and omitted pagination unbounded.
         """
         mock_instance = MagicMock()
         mock_qs = MagicMock()
@@ -2866,8 +2866,8 @@ class GraphQLTests(TestCase):
             ),
         ):
             result = resolver(mock_instance, self.info, filter="bad", exclude="bad")
-            self.assertEqual(result["items"], mock_qs.__getitem__.return_value)
-            mock_qs.__getitem__.assert_called_once_with(slice(0, 10))
+            self.assertEqual(result["items"], mock_qs)
+            mock_qs.__getitem__.assert_not_called()
             mock_qs.filter.assert_not_called()
             mock_qs.exclude.assert_not_called()
 

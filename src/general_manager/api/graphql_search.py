@@ -46,7 +46,7 @@ from general_manager.search.backend import SearchHit
 from general_manager.search.utils import normalize_identification
 from general_manager.search.identity import SearchFilters, build_search_filters
 from general_manager.search.authorization import analyze_search_projection
-from general_manager.search.config import SearchConfigSpec
+from general_manager.search.config import IndexConfig, SearchConfigSpec
 from general_manager.search.registry import (
     get_search_config,
     get_type_label,
@@ -1381,17 +1381,17 @@ def register_search_query(
     )
     # Classify definitions once per schema. No user or object decisions survive
     # a request, and rebuilding the schema rebuilds every projection proof.
+    projection_indexes: dict[tuple[type[GeneralManager], str], IndexConfig] = {}
+    for manager, config in search_configs.items():
+        for index_config in config.indexes:
+            # SearchIndexer selects the first matching declaration. Preserve the
+            # same duplicate-name rule for the schema-lifetime projection proof.
+            projection_indexes.setdefault((manager, index_config.name), index_config)
     projection_plans = {
-        (manager, index_config.name): analyze_search_projection(
-            manager, config, index_config, manager_registry
+        (manager, index_name): analyze_search_projection(
+            manager, search_configs[manager], index_config, manager_registry
         )
-        for manager, config in search_configs.items()
-        for index_config in config.indexes
-    }
-    projection_indexes = {
-        (manager, name): next(index for index in config.indexes if index.name == name)
-        for manager, config in search_configs.items()
-        for name in {index.name for index in config.indexes}
+        for (manager, index_name), index_config in projection_indexes.items()
     }
 
     def resolver(
@@ -1465,9 +1465,11 @@ def register_search_query(
 
         from general_manager.api.graphql_query_permissions import (
             MAX_QUERY_PERMISSION_CANDIDATES,
+            QueryFieldAuthorizationBudget,
         )
 
         source_candidate_count = 0
+        authorization_budget = QueryFieldAuthorizationBudget()
 
         def authorized_source_candidates(
             source: Iterable[GeneralManager], plan: ReadPermissionPlan
@@ -1529,6 +1531,10 @@ def register_search_query(
                     if search_config is not None and selected_index is not None
                     else None
                 )
+            if selected_index is None:
+                # The manager has no projection for this requested index. Do
+                # not let stale backend entries establish a search domain.
+                continue
             fast_source = None
             if projection_plan is not None and projection_plan.error is not None:
                 raise GraphQLError(projection_plan.error)
@@ -1536,18 +1542,13 @@ def register_search_query(
                 custom_projection = search_config.to_document is not None
                 operand_paths = set(parsed_filters)
                 operand_paths.update(term.field for term in ordering_terms)
-                for index_config in search_config.indexes:
-                    if index_config.name == index_name:
-                        document_fields = {
-                            field.name for field in index_config.iter_fields()
-                        }
-                        document_fields.update(index_config.filters)
-                        document_fields.update(index_config.sorts)
-                        # Searchable attributes are shared across all types in
-                        # an index, including fields only used as filters here.
-                        # DevSearch scores every serialized value; other types
-                        # also share searchable attributes in the same index.
-                        operand_paths.update(document_fields)
+                document_fields = {field.name for field in selected_index.iter_fields()}
+                document_fields.update(selected_index.filters)
+                document_fields.update(selected_index.sorts)
+                # The selected declaration owns this manager's projection
+                # proof. Duplicate names use the first declaration everywhere,
+                # matching SearchIndexer and the schema-lifetime plan.
+                operand_paths.update(document_fields)
                 # The index envelope exposes a synthetic manager-type filter.
                 # A real manager attribute with that name still needs permission.
                 if not any(
@@ -1635,7 +1636,11 @@ def register_search_query(
                     )
                     if projection_plan is not None:
                         authorize_query_fields(
-                            candidates, info, projection_plan.paths, native_paths=True
+                            candidates,
+                            info,
+                            projection_plan.paths,
+                            native_paths=True,
+                            budget=authorization_budget,
                         )
                     if not custom_projection:
                         # Backend lookup grammar is separate from exact indexed
@@ -1644,7 +1649,12 @@ def register_search_query(
                             operand_paths
                         )
                         requested_operands.update(term.field for term in ordering_terms)
-                        authorize_query_fields(candidates, info, requested_operands)
+                        authorize_query_fields(
+                            candidates,
+                            info,
+                            requested_operands,
+                            budget=authorization_budget,
+                        )
                     # Preserve the exact authorized instances, including
                     # calculation input domains and remote completeness.
                     authorized_instances = {
@@ -1711,28 +1721,43 @@ def register_search_query(
                     if took_ms is None
                     else took_ms + (result.took_ms or 0)
                 )
-                if not result.hits:
-                    break
                 if len(result.hits) > query_limit:
                     raise GraphQLError(
                         _SEARCH_BACKEND_SCAN_LIMIT_EXCEEDED,
                         extensions={"code": "SEARCH_SCAN_LIMIT_EXCEEDED"},
                     )
+                if result.exhausted is False and len(result.hits) < query_limit:
+                    # A backend cap may yield an empty or short page before the
+                    # actual result set ends. Its prefix cannot establish an
+                    # authorized total or page.
+                    manager_total_is_exact = False
+                    break
+                if not result.hits:
+                    break
                 scanned_hits += len(result.hits)
                 offset_cursor += len(result.hits)
                 if fast_source is not None:
                     identifiers = []
                     for hit in result.hits:
-                        if hit.type != type_label or set(hit.identification) != {"id"}:
+                        if hit.type != type_label:
                             continue
                         try:
-                            identifiers.append(
-                                normalize_id_filter_value(
-                                    manager_class, "id", hit.identification["id"]
-                                )
-                            )
-                        except (TypeError, ValueError, KeyError):
+                            identification = hit.identification
+                            if not isinstance(identification, Mapping) or set(
+                                identification
+                            ) != {"id"}:
+                                continue
+                            identifier = identification["id"]
+                            # Reject malformed GraphQL IDs before the native
+                            # converter. Converter and configuration failures
+                            # remain observable to their owning layer.
+                            if not isinstance(identifier, UUID):
+                                GraphQLID.parse_value(identifier)
+                        except (GraphQLError, KeyError, TypeError, ValueError):
                             continue
+                        identifiers.append(
+                            normalize_id_filter_value(manager_class, "id", identifier)
+                        )
                     # Bucket filtering keeps the native source restriction and
                     # reuses its batch ORM hydration. Arbitrary indexed IDs never
                     # acquire membership by construction.
@@ -1812,6 +1837,7 @@ def register_search_query(
                                 info,
                                 projection_plan.paths,
                                 native_paths=True,
+                                budget=authorization_budget,
                             )
                         except QueryRelationPermissionError:
                             # Remove the entire projection before count, ranking
@@ -1825,6 +1851,8 @@ def register_search_query(
                     requested_count=requested_count,
                     terms=ordering_terms,
                 )
+                if result.exhausted is True:
+                    break
                 if len(result.hits) < query_limit:
                     break
                 if scanned_hits >= total_scan_limit:

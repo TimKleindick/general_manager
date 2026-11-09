@@ -93,6 +93,35 @@ def test_index_without_additional_field_is_fast() -> None:
     assert result.reasons == ()
 
 
+def test_python_annotation_compiler_metadata_does_not_make_a_policy_custom() -> None:
+    """Python's annotation implementation details are not permission code."""
+
+    class PermissionClass(AdditiveManagerPermission):
+        __read__: ClassVar[list[str]] = ["public"]
+        __annotate_func__ = staticmethod(lambda: None)
+
+    class Manager(SearchFieldsManager):
+        Permission = PermissionClass
+
+    result = _analyze(Manager, IndexConfig(name="global", fields=("name",)))
+
+    assert result.fast
+    assert result.reasons == ()
+
+
+def test_callable_permission_factory_requires_thorough_authorization() -> None:
+    """A supported runtime factory has no statically provable field policy."""
+
+    class Manager(SearchFieldsManager):
+        Permission = staticmethod(lambda *_args, **_kwargs: None)
+
+    result = _analyze(Manager, IndexConfig(name="global", fields=("name",)))
+
+    assert not result.fast
+    assert result.error is None
+    assert "additional or custom field permission" in result.reasons
+
+
 def test_invalid_dependency_in_another_index_does_not_change_this_projection() -> None:
     public = IndexConfig("public", ["name"])
     private = IndexConfig("private", ["secret"])

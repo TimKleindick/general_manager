@@ -102,6 +102,16 @@ class NativeCollectionProbe:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CollectionProbeHint:
+    """An empty-relation witness valid for one unmodified calculation run."""
+
+    probe: NativeCollectionProbe
+    context: ReferenceType[object]
+    lifetime_generation: int
+    invalidation_generation: int
+
+
 _COLLECTION_PROBES: WeakKeyDictionary[
     Callable[..., object], ReferenceType[NativeCollectionProbe]
 ] = WeakKeyDictionary()
@@ -121,6 +131,50 @@ def collection_probe(accessor: object) -> NativeCollectionProbe | None:
     return None if binding is None else binding()
 
 
+def bind_collection_probe_hint(
+    probe: NativeCollectionProbe,
+) -> CollectionProbeHint | None:
+    """Bind a SQL emptiness witness to the active cache lifetime and generation."""
+    from general_manager.cache.run_context import current_calculation_run_context
+
+    context = current_calculation_run_context()
+    if context is None:
+        return None
+    return CollectionProbeHint(
+        probe=probe,
+        context=ref(context),
+        lifetime_generation=context.lifetime_generation,
+        invalidation_generation=context.orm_bucket_invalidation_generation,
+    )
+
+
+def collection_probe_hint_is_current(hint: CollectionProbeHint) -> bool:
+    """Return whether a witness belongs to the active, unmodified calculation run."""
+    from general_manager.cache.run_context import current_calculation_run_context
+
+    context = current_calculation_run_context()
+    return (
+        context is not None
+        and hint.context() is context
+        and hint.lifetime_generation == context.lifetime_generation
+        and hint.invalidation_generation == context.orm_bucket_invalidation_generation
+    )
+
+
+def collection_probe_hint(
+    row: models.Model, probe: NativeCollectionProbe
+) -> CollectionProbeHint | None:
+    """Return the current row witness for one native collection accessor."""
+    for hint in vars(row).get("_gm_empty_collection_probes", ()):
+        if (
+            isinstance(hint, CollectionProbeHint)
+            and hint.probe is probe
+            and collection_probe_hint_is_current(hint)
+        ):
+            return hint
+    return None
+
+
 def collection_is_proven_empty(row: models.Model, probe: NativeCollectionProbe) -> bool:
-    """Hints belong to this loaded row and are never permission decisions."""
-    return probe in vars(row).get("_gm_empty_collection_probes", ())
+    """Return whether this row has a current native SQL emptiness witness."""
+    return collection_probe_hint(row, probe) is not None

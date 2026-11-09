@@ -143,7 +143,7 @@ def _serialize_document(
         if field_name in provided_data:
             data[field_name] = provided_data[field_name]
         else:
-            validate_projection_fallback(config, field_name)
+            validate_projection_fallback(manager_class, config, field_name)
             data[field_name] = extract_value(instance, field_name)
 
     return SearchDocument(

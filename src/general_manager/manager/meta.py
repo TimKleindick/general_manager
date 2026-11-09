@@ -1093,35 +1093,65 @@ class GeneralManagerMeta(type):
                         except (KeyError, TypeError):
                             pass
                         else:
-                            cached_attribute_class = cached_attribute.__class__
-                            if cached_attribute_class is self._non_tracking_value_class:
-                                return cached_attribute
-                            if (
-                                cached_attribute_class
-                                is self._dependency_tracking_value_class
-                            ):
-                                manager_class = self._dependency_tracking_manager_class
-                            else:
-                                manager_class = _manager_dependency_tracking_class(
-                                    cached_attribute_class
+                            cache_entry_is_current = True
+                            provenance = instance.__dict__.get(
+                                "_attribute_value_cache_collection_probe_hints", {}
+                            )
+                            hint = (
+                                provenance.get(self._attr_name)
+                                if isinstance(provenance, dict)
+                                else None
+                            )
+                            if hint is not None:
+                                from general_manager.interface.capabilities.orm_utils.collection_probes import (
+                                    CollectionProbeHint,
+                                    collection_probe_hint_is_current,
                                 )
-                                self._dependency_tracking_value_class = (
+
+                                if not isinstance(
+                                    hint, CollectionProbeHint
+                                ) or not collection_probe_hint_is_current(hint):
+                                    cache.pop(self._attr_name, None)
+                                    if isinstance(provenance, dict):
+                                        provenance.pop(self._attr_name, None)
+                                    cache_entry_is_current = False
+                            if cache_entry_is_current:
+                                cached_attribute_class = cached_attribute.__class__
+                                if (
                                     cached_attribute_class
-                                )
-                                self._dependency_tracking_manager_class = manager_class
-                                if manager_class is None:
-                                    self._non_tracking_value_class = (
+                                    is self._non_tracking_value_class
+                                ):
+                                    return cached_attribute
+                                if (
+                                    cached_attribute_class
+                                    is self._dependency_tracking_value_class
+                                ):
+                                    manager_class = (
+                                        self._dependency_tracking_manager_class
+                                    )
+                                else:
+                                    manager_class = _manager_dependency_tracking_class(
                                         cached_attribute_class
                                     )
-                            if (
-                                manager_class is not None
-                                and DependencyTracker.is_active()
-                            ):
-                                manager_attribute = cast(
-                                    "GeneralManager", cached_attribute
-                                )
-                                manager_attribute._track_own_identification_dependency_active()
-                            return cached_attribute
+                                    self._dependency_tracking_value_class = (
+                                        cached_attribute_class
+                                    )
+                                    self._dependency_tracking_manager_class = (
+                                        manager_class
+                                    )
+                                    if manager_class is None:
+                                        self._non_tracking_value_class = (
+                                            cached_attribute_class
+                                        )
+                                if (
+                                    manager_class is not None
+                                    and DependencyTracker.is_active()
+                                ):
+                                    manager_attribute = cast(
+                                        "GeneralManager", cached_attribute
+                                    )
+                                    manager_attribute._track_own_identification_dependency_active()
+                                return cached_attribute
                     attribute = instance._attributes.get(self._attr_name, _nonExistent)
                     if attribute is _nonExistent:
                         logger.warning(
@@ -1156,6 +1186,21 @@ class GeneralManagerMeta(type):
                     if cache is not None:
                         try:
                             cache[self._attr_name] = attribute
+                            hints = vars(instance._interface).get(
+                                "_gm_collection_probe_hints", {}
+                            )
+                            hint = (
+                                hints.pop(self._attr_name, None)
+                                if isinstance(hints, dict)
+                                else None
+                            )
+                            if hint is not None:
+                                provenance = instance.__dict__.setdefault(
+                                    "_attribute_value_cache_collection_probe_hints",
+                                    {},
+                                )
+                                if isinstance(provenance, dict):
+                                    provenance[self._attr_name] = hint
                         except TypeError:
                             pass
                     return attribute

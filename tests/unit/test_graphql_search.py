@@ -30,7 +30,7 @@ from general_manager.permission.permission_checks import (
     permission_functions,
 )
 from general_manager.search.backends.dev import DevSearchBackend
-from general_manager.search.backend import SearchHit, SearchResult
+from general_manager.search.backend import SearchDocument, SearchHit, SearchResult
 from general_manager.search import backend_registry
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.config import IndexConfig
@@ -286,6 +286,129 @@ class GraphQLSearchTests(SimpleTestCase):
         assert response["total"] == 1
         assert len(response["results"]) == 1
         assert response["results"][0].identification == {"id": 1}
+
+    def test_duplicate_index_names_use_the_first_projection_definition(self) -> None:
+        """A duplicated name must classify documents like the indexer selects it."""
+        original_indexes = Project.SearchConfig.indexes
+        Project.SearchConfig.indexes = [
+            IndexConfig(name="global", fields=["name"]),
+            IndexConfig(name="global", fields=["status"]),
+        ]
+        self.addCleanup(setattr, Project.SearchConfig, "indexes", original_indexes)
+        query_fields: dict[str, Any] = {}
+        graphql_search_module.register_search_query(
+            query_fields,
+            {"Project": Project},
+            {"Project": MagicMock()},
+            None,
+            None,
+        )
+        backend = DevSearchBackend()
+        configure_search_backend(backend)
+        backend.upsert(
+            "global",
+            [
+                SearchDocument(
+                    id="project:1",
+                    type="Project",
+                    identification={"id": 1},
+                    index="global",
+                    data={"name": "Alpha"},
+                    field_boosts={},
+                )
+            ],
+        )
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+
+        with patch.object(
+            graphql_search_module,
+            "get_read_permission_filter",
+            return_value=ReadPermissionPlan(
+                filters=[], requires_instance_check=False, decision="allow_all"
+            ),
+        ):
+            response = query_fields["search"].resolver(
+                None, info, query="Alpha", types=["Project"]
+            )
+
+        assert response["total"] == 1
+        assert [item.identification for item in response["results"]] == [{"id": 1}]
+
+    def test_duplicate_index_names_use_first_custom_projection_operands(self) -> None:
+        original_indexes = Project.SearchConfig.indexes
+        Project.SearchConfig.indexes = [
+            IndexConfig(name="global", fields=["name"]),
+            IndexConfig(name="global", fields=["status"]),
+        ]
+        Project.SearchConfig.to_document = lambda instance: {"name": instance.name}
+        Project.SearchConfig.field_dependencies = {"name": ("name",)}
+        self.addCleanup(setattr, Project.SearchConfig, "indexes", original_indexes)
+        self.addCleanup(delattr, Project.SearchConfig, "to_document")
+        self.addCleanup(delattr, Project.SearchConfig, "field_dependencies")
+        query_fields: dict[str, Any] = {}
+        graphql_search_module.register_search_query(
+            query_fields,
+            {"Project": Project},
+            {"Project": MagicMock()},
+            None,
+            None,
+        )
+        backend = DevSearchBackend()
+        configure_search_backend(backend)
+        backend.upsert(
+            "global",
+            [
+                SearchDocument(
+                    id="project:1",
+                    type="Project",
+                    identification={"id": 1},
+                    index="global",
+                    data={"name": "Alpha"},
+                    field_boosts={},
+                )
+            ],
+        )
+
+        with patch.object(
+            graphql_search_module,
+            "get_read_permission_filter",
+            return_value=ReadPermissionPlan(
+                filters=[], requires_instance_check=False, decision="allow_all"
+            ),
+        ):
+            response = query_fields["search"].resolver(
+                None,
+                SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+                query="Alpha",
+                types=["Project"],
+            )
+
+        assert response["total"] == 1
+        assert [item.identification for item in response["results"]] == [{"id": 1}]
+
+    def test_unconfigured_index_skips_backend_search(self) -> None:
+        query_fields: dict[str, Any] = {}
+        graphql_search_module.register_search_query(
+            query_fields,
+            {"Project": Project},
+            {"Project": MagicMock()},
+            None,
+            None,
+        )
+        backend = MagicMock()
+        backend.search.return_value = SearchResult(hits=[], total=0)
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+
+        with patch.object(
+            graphql_search_module, "get_search_backend", return_value=backend
+        ):
+            response = query_fields["search"].resolver(
+                None, info, query="", index="not-configured", types=["Project"]
+            )
+
+        assert response["results"] == []
+        assert response["total"] == 0
+        backend.search.assert_not_called()
 
     def test_graphql_search_keeps_iso_like_strings_lexical(self) -> None:
         ProjectInterface.data_store[3] = {"name": "2026-01-01", "status": "public"}
@@ -635,6 +758,61 @@ class GraphQLSearchTests(SimpleTestCase):
         assert response["total_is_exact"] is True
         assert len(response["results"]) == 1
         assert len(backend.search_calls) == 6
+
+    def test_graphql_search_rejects_explicitly_incomplete_terminal_pages(self) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=1)
+        complete_hit = backend.search("global", "", limit=10, offset=0).hits[0]
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        for hits in ([], [complete_hit]):
+            with self.subTest(hit_count=len(hits)):
+                backend.search_calls.clear()
+                with (
+                    patch.object(
+                        backend,
+                        "search",
+                        return_value=SearchResult(
+                            hits=hits,
+                            total=len(hits),
+                            exhausted=False,
+                        ),
+                    ),
+                    self.assertRaisesRegex(GraphQLError, "scan limit") as caught,
+                ):
+                    GraphQL._query_fields["search"].resolver(
+                        None, info, query="", page_size=10
+                    )
+                assert caught.exception.extensions == {
+                    "code": "SEARCH_SCAN_LIMIT_EXCEEDED"
+                }
+
+    @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 2})
+    def test_graphql_search_accepts_explicitly_exhausted_full_scan_boundary(
+        self,
+    ) -> None:
+        backend = self._configure_counting_backend_with_public_rows(public_count=2)
+        original_search = backend.search
+
+        def exhausted_search(*args: Any, **kwargs: Any) -> SearchResult:
+            result = original_search(*args, **kwargs)
+            return SearchResult(
+                hits=result.hits,
+                total=result.total,
+                took_ms=result.took_ms,
+                raw=result.raw,
+                exhausted=True,
+            )
+
+        with patch.object(backend, "search", side_effect=exhausted_search):
+            response = GraphQL._query_fields["search"].resolver(
+                None,
+                SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+                query="",
+                page_size=10,
+            )
+
+        assert response["total"] == 2
+        assert response["total_is_exact"] is True
+        assert len(backend.search_calls) == 1
 
     def test_graphql_search_exact_total_trims_materialized_page_window(self) -> None:
         self._configure_counting_backend_with_public_rows(public_count=12)

@@ -16,7 +16,7 @@ from django.utils.module_loading import import_string
 
 from general_manager.logging import get_logger
 from general_manager.manager.general_manager import GeneralManager
-from general_manager.search.config import IndexConfig
+from general_manager.search.config import IndexConfig, SearchConfigSpec
 from general_manager.search.identity import (
     IDENTITY_TRANSPORT_VERSION,
     get_search_identity_fields,
@@ -154,6 +154,26 @@ def _index_payload(index_config: IndexConfig) -> dict[str, object]:
     }
 
 
+def _field_dependencies_payload(
+    config: SearchConfigSpec,
+    index_config: IndexConfig,
+) -> list[dict[str, object]]:
+    """Canonically serialize one index's declared projection provenance."""
+    assert config.field_dependencies is not None
+    fields = {
+        *(field.name for field in index_config.iter_fields()),
+        *index_config.filters,
+        *index_config.sorts,
+    }
+    return [
+        {
+            "field": field,
+            "sources": sorted(config.field_dependencies.get(field, ())),
+        }
+        for field in sorted(fields)
+    ]
+
+
 def build_search_schema_fingerprint(
     manager_class: type[GeneralManager],
     index_config: IndexConfig,
@@ -162,8 +182,8 @@ def build_search_schema_fingerprint(
     Build a stable fingerprint for one manager/index search configuration.
 
     The fingerprint includes the manager import path, index fields, filters,
-    sorts, boosts, min score, resolved identity kinds and transport version,
-    type label, update strategy, and import-like paths
+    sorts, boosts, min score, declared projection dependencies, resolved
+    identity kinds and transport version, type label, update strategy, and import-like paths
     for custom `document_id` and `to_document` callables. It returns a SHA-256
     hex digest. Field order follows `index_config.iter_fields()`, filters and
     sorts keep configured order, duplicate entries remain in the payload, and
@@ -174,7 +194,7 @@ def build_search_schema_fingerprint(
     JSON serialization errors from malformed config values propagate.
     """
     config = get_search_config(manager_class)
-    payload = {
+    payload: dict[str, object] = {
         "manager_path": manager_import_path(manager_class),
         "index": _index_payload(index_config),
         "document_id": _callable_path(config.document_id if config else None),
@@ -194,6 +214,11 @@ def build_search_schema_fingerprint(
         if config
         else [],
     }
+    if config is not None and config.field_dependencies is not None:
+        payload["field_dependencies"] = _field_dependencies_payload(
+            config,
+            index_config,
+        )
     identities = get_search_identity_fields(manager_class, index_config)
     if identities:
         payload["identity_transport"] = {

@@ -129,8 +129,11 @@ Pagination is page-based. Responses include a `pageInfo` object with:
 
 `total_count` is computed after permission filtering, user filters, excludes,
 grouping, and sorting, but before pagination. Generated root and nested `…List`
-and `…Groups` fields always paginate, including when both arguments are omitted.
-The effective defaults are page 1 and size 10, with a maximum page size of 100.
+and `…Groups` fields return the complete result when both `page` and `pageSize`
+are omitted. In that unpaged mode, `pageInfo` reports `currentPage: 1`,
+`pageSize: null`, and `totalPages: 1` for a nonempty known result (`0` when
+empty). Supplying either argument enables pagination; the missing argument then
+defaults to page 1 or size 10. The maximum page size is 100.
 Operators can configure these sizes in Django settings:
 
 ```python
@@ -148,12 +151,15 @@ always reports the effective page and size. Empty known result sets report
 `totalPages: 0`; an out-of-range positive page returns an empty page while
 retaining the known total.
 
-Request-backed lists forward effective pagination when a remote request plan is
-available. An incomplete upstream page must match those effective coordinates;
-it cannot choose a different page or size when the caller omits pagination.
-Returned items are capped even if the upstream provider overdelivers. Upstream
-row counts are not presented as global totals unless authorization can establish
-their validity; unknown totals remain null.
+Request-backed lists forward pagination only when the caller supplies `page` or
+`pageSize`. An incomplete upstream page may satisfy an explicitly requested
+page only when its coordinates match; returned items are capped even if the
+provider overdelivers. An unpaged GraphQL request requires a complete upstream
+response. If the upstream response is partial, the resolver rejects the request
+instead of presenting one remote page as a complete result or fetching an
+unbounded sequence of remote pages. Upstream row counts are not presented as
+global totals unless authorization can establish their validity; unknown totals
+remain null.
 
 These bounds limit items returned by generated paged fields. Permission checks,
 exact counts, grouping, and Python-side sorting may still traverse or materialize

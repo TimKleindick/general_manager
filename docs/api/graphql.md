@@ -875,13 +875,15 @@ source is complete. Request-backed pages whose authorization cannot prove a
 global total return `totalCount: null` and `totalPages: null`. Ordinary lists
 sort records; grouped endpoints sort eligible aggregate scalars after grouping
 and before pagination, and `totalCount` counts groups. Generated root and nested
-lists and groups always paginate, defaulting to page 1 and size 10. Set
+lists and groups return the complete result when both pagination controls are
+omitted or null. In that mode, `pageInfo.pageSize` is null. Supplying either
+control enables pagination, defaulting the other to page 1 or size 10. Set
 `GENERAL_MANAGER["GRAPHQL_DEFAULT_PAGE_SIZE"]` and
 `GENERAL_MANAGER["GRAPHQL_MAX_PAGE_SIZE"]` to configure the default and maximum
 (default maximum: 100). Both settings must be positive integers and the default
 must not exceed the maximum. Explicit zero, negative, or oversized page sizes
 are rejected before source loading; oversized sizes are not silently clamped.
-`pageInfo` reports the effective coordinates. This bounds returned items, while
+`pageInfo` reports the effective coordinates. Explicit pagination bounds returned items, while
 permission evaluation, exact totals, grouping, and local sorting can still
 process the full source. Plain list-valued properties are outside this paged
 contract. Empty known result sets report
@@ -889,7 +891,9 @@ contract. Empty known result sets report
 retaining known metadata. An already-empty grouped result with pagination returns
 an empty `items` list and its normal page metadata; it does not raise the
 grouped-bucket empty-slice error. Do not import generated/internal Python
-pagination classes directly.
+pagination classes directly. An unpaged request-backed list requires a complete
+upstream response; a partial remote page raises an error instead of being
+presented as a complete result. RemoteAPI's own finite defaults remain unchanged.
 
 Global search always uses page 1 and size 10 defaults and exposes the same
 `pageInfo` shape alongside its existing `total` and `totalIsExact` fields. In

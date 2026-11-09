@@ -45,12 +45,14 @@ from general_manager.utils.filter_parser import (
     FilterFunction,
     ParsedFilters,
     ParsedFilterCriteria,
+    _SUPPORTED_LOOKUPS,
     create_filter_function,
     parse_filters,
 )
 
 if TYPE_CHECKING:
     from general_manager.api.property import GraphQLProperty
+    from general_manager.bucket.database_bucket import DatabaseBucket
     from general_manager.bucket.group_bucket import GroupBucket
     from general_manager.interface.interfaces.calculation import CalculationInterface
     from general_manager.manager.general_manager import GeneralManager
@@ -181,6 +183,25 @@ class MultipleCalculationMatchError(ValueError):
         Initializes the exception with the message "Multiple matching calculations found."
         """
         super().__init__("Multiple matching calculations found.")
+
+
+class FrozenCalculationLookupError(ValueError):
+    """Raised when an exact calculation snapshot cannot evaluate a lookup safely."""
+
+    @classmethod
+    def unsupported(cls, lookup: str) -> "FrozenCalculationLookupError":
+        return cls(f"unsupported lookup '{lookup}'")
+
+    @classmethod
+    def not_manager(cls) -> "FrozenCalculationLookupError":
+        return cls("native source is not a manager")
+
+    @classmethod
+    def unavailable(cls) -> "FrozenCalculationLookupError":
+        return cls("native source is unavailable")
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Frozen calculation lookup cannot be evaluated: {reason}.")
 
 
 class CalculationBucket(Bucket[GeneralManagerType]):
@@ -815,6 +836,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         group: ParsedFilters,
     ) -> bool:
         """Apply one parsed Django-style call group to a generated manager."""
+        from general_manager.manager.general_manager import GeneralManager
+
         for field_name, definitions in group.items():
             try:
                 value = getattr(manager, field_name)
@@ -833,24 +856,256 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                 for filter_func in definitions.get("filter_funcs", []):
                     if not filter_func(value):
                         return False
+            input_field = self.input_fields.get(field_name)
+            declared_manager_type = (
+                cast(type[GeneralManager], input_field.type)
+                if input_field is not None and input_field.is_manager
+                else None
+            )
             for lookup, expected in definitions.get("filter_kwargs", {}).items():
-                identification = getattr(value, "identification", None)
-                lookup_parts = lookup.split("__") if lookup else []
-                if (
-                    isinstance(identification, dict)
-                    and lookup_parts
-                    and lookup_parts[0] in identification
+                if not self._matches_manager_lookup(
+                    value, lookup, expected, declared_manager_type
                 ):
-                    candidate = identification[lookup_parts[0]]
-                    matcher = create_filter_function(
-                        "__".join(lookup_parts[1:]), expected
-                    )
-                else:
-                    candidate = value
-                    matcher = create_filter_function(lookup, expected)
-                if not matcher(candidate):
                     return False
         return True
+
+    @staticmethod
+    def _matches_manager_lookup(
+        value: object,
+        lookup: str,
+        expected: object,
+        declared_manager_type: type[GeneralManager] | None = None,
+    ) -> bool:
+        """Resolve declared fields before interpreting a trailing scalar lookup."""
+        from general_manager.api.graphql_value_contract import _manager_source
+        from general_manager.manager.general_manager import GeneralManager
+
+        parts = lookup.split("__") if lookup else []
+        candidate = value
+        scalar_input: Input[type[object]] | None = None
+        nullable_manager_type = declared_manager_type
+        operator = ""
+        for position, part in enumerate(parts):
+            if not isinstance(candidate, GeneralManager):
+                if candidate is None:
+                    if scalar_input is not None:
+                        operator = "__".join(parts[position:])
+                        break
+                    if nullable_manager_type is not None:
+                        CalculationBucket._validate_null_manager_lookup(
+                            nullable_manager_type, parts[position:]
+                        )
+                        return False
+                    raise FrozenCalculationLookupError.unsupported(
+                        "__".join(parts[position:])
+                    )
+                operator = "__".join(parts[position:])
+                break
+            interface = candidate.Interface
+            get_attribute_types = getattr(interface, "get_attribute_types", None)
+            attributes = get_attribute_types() if callable(get_attribute_types) else {}
+            get_properties = getattr(interface, "get_graph_ql_properties", None)
+            properties = get_properties() if callable(get_properties) else {}
+            inputs = getattr(interface, "input_fields", {})
+            identification = candidate.identification
+            if part not in attributes and part not in properties and part not in inputs:
+                if part not in identification:
+                    operator = "__".join(parts[position:])
+                    break
+            field_type = attributes.get(part, {}).get("type")
+            input_field = inputs.get(part)
+            is_manager_field = (input_field is not None and input_field.is_manager) or (
+                isinstance(field_type, type) and issubclass(field_type, GeneralManager)
+            )
+            if input_field is not None and input_field.is_manager:
+                nullable_manager_type = cast(type[GeneralManager], input_field.type)
+            elif isinstance(field_type, type) and issubclass(
+                field_type, GeneralManager
+            ):
+                nullable_manager_type = field_type
+            else:
+                nullable_manager_type = None
+            if input_field is not None and not (
+                input_field.is_manager or input_field.is_collection
+            ):
+                scalar_input = input_field
+            elif isinstance(field_type, type) and not issubclass(
+                field_type, GeneralManager
+            ):
+                scalar_input = Input(field_type)
+            else:
+                scalar_input = None
+            if (
+                scalar_input is not None
+                and CalculationBucket._has_native_database_source(candidate, part)
+            ):
+                return CalculationBucket._matches_native_database_lookup(
+                    candidate,
+                    "__".join(parts[position:]),
+                    expected,
+                )
+            if (
+                not is_manager_field
+                and part in identification
+                and _manager_source(type(candidate), part)
+            ):
+                # Preserve native constructor identities only while their actual
+                # getter still has the common source. Replaced getters are values.
+                candidate = identification[part]
+            else:
+                try:
+                    candidate = getattr(candidate, part)
+                except AttributeError:
+                    return False
+
+        if operator and operator not in _SUPPORTED_LOOKUPS:
+            raise FrozenCalculationLookupError.unsupported(operator)
+
+        # Normalize JSON sequence operands through the native scalar contract;
+        # other membership containers retain the existing lookup grammar.
+        if scalar_input is not None and (
+            operator != "in" or isinstance(expected, (list, tuple))
+        ):
+            if isinstance(expected, (list, tuple)) and not isinstance(
+                expected, scalar_input.type
+            ):
+                expected = [scalar_input.cast(item) for item in expected]
+            else:
+                expected = scalar_input.cast(expected)
+        return create_filter_function(operator, expected)(candidate)
+
+    @staticmethod
+    def _validate_null_manager_lookup(
+        manager_class: type[GeneralManager], parts: list[str]
+    ) -> None:
+        """Validate a lookup path hidden by a nullable manager before rejecting it."""
+        from general_manager.manager.general_manager import GeneralManager
+
+        current_manager = manager_class
+        for position, part in enumerate(parts):
+            interface = current_manager.Interface
+            get_attribute_types = getattr(interface, "get_attribute_types", None)
+            attributes = get_attribute_types() if callable(get_attribute_types) else {}
+            get_properties = getattr(interface, "get_graph_ql_properties", None)
+            properties = get_properties() if callable(get_properties) else {}
+            inputs = getattr(interface, "input_fields", {})
+            field_type = attributes.get(part, {}).get("type")
+            input_field = inputs.get(part)
+            if (
+                part not in attributes
+                and part not in properties
+                and input_field is None
+            ):
+                raise FrozenCalculationLookupError.unsupported(
+                    "__".join(parts[position:])
+                )
+
+            manager_type: type[GeneralManager] | None = None
+            if input_field is not None and input_field.is_manager:
+                manager_type = cast(type[GeneralManager], input_field.type)
+            elif isinstance(field_type, type) and issubclass(
+                field_type, GeneralManager
+            ):
+                manager_type = field_type
+            if manager_type is not None:
+                current_manager = manager_type
+                continue
+
+            operator = "__".join(parts[position + 1 :])
+            if (
+                operator
+                and operator not in _SUPPORTED_LOOKUPS
+                and not CalculationBucket._native_field_supports_lookup(
+                    current_manager, part, operator
+                )
+            ):
+                raise FrozenCalculationLookupError.unsupported(operator)
+            return
+
+    @staticmethod
+    def _native_field_supports_lookup(
+        manager_class: type[GeneralManager], field_name: str, lookup: str
+    ) -> bool:
+        """Return whether a proven ORM field declares a lookup or transform chain."""
+        from django.core.exceptions import FieldDoesNotExist
+        from general_manager.api.graphql_value_contract import _manager_source
+        from general_manager.interface.orm_interface import OrmInterfaceBase
+
+        if not issubclass(
+            manager_class.Interface, OrmInterfaceBase
+        ) or not _manager_source(manager_class, field_name):
+            return False
+        model = manager_class.Interface._model
+        try:
+            current_field = model._meta.get_field(field_name)
+        except FieldDoesNotExist:
+            return False
+
+        parts = lookup.split("__")
+        for transform_name in parts[:-1]:
+            transform = current_field.get_transform(transform_name)
+            if transform is None:
+                return False
+            try:
+                current_field = transform(current_field).output_field
+            except (AttributeError, TypeError):
+                return False
+        return current_field.get_lookup(parts[-1]) is not None
+
+    @staticmethod
+    def _has_native_database_source(value: object, field_name: str) -> bool:
+        """Return whether a scalar is still backed by its declared ORM source."""
+        from general_manager.api.graphql_value_contract import _manager_source
+        from general_manager.interface.orm_interface import OrmInterfaceBase
+        from general_manager.manager.general_manager import GeneralManager
+
+        if not isinstance(value, GeneralManager) or not issubclass(
+            value.Interface, OrmInterfaceBase
+        ):
+            return False
+        if not _manager_source(type(value), field_name):
+            return False
+        seed = CalculationBucket._native_database_seed(value)
+        return seed._native_projection_plan((field_name,)) is not None
+
+    @staticmethod
+    def _native_database_seed(
+        value: GeneralManager,
+    ) -> "DatabaseBucket[GeneralManager]":
+        """Build the exact-instance ORM predicate owner for one related row."""
+        from django.db import models
+        from general_manager.bucket.database_bucket import DatabaseBucket
+        from general_manager.interface.orm_interface import OrmInterfaceBase
+
+        value._ensure_as_of_compatible()
+        interface = cast(OrmInterfaceBase[models.Model], value._interface)
+        instance = interface._instance
+        database_alias = instance._state.db
+        interface_class = cast(type[OrmInterfaceBase[models.Model]], value.Interface)
+        model = interface_class._model
+        manager = cast(models.Manager[models.Model], model._meta.base_manager)
+        data = manager.db_manager(database_alias).none()
+        return DatabaseBucket(
+            data,
+            type(value),
+            search_date=value._effective_search_date,
+        )
+
+    @staticmethod
+    def _matches_native_database_lookup(
+        value: object, lookup: str, expected: object
+    ) -> bool:
+        """Use exact materialized ORM filtering without reopening a global domain."""
+        from general_manager.manager.general_manager import GeneralManager
+
+        if not isinstance(value, GeneralManager):
+            raise FrozenCalculationLookupError.not_manager()
+        exact = CalculationBucket._native_database_seed(value).with_instances([value])
+        if exact.filter(**{lookup: expected}).count():
+            return True
+        if exact.exclude(**{lookup: expected}).count():
+            return False
+        raise FrozenCalculationLookupError.unavailable()
 
     def _apply_call_groups(
         self,
@@ -1587,6 +1842,30 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         own._parsed_exclude_call_groups = ()
         own._allowed_identifications = []
         return own
+
+    def filter_instances(
+        self,
+        instances: Iterable[GeneralManagerType],
+    ) -> Bucket[GeneralManagerType]:
+        """Apply this plan to exact instances without enumerating or rebuilding.
+
+        Reuse Input normalization, manager lookups and atomic exclusion groups
+        when filtering a previously authorized snapshot. Order, duplicates and
+        manager identity are retained; this method does not authorize reads.
+        """
+        snapshot = self.with_instances(instances)
+        return snapshot.with_instances(
+            instance
+            for instance in snapshot
+            if all(
+                self._matches_call_group(instance, group)
+                for group in self._parsed_filter_call_groups
+            )
+            and not any(
+                self._matches_call_group(instance, group)
+                for group in self._parsed_exclude_call_groups
+            )
+        )
 
     def with_instances(
         self,
