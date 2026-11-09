@@ -1812,7 +1812,11 @@ def create_list_resolver(
         )
         from general_manager.api.graphql_query_permissions import authorize_query_fields
 
-        ordering_paths = {term.field for term in order_by_to_sort_terms(order_by)}
+        try:
+            ordering_terms = order_by_to_sort_terms(order_by)
+        except GraphQLOrderingInputError as exc:
+            raise GraphQLError(str(exc)) from exc
+        ordering_paths = {term.field for term in ordering_terms}
         operand_paths = (
             set(plan.filters) | set(plan.excludes) | set(plan.normalized_excludes)
         )
