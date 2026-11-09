@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from inspect import getattr_static
 from typing import TYPE_CHECKING, ClassVar, Literal, cast
@@ -579,7 +579,7 @@ class _ConfiguredManagerPermission(BasePermission):
 
     def __get_attribute_permissions(
         self,
-    ) -> dict[str, dict[permission_type, list[str]]]:
+    ) -> Mapping[str, dict[permission_type, list[str]]]:
         return _attribute_permission_definitions(self.__class__)
 
     def _get_base_permissions(self, action: permission_type) -> list[str]:
@@ -880,16 +880,74 @@ class ManagerBasedPermission(AdditiveManagerPermission):
     """Deprecated compatibility alias for `AdditiveManagerPermission`."""
 
 
+class _AttributePermissionDefinitions(Mapping[str, dict[permission_type, list[str]]]):
+    """Resolve only requested fields from the constructor's declaration snapshot.
+
+    Shallow copies preserve the previous lifetime: class assignment affects the
+    next permission instance, while edits inside a rule dictionary remain live.
+    Copying class dictionaries avoids scanning every method for every field.
+    """
+
+    def __init__(self, permission_class: type[BasePermission]) -> None:
+        self.sources = tuple(vars(cls).copy() for cls in permission_class.__mro__)
+
+    def __getitem__(self, attribute: str) -> dict[permission_type, list[str]]:
+        if not attribute.startswith("__"):
+            for source in self.sources:
+                value = source.get(attribute)
+                if isinstance(value, dict):
+                    return cast(dict[permission_type, list[str]], value)
+        raise KeyError(attribute)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(
+            dict.fromkeys(
+                name
+                for source in reversed(self.sources)
+                for name, value in source.items()
+                if isinstance(value, dict) and not name.startswith("__")
+            )
+        )
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
 def _attribute_permission_definitions(
     permission_class: type[BasePermission],
-) -> dict[str, dict[permission_type, list[str]]]:
-    """Share the effective MRO/dictionary merge with static projection analysis."""
-    definitions: dict[str, dict[permission_type, list[str]]] = {}
-    for cls in reversed(permission_class.__mro__):
-        for attribute, value in vars(cls).items():
-            if not attribute.startswith("__") and isinstance(value, dict):
-                definitions[attribute] = cast(dict[permission_type, list[str]], value)
-    return definitions
+) -> Mapping[str, dict[permission_type, list[str]]]:
+    """Share the effective dictionary-only MRO precedence without eager merging."""
+    return _AttributePermissionDefinitions(permission_class)
+
+
+def _attribute_permission_definition(
+    permission_class: type[BasePermission], attribute: str
+) -> dict[permission_type, list[str]] | None:
+    """Resolve one field with the same dictionary-only MRO precedence."""
+    if attribute.startswith("__"):
+        return None
+    for cls in permission_class.__mro__:
+        value = vars(cls).get(attribute)
+        if isinstance(value, dict):
+            return cast(dict[permission_type, list[str]], value)
+    return None
+
+
+_DECLARATIVE_VALUE_TYPES = frozenset(
+    {
+        str,
+        int,
+        float,
+        bool,
+        type(None),
+        list,
+        tuple,
+        dict,
+        set,
+        frozenset,
+        type(vars(BasePermission).get("_abc_impl")),
+    }
+)
 
 
 def additional_local_read_permission(
@@ -922,6 +980,11 @@ def additional_local_read_permission(
             continue
         if any(
             name != "__annotate_func__"
+            # Exact builtin containers/scalars cannot acquire descriptor or
+            # callable behavior. Arbitrary values still need live inspection.
+            and not (
+                type(type(value)) is type and type(value) in _DECLARATIVE_VALUE_TYPES
+            )
             and (callable(value) or getattr_static(value, "__get__", None) is not None)
             for name, value in vars(cls).items()
         ):
@@ -931,7 +994,7 @@ def additional_local_read_permission(
         if permission_class in implementations
         else permission_class.__read__
     )
-    field_rules = _attribute_permission_definitions(permission_class).get(attribute)
+    field_rules = _attribute_permission_definition(permission_class, attribute)
     if not isinstance(field_rules, dict) or "read" not in field_rules:
         return False
     field = field_rules["read"]

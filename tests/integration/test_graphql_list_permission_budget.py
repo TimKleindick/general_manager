@@ -15,6 +15,7 @@ from general_manager.api.graphql_resolvers import create_list_resolver
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 from general_manager.permission import OverrideManagerPermission
+from general_manager.permission.permission_checks import permission_functions
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
 
@@ -248,6 +249,115 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
                 budget_additional_permissions_only=True,
             )
         assert check.call_count == 2
+
+    def test_repeated_scalar_operands_keep_runtime_checks_per_candidate_occurrence(
+        self,
+    ) -> None:
+        record = self.Record.Factory.create(
+            name="repeat", first_filter="first", second_filter="second", rank=1
+        )
+        native = graphql_resolvers.check_read_permission
+        with patch.object(
+            graphql_resolvers, "check_read_permission", wraps=native
+        ) as check:
+            authorize_query_fields(
+                [record, record],
+                self.info,
+                ["rank", "rank__gte", "rank__lte", "name"],
+                budget_additional_permissions_only=True,
+            )
+        assert [call.args[2] for call in check.call_args_list] == [
+            "name",
+            "rank",
+            "rank",
+            "rank",
+            "name",
+            "rank",
+            "rank",
+            "rank",
+        ]
+
+    def test_unknown_repeated_scalar_operands_keep_individual_checks(self) -> None:
+        record = self.Custom.Factory.create(name="custom")
+        with (
+            patch.object(
+                graphql_resolvers, "check_read_permission", side_effect=[True, False]
+            ) as check,
+            self.assertRaisesMessage(GraphQLError, "query field 'name'"),
+        ):
+            authorize_query_fields(
+                [record],
+                self.info,
+                ["name", "name__exact"],
+                budget_additional_permissions_only=True,
+            )
+        assert check.call_count == 2
+
+    def test_declarative_callback_denial_or_error_is_not_collapsed(self) -> None:
+        """Equal field/row declarations do not prove callback purity."""
+        record = self.Record.Factory.create(
+            name="callback", first_filter="first", second_filter="second", rank=1
+        )
+        for error in (None, RuntimeError("second operand failed")):
+            with self.subTest(error=error):
+                calls = 0
+
+                def callback(_instance, _user, _config, *, error=error):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 2 and error is not None:
+                        raise error
+                    return calls == 1
+
+                with (
+                    patch.dict(
+                        permission_functions,
+                        {
+                            "volatileOperand": {
+                                "permission_method": callback,
+                                "permission_filter": lambda *_: None,
+                            }
+                        },
+                    ),
+                    patch.object(
+                        self.Record.Permission, "__read__", ["volatileOperand"]
+                    ),
+                    self.assertRaisesMessage(
+                        RuntimeError if error else GraphQLError,
+                        "second operand failed" if error else "query field 'rank'",
+                    ),
+                ):
+                    authorize_query_fields(
+                        [record],
+                        self.info,
+                        ["rank", "rank__gte"],
+                        budget_additional_permissions_only=True,
+                    )
+                assert calls == 2
+
+    def test_repeated_scalar_denial_still_covers_nonmatching_and_offpage_rows(
+        self,
+    ) -> None:
+        for rank in (1, 2):
+            self.Record.Factory.create(
+                name=str(rank), first_filter="first", second_filter="second", rank=rank
+            )
+
+        def check(instance: GeneralManager, _info: object, field: str) -> bool:
+            return not (instance.rank == 2 and field == "rank")
+
+        with (
+            patch.object(graphql_resolvers, "check_read_permission", side_effect=check),
+            self.assertRaisesMessage(GraphQLError, "query field 'rank'"),
+        ):
+            self.resolver(
+                None,
+                self.info,
+                filter={"rank__gte": 1, "rank__lte": 1},
+                order_by=[{"field": "rank", "direction": "ASC"}],
+                page=1,
+                page_size=1,
+            )
 
     def test_runtime_permission_override_remains_budgeted(self) -> None:
         """The concrete candidate policy, rather than its manager declaration, wins."""

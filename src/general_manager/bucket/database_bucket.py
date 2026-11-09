@@ -1490,10 +1490,26 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         Returns:
             int: Number of represented rows.
         """
+        return self._count_rows(materialize_rows=True)
+
+    def _count_for_page(self) -> int:
+        """Count before a page slice without loading a new complete row snapshot.
+
+        Exact run-scoped snapshots remain reusable. Otherwise the database
+        counts matches and the subsequent slice hydrates only its own rows.
+        """
+        return self._count_rows(materialize_rows=False)
+
+    def _count_rows(self, *, materialize_rows: bool) -> int:
+        """Share count dependencies, snapshot reuse and the native fallback."""
         self._ensure_as_of_compatible()
         self._track_effective_dependencies()
-        if self._can_materialize_count_snapshot():
+        if materialize_rows and self._can_materialize_count_snapshot():
             rows = self._get_run_scoped_rows()
+            if rows is not None:
+                return len(rows)
+        elif not materialize_rows:
+            rows = self._peek_run_scoped_rows()
             if rows is not None:
                 return len(rows)
         primary_keys = self._peek_run_scoped_primary_keys()
