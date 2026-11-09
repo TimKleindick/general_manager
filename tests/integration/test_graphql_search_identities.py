@@ -17,16 +17,21 @@ from general_manager.api.graphql_search import (
     normalize_filter_input,
     normalize_id_filter_value,
 )
+from general_manager.api.graphql_query_permissions import (
+    QueryFieldPermissionError,
+    authorize_query_fields,
+)
 from general_manager.api.property import graph_ql_property
 from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.manager import GeneralManager, Input
-from general_manager.permission import ManagerBasedPermission
+from general_manager.permission import ManagerBasedPermission, OverrideManagerPermission
 from general_manager.permission.base_permission import ReadPermissionPlan
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.backends.meilisearch import MeilisearchBackend
 from general_manager.search.backend import SearchResult
-from general_manager.search.config import IndexConfig
+from general_manager.search.config import IndexConfig, SearchConfigSpec
+from general_manager.search.indexer import _serialize_document
 from general_manager.search.indexer import SearchIndexer
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
@@ -309,6 +314,57 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
         self.assertIsNone(result.errors, result.errors)
         self.assertEqual(result.data["search"]["total"], expected)
         return result.data["search"]
+
+    def test_native_foreign_key_checks_both_primary_key_names(self) -> None:
+        """The id alias cannot bypass a policy on a differently named primary key."""
+        row = self.Integer(7)
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        for denied_name in ("id", "code"):
+            permission = type(
+                "RestrictedIdentityPermission",
+                (OverrideManagerPermission,),
+                {"__read__": ["public"], denied_name: {"read": ["isAdmin"]}},
+            )
+            with (
+                self.subTest(denied_name=denied_name),
+                patch.object(self.Code, "Permission", permission),
+                self.assertRaises(QueryFieldPermissionError),
+            ):
+                authorize_query_fields(
+                    [row], info, ["code_reference_id"], native_paths=True
+                )
+
+    def test_custom_projection_relation_fallback_requires_identity_leaves(self) -> None:
+        """Covered native relation fallback uses the actual serialized identity."""
+        index = IndexConfig("global", fields=("code_reference",))
+        for dependency, covered in (
+            ("code_reference__id", True),
+            ("code_reference__status", False),
+        ):
+            config = SearchConfigSpec(
+                indexes=(index,),
+                to_document=lambda _instance: {},
+                field_dependencies={"code_reference": (dependency,)},
+            )
+            with (
+                self.subTest(dependency=dependency),
+                patch(
+                    "general_manager.search.indexer.get_index_config",
+                    return_value=index,
+                ),
+            ):
+                if covered:
+                    document = _serialize_document(
+                        self.Integer(7), index_name="global", config=config
+                    )
+                    assert document.data == {"code_reference": {"id": "007"}}
+                else:
+                    with self.assertRaisesRegex(
+                        ValueError, "Undeclared native fallback"
+                    ):
+                        _serialize_document(
+                            self.Integer(7), index_name="global", config=config
+                        )
 
     def test_orm_pk_reference_and_to_field_ids_match_native_values(self) -> None:
         cases = [

@@ -546,7 +546,7 @@ def test_request_resolver_rejects_global_operations_after_local_materialization(
             return_value=local,
         ),
     ):
-        with pytest.raises(GraphQLError, match="global pagination"):
+        with pytest.raises(GraphQLError, match="global unpaginated result"):
             resolver(object(), _ResolverInfo())
 
     with (
@@ -601,7 +601,7 @@ def test_request_resolver_rejects_global_operations_after_local_materialization(
     check_global_operation.assert_not_called()
 
 
-def test_request_resolver_uses_default_page_for_complete_snapshot() -> None:
+def test_request_resolver_returns_complete_snapshot_when_pagination_omitted() -> None:
     item = _ResolverManager(id=1)
     source = RequestBucket(
         _ResolverManager,
@@ -622,7 +622,7 @@ def test_request_resolver_uses_default_page_for_complete_snapshot() -> None:
     ):
         payload = resolver(object(), _ResolverInfo())
     assert payload["pageInfo"]["current_page"] == 1
-    assert payload["pageInfo"]["page_size"] == 10
+    assert payload["pageInfo"]["page_size"] is None
     assert payload["pageInfo"]["total_count"] == 1
 
 

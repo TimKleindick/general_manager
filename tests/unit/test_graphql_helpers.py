@@ -491,28 +491,58 @@ class GraphQLHelperTests(SimpleTestCase):
 
         normalizer.assert_not_called()
 
-    def test_partition_calculation_query_plan_separates_inputs_and_properties(
+    def test_partition_calculation_query_plan_preserves_mixed_exclusion_groups(
         self,
     ) -> None:
-        input_plan, deferred_plan = partition_calculation_query_plan(
+        scope, deferred = partition_calculation_query_plan(
             _CalculationManager,
             QueryParameterPlan(
-                filters={"subject__id": 7, "result__gte": 10},
-                excludes={"subject__id": 7, "result__gte": 10},
-                normalized_excludes={"subject__id": 7, "result__gte": 10},
+                filters={"subject__gte": 7, "result__gte": 10},
+                excludes={"subject": 7, "result__gte": 10},
+                normalized_excludes={"period": "2026", "result": 5},
             ),
         )
 
-        assert input_plan == QueryParameterPlan(
-            filters={"subject__id": 7},
-            excludes={"subject__id": 7},
-            normalized_excludes={"subject__id": 7},
+        assert scope == QueryParameterPlan(
+            filters={"subject__gte": 7},
+            excludes={},
+            normalized_excludes={},
         )
-        assert deferred_plan == QueryParameterPlan(
+        assert deferred == QueryParameterPlan(
             filters={"result__gte": 10},
-            excludes={"result__gte": 10},
-            normalized_excludes={"result__gte": 10},
+            excludes={"subject": 7, "result__gte": 10},
+            normalized_excludes={"period": "2026", "result": 5},
         )
+
+    def test_partition_calculation_query_plan_defers_scalar_traversal(self) -> None:
+        scope, deferred = partition_calculation_query_plan(
+            _CalculationManager,
+            QueryParameterPlan(
+                filters={"subject__id": 7}, excludes={}, normalized_excludes={}
+            ),
+        )
+
+        assert scope.filters == {}
+        assert deferred.filters == {"subject__id": 7}
+
+    def test_partition_calculation_query_plan_defers_replaced_input_getters(
+        self,
+    ) -> None:
+        def unexpected_getter(_instance: object) -> object:
+            pytest.fail("metadata classification must not invoke a getter")
+
+        with mock.patch.object(
+            _CalculationManager, "subject", property(unexpected_getter)
+        ):
+            scope, deferred = partition_calculation_query_plan(
+                _CalculationManager,
+                QueryParameterPlan(
+                    filters={"subject": 7}, excludes={}, normalized_excludes={}
+                ),
+            )
+
+        assert scope.filters == {}
+        assert deferred.filters == {"subject": 7}
 
     def test_partition_calculation_query_plan_rejects_unknown_roots_in_all_mappings(
         self,
@@ -627,11 +657,16 @@ class GraphQLHelperTests(SimpleTestCase):
 
         assert [item.identification["id"] for item in first_page] == [0, 1, 2, 3, 4]
 
-    def test_apply_pagination_no_args_uses_finite_default(self) -> None:
+    def test_apply_pagination_no_args_returns_the_complete_bucket(self) -> None:
         queryset = SimpleBucket(
             _DummyManager, [_DummyManager(id=value) for value in range(12)]
         )
-        assert len(apply_pagination(queryset, None, None)) == 10
+        effective = normalize_pagination(None, None)
+
+        assert effective.requested is False
+        assert effective.page == 1
+        assert effective.page_size is None
+        assert len(apply_pagination(queryset, None, None)) == 12
 
     def test_oversized_page_is_rejected_before_getting_source(self) -> None:
         getter = mock.Mock(side_effect=AssertionError("must not obtain source"))
@@ -640,7 +675,7 @@ class GraphQLHelperTests(SimpleTestCase):
             resolver(None, mock.Mock(), page_size=101)
         getter.assert_not_called()
 
-    def test_maximum_page_size_is_allowed_and_empty_metadata_is_finite(self) -> None:
+    def test_maximum_page_size_is_allowed_and_empty_metadata_is_unpaged(self) -> None:
         effective = normalize_pagination(None, 100)
         assert effective.page_size == 100
         assert effective.page == 1
@@ -651,7 +686,7 @@ class GraphQLHelperTests(SimpleTestCase):
         assert payload["items"] == []
         assert payload["pageInfo"] == {
             "total_count": 0,
-            "page_size": 10,
+            "page_size": None,
             "current_page": 1,
             "total_pages": 0,
         }

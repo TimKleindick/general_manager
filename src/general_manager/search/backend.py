@@ -71,13 +71,18 @@ class SearchResult:
     it; when a backend cannot report a pre-pagination count, its adapter
     defines the best-effort value. `raw` may carry the backend-native response
     object for debugging or advanced callers and is not copied or normalized by
-    this model; callers should treat it as read-only.
+    this model; callers should treat it as read-only. `exhausted=True` is an
+    adapter-proven guarantee that this page reaches the end of the matching
+    result set. `False` means the adapter determined the page is incomplete or
+    cannot make that guarantee. `None` preserves the legacy contract for
+    adapters that do not report enumeration completeness.
     """
 
     hits: Sequence[SearchHit]
     total: int
     took_ms: int | None = None
     raw: object | None = None
+    exhausted: bool | None = None
 
 
 @runtime_checkable
@@ -221,7 +226,10 @@ class SearchBackend(Protocol):
 
         Returns:
             Container with matching hits, the total number of matches, optional
-            elapsed time in milliseconds, and any raw backend response.
+            elapsed time in milliseconds, any raw backend response, and
+            adapter-specific enumeration completeness. `exhausted=None` means
+            no completeness guarantee was supplied, not that the page is
+            necessarily complete or incomplete.
 
         Raises:
             SearchBackendError: Backend adapters may raise this for operational

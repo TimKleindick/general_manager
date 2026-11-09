@@ -266,10 +266,11 @@ class TestSearchRoutingBenchmark(GeneralManagerTransactionTestCase):
         )
         results = payload["results"]
         assert isinstance(results, list)
-        self.assertEqual(len(results), _PAGE_SIZE)
+        expected_count = min(self.row_count, _PAGE_SIZE)
+        self.assertEqual(len(results), expected_count)
         self.assertEqual(
             [row["name"] for row in results],
-            [f"needle row {ordinal:04d}" for ordinal in range(_PAGE_SIZE)],
+            [f"needle row {ordinal:04d}" for ordinal in range(expected_count)],
         )
         self.assertTrue(all(row["category"] == "public" for row in results))
 

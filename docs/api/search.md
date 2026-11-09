@@ -39,8 +39,12 @@ filterable, and sortable key. It is a trusted application assertion covering all
 branches and indirect reads, not an assertion that output values equal source
 values. Native projections always authorize their actual serialized fields in
 addition to the declared paths. Custom native fallback fields must be included
-in their own dependencies. Invalid or incomplete provenance fails before backend
-search. See [projection dependencies](../concepts/search.md#projection-dependencies).
+in their own dependencies; terminal relations may instead declare every native
+identity leaf serialized by that fallback. Invalid or incomplete provenance fails
+before backend search. Declared dependencies contribute to the index's schema
+fingerprint, so the existing reconciliation pipeline handles declaration changes.
+Indexes without declarations retain their previous fingerprint.
+See [projection dependencies](../concepts/search.md#projection-dependencies).
 
 `SearchInvalidationRule` declares a source manager whose lifecycle changes can
 invalidate search documents owned by the manager containing the rule. Sources
@@ -224,7 +228,9 @@ established, including a full final backend page at the boundary. Neither return
 partial results. **Compatibility change:** bounded mode no longer returns a
 partial count or page; `totalIsExact` remains in the schema and is always `true`
 on success. The positive candidate budget defaults to `1000` and is shared
-across selected manager types; denied and stale hits consume it too.
+across selected manager types; denied and stale hits consume it too. A backend
+can explicitly attest exhaustion even on a full final page. An explicitly
+incomplete short or empty page never establishes an exact result.
 
 `orderBy` is present when the registered searchable managers expose sortable
 fields; its `SearchOrderBy` input uses the generated sortable-field enum and
@@ -387,6 +393,20 @@ accepts the documented
 timeouts in the fallback `get_task()` polling loop raise
 `MeilisearchTaskFailedError`. Exceptions from the client's `wait_for_task()`
 method, including its timeout errors, propagate unchanged.
+
+`MeilisearchBackend.search()` reads settings once per backend call, sharing the
+read between ordering validation and completeness checks. A short page is
+attested as exhausted only below `pagination.maxTotalHits` with valid response
+provenance. Reaching the cap cannot establish a complete authorized total.
+Degraded responses, responses reaching the search cutoff, missing timing proof
+and raw page overdelivery fail explicitly. This inspects backend pagination and
+response metadata; it does not check indexed content freshness.
+
+Custom adapters can set `SearchResult.exhausted` to attest complete enumeration
+(`True`) or to prevent a short page being treated as complete (`False`). The
+compatibility default `None` retains the existing short-page contract. Adapters
+must reject a truncated intermediate page themselves: a later terminal page
+cannot repair an earlier incomplete response.
 
 ::: general_manager.search.backends.opensearch.OpenSearchBackend
 

@@ -42,6 +42,7 @@ from general_manager.interface.capabilities.orm_utils.field_descriptors import (
 )
 from general_manager.interface.capabilities.orm_utils.collection_probes import (
     NativeCollectionProbe,
+    bind_collection_probe_hint,
     collection_probe,
 )
 from general_manager.utils.filter_parser import create_filter_function
@@ -463,9 +464,10 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         if callable(interface_hydrate) and self._can_trust_orm_instance(instance):
             if self._empty_relation_probes:
                 instance.__dict__["_gm_empty_collection_probes"] = frozenset(
-                    probe
+                    hint
                     for annotation, probe in self._empty_relation_probes
                     if vars(instance).get(annotation) is False
+                    if (hint := bind_collection_probe_hint(probe)) is not None
                 )
             return manager_hydrate(instance, search_date=self._search_date)
         return self._build_manager_from_primary_key(instance.pk)

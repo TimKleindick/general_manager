@@ -30,9 +30,13 @@ class _FakeIndex:
         self.added: list[dict[str, object]] = []
         self.deleted: list[list[str]] = []
         self.settings: list[dict[str, object]] = []
-        self.attributes: dict[str, object] = {}
+        self.attributes: dict[str, object] = {
+            "pagination": {"maxTotalHits": 1000},
+            "searchCutoffMs": None,
+        }
         self.documents: list[dict[str, object]] = []
         self.search_payloads: list[dict[str, object]] = []
+        self.settings_reads = 0
         self.ranking_rules: list[str] = [
             "words",
             "typo",
@@ -59,6 +63,7 @@ class _FakeIndex:
         return {"taskUid": 1}
 
     def get_settings(self) -> dict[str, object]:
+        self.settings_reads += 1
         return {**self.attributes, "rankingRules": self.ranking_rules}
 
     def add_documents(self, payload: list[dict[str, object]]) -> dict[str, int]:
@@ -102,7 +107,13 @@ class _FakeIndex:
                 - "processingTimeMs": 0.
         """
         self.search_payloads.append(_payload)
-        return {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 0}
+        return {
+            "hits": [],
+            "estimatedTotalHits": 0,
+            "processingTimeMs": 0,
+            "limit": _payload["limit"],
+            "offset": _payload["offset"],
+        }
 
     def get_documents(self, payload: dict[str, object]) -> dict[str, object]:
         """Return a paginated fake documents response."""
@@ -112,6 +123,34 @@ class _FakeIndex:
             "results": self.documents[offset : offset + limit],
             "total": len(self.documents),
         }
+
+
+class _SearchResponseIndex(_FakeIndex):
+    """Fake index returning one controlled, Meilisearch-shaped search response."""
+
+    def __init__(self, response: dict[str, object]) -> None:
+        super().__init__()
+        self.response = response
+
+    def search(self, _query: str, payload: dict[str, object]) -> dict[str, object]:
+        self.search_payloads.append(payload)
+        return {
+            "limit": payload["limit"],
+            "offset": payload["offset"],
+            **self.response,
+        }
+
+
+def _search_hit(number: int) -> dict[str, object]:
+    """Return a complete minimal Meilisearch hit for completeness tests."""
+    return {
+        "id": f"physical-{number}",
+        "gm_document_id": f"Project:{number}",
+        "type": "Project",
+        "identification": {"id": number},
+        "data": {"name": f"Project {number}"},
+        "_rankingScore": 1.0,
+    }
 
 
 class _FakeClient:
@@ -560,6 +599,257 @@ def test_meilisearch_backend_empty_upsert_and_delete_behavior() -> None:
     assert index.deleted == [[MeilisearchBackend._normalize_document_id("")]]
 
 
+def test_meilisearch_search_marks_well_formed_short_page_exhausted_before_cap() -> None:
+    """A short raw page below the configured cap proves enumeration completed."""
+    index = _SearchResponseIndex(
+        {
+            "hits": [_search_hit(1), _search_hit(2)],
+            "estimatedTotalHits": 2,
+            "processingTimeMs": 4,
+        }
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    result = MeilisearchBackend(client=_FakeClient(index)).search(
+        "index", "Project", limit=3, offset=10
+    )
+
+    assert result.exhausted is True
+
+
+def test_meilisearch_search_marks_empty_page_exhausted_before_cap() -> None:
+    """An empty, well-formed page before the cap proves enumeration completed."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    result = MeilisearchBackend(client=_FakeClient(index)).search(
+        "index", "Project", limit=1
+    )
+
+    assert result.exhausted is True
+
+
+def test_meilisearch_search_rejects_response_offset_mismatch() -> None:
+    """A mismatched provider offset cannot be deferred to a later page."""
+    index = _SearchResponseIndex(
+        {
+            "hits": [],
+            "estimatedTotalHits": 0,
+            "processingTimeMs": 1,
+            "offset": 1,
+        }
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    with pytest.raises(SearchBackendError, match="offset"):
+        MeilisearchBackend(client=_FakeClient(index)).search(
+            "index", "Project", limit=1, offset=0
+        )
+
+
+def test_meilisearch_search_uses_present_clamped_limit_for_short_page_proof() -> None:
+    """A full provider-clamped page is not short relative to its effective limit."""
+    index = _SearchResponseIndex(
+        {
+            "hits": [_search_hit(1), _search_hit(2)],
+            "estimatedTotalHits": 2,
+            "processingTimeMs": 1,
+            "limit": 2,
+        }
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    result = MeilisearchBackend(client=_FakeClient(index)).search(
+        "index", "Project", limit=10, offset=0
+    )
+
+    assert result.exhausted is False
+
+
+@pytest.mark.parametrize("offset", [100, 101])
+def test_meilisearch_search_does_not_mark_page_at_or_beyond_cap_exhausted(
+    offset: int,
+) -> None:
+    """A cap-boundary empty page cannot prove no additional matches exist."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 100, "processingTimeMs": 1}
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    result = MeilisearchBackend(client=_FakeClient(index)).search(
+        "index", "Project", limit=10, offset=offset
+    )
+
+    assert result.exhausted is False
+
+
+def test_meilisearch_search_malformed_raw_hits_do_not_prove_exhaustion() -> None:
+    """Dropped malformed hits must not turn a full response into a short page."""
+    index = _SearchResponseIndex(
+        {
+            "hits": [_search_hit(1), "malformed"],
+            "estimatedTotalHits": 2,
+            "processingTimeMs": 1,
+        }
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    result = MeilisearchBackend(client=_FakeClient(index)).search(
+        "index", "Project", limit=3
+    )
+
+    assert len(result.hits) == 1
+    assert result.exhausted is False
+
+
+def test_meilisearch_search_rejects_well_formed_overdelivery() -> None:
+    """A provider response larger than the requested limit cannot be continued."""
+    index = _SearchResponseIndex(
+        {
+            "hits": [_search_hit(1), _search_hit(2)],
+            "estimatedTotalHits": 2,
+            "processingTimeMs": 1,
+        }
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    with pytest.raises(SearchBackendError, match="more hits"):
+        MeilisearchBackend(client=_FakeClient(index)).search(
+            "index", "Project", limit=1
+        )
+
+    assert len(index.search_payloads) == 1
+
+
+@pytest.mark.parametrize(
+    "pagination", [{}, {"maxTotalHits": "100"}, {"maxTotalHits": -1}]
+)
+def test_meilisearch_search_invalid_pagination_cap_does_not_prove_exhaustion(
+    pagination: dict[str, object],
+) -> None:
+    """An unknown or malformed cap cannot certify that a page is final."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.attributes.update({"pagination": pagination, "searchCutoffMs": 10})
+
+    result = MeilisearchBackend(client=_FakeClient(index)).search(
+        "index", "Project", limit=1
+    )
+
+    assert result.exhausted is False
+
+
+def test_meilisearch_search_rejects_explicitly_degraded_response() -> None:
+    """A degraded response may omit hits, so callers cannot safely enumerate it."""
+    index = _SearchResponseIndex(
+        {
+            "hits": [],
+            "estimatedTotalHits": 0,
+            "processingTimeMs": 1,
+            "degraded": True,
+        }
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    with pytest.raises(SearchBackendError, match="degraded"):
+        MeilisearchBackend(client=_FakeClient(index)).search("index", "Project")
+
+
+@pytest.mark.parametrize("cutoff", ["10", -1, True])
+def test_meilisearch_search_rejects_invalid_cutoff_before_another_page(
+    cutoff: object,
+) -> None:
+    """Unknown cutoff evidence cannot be deferred until a later short page."""
+    index = _SearchResponseIndex(
+        {"hits": [_search_hit(1)], "estimatedTotalHits": 1, "processingTimeMs": 1}
+    )
+    index.attributes.update(
+        {"pagination": {"maxTotalHits": 100}, "searchCutoffMs": cutoff}
+    )
+
+    with pytest.raises(SearchBackendError, match="cutoff"):
+        MeilisearchBackend(client=_FakeClient(index)).search(
+            "index", "Project", limit=1
+        )
+
+    assert len(index.search_payloads) == 1
+
+
+@pytest.mark.parametrize("processing_time", [None, "1", True])
+def test_meilisearch_search_rejects_invalid_processing_time_before_another_page(
+    processing_time: object | None,
+) -> None:
+    """A full page without valid timing evidence cannot be safely continued."""
+    response: dict[str, object] = {
+        "hits": [_search_hit(1)],
+        "estimatedTotalHits": 1,
+    }
+    if processing_time is not None:
+        response["processingTimeMs"] = processing_time
+    index = _SearchResponseIndex(response)
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    with pytest.raises(SearchBackendError, match="processing time"):
+        MeilisearchBackend(client=_FakeClient(index)).search(
+            "index", "Project", limit=1
+        )
+
+    assert len(index.search_payloads) == 1
+
+
+def test_meilisearch_search_rejects_raw_overdelivery_before_normalization() -> None:
+    """A malformed extra hit cannot hide an overfull provider response."""
+    index = _SearchResponseIndex(
+        {
+            "hits": [_search_hit(1), "malformed"],
+            "estimatedTotalHits": 2,
+            "processingTimeMs": 1,
+        }
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    with pytest.raises(SearchBackendError, match="more hits"):
+        MeilisearchBackend(client=_FakeClient(index)).search(
+            "index", "Project", limit=1
+        )
+
+    assert len(index.search_payloads) == 1
+
+
+def test_meilisearch_search_rejects_response_reaching_default_cutoff() -> None:
+    """The default 1500 ms cutoff may truncate a response at its limit."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1500}
+    )
+    index.attributes.update(
+        {"pagination": {"maxTotalHits": 100}, "searchCutoffMs": None}
+    )
+
+    with pytest.raises(SearchBackendError, match="cutoff"):
+        MeilisearchBackend(client=_FakeClient(index)).search("index", "Project")
+
+
+def test_meilisearch_search_reuses_one_settings_read_for_sort_and_completeness() -> (
+    None
+):
+    """Sorted search reads settings once for sort priority and completeness proof."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.ranking_rules = ["sort", "words"]
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    result = MeilisearchBackend(client=_FakeClient(index)).search(
+        "index", "Project", sort=("name",)
+    )
+
+    assert result.exhausted is True
+    assert index.settings_reads == 1
+
+
 def test_meilisearch_backend_search_prefers_gm_document_id() -> None:
     """Return original GeneralManager document IDs from search hits."""
 
@@ -648,6 +938,7 @@ def test_meilisearch_backend_search_payload_precedence_sort_and_defaults() -> No
                     },
                 ],
                 "estimatedTotalHits": 2,
+                "processingTimeMs": 1,
             }
 
     index = _SearchIndex()

@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable, Iterable
 from importlib import import_module
 from inspect import signature
-from typing import Mapping, Protocol, Sequence, cast
+from typing import Literal, Mapping, Protocol, Sequence, cast
 from uuid import UUID
 
 from general_manager.search.backend import (
@@ -48,6 +48,39 @@ class MeilisearchOrderingConfigurationError(SearchBackendError):
         super().__init__(
             f"Meilisearch index {index_name!r} must place the sort ranking rule first."
         )
+
+
+class MeilisearchSearchCompletenessError(SearchBackendError):
+    """Raised when Meilisearch cannot safely prove a search response complete."""
+
+    def __init__(
+        self,
+        reason: Literal[
+            "degraded",
+            "cutoff",
+            "cutoff_evidence",
+            "processing_time",
+            "overdelivery",
+            "page_limit",
+            "page_offset",
+        ],
+    ) -> None:
+        messages = {
+            "degraded": "Meilisearch returned a degraded search response.",
+            "cutoff": "Meilisearch search response reached its configured search cutoff.",
+            "cutoff_evidence": (
+                "Meilisearch index settings do not provide a valid search cutoff."
+            ),
+            "processing_time": (
+                "Meilisearch search response lacks a valid processing time."
+            ),
+            "overdelivery": "Meilisearch returned more hits than requested.",
+            "page_limit": "Meilisearch returned an invalid search page limit.",
+            "page_offset": (
+                "Meilisearch returned a search page offset that differs from the request."
+            ),
+        }
+        super().__init__(messages[reason])
 
 
 class _MeilisearchIndex(Protocol):
@@ -376,16 +409,32 @@ class MeilisearchBackend:
             `filter_expression` bypasses identity transport.
             ``sort`` is normalized as signed field names
             and forwarded as ordered Meilisearch ``field:direction`` entries.
-            A sorted query reads the index settings and raises
+            Every query reads the index settings once. A sorted query raises
             ``MeilisearchOrderingConfigurationError`` unless ``sort`` has the
-            highest ranking-rule priority. Malformed hit entries are skipped.
+            highest ranking-rule priority. The returned ``SearchResult`` sets
+            ``exhausted=True`` only when a well-formed raw short page is below
+            the configured ``pagination.maxTotalHits`` cap and the response
+            completed before the effective ``searchCutoffMs``. A missing or
+            malformed pagination cap or hit list yields ``exhausted=False``;
+            neither ``estimatedTotalHits`` nor ``totalHits`` proves
+            completeness because Meilisearch caps both. An explicitly degraded
+            response, missing/invalid cutoff or processing-time evidence,
+            response reaching its cutoff, or raw page larger than the effective
+            page limit raises ``SearchBackendError`` before hit normalization
+            because it might omit hits. Malformed hit entries are skipped for
+            normalized output but cannot prove a short page. When response
+            pagination echoes are present, ``offset`` must exactly match the
+            request and a lower ``limit`` becomes the effective page size;
+            missing echoes retain compatibility with legacy client response
+            shapes.
             Missing hit ``id``/``gm_document_id`` and ``type`` become empty
             strings, missing ``identification`` and ``data`` become empty
             mappings, and missing ``_rankingScore`` becomes ``None``.
         """
         index = self._get_or_create_index(index_name)
         terms = normalize_ordering(sort if sort is not None else ())
-        if terms and not self._sort_has_priority(index):
+        settings = self._as_mapping(index.get_settings())
+        if terms and not self._sort_has_priority(settings):
             raise MeilisearchOrderingConfigurationError(index_name)
         payload: dict[str, object] = {
             "limit": limit,
@@ -406,6 +455,16 @@ class MeilisearchBackend:
             ]
 
         response = self._as_mapping(index.search(query, payload))
+        effective_page = self._effective_response_page(
+            response,
+            limit=limit,
+            offset=offset,
+        )
+        self._raise_for_incomplete_search(
+            response,
+            settings,
+            limit=effective_page[0] if effective_page is not None else None,
+        )
         hits = [
             SearchHit(
                 id=(
@@ -426,6 +485,12 @@ class MeilisearchBackend:
             total=self._int_field(response, "estimatedTotalHits") or len(hits),
             took_ms=self._int_field(response, "processingTimeMs"),
             raw=response,
+            exhausted=self._search_exhausted(
+                response,
+                settings,
+                limit=effective_page[0] if effective_page is not None else None,
+                offset=effective_page[1] if effective_page is not None else None,
+            ),
         )
 
     @staticmethod
@@ -448,10 +513,144 @@ class MeilisearchBackend:
         return ["sort", *(rule for rule in rules if rule != "sort")]
 
     @staticmethod
-    def _sort_has_priority(index: _MeilisearchIndex) -> bool:
-        settings = MeilisearchBackend._as_mapping(index.get_settings())
+    def _sort_has_priority(settings: Mapping[str, object]) -> bool:
         rules = settings.get("rankingRules")
         return isinstance(rules, Sequence) and bool(rules) and rules[0] == "sort"
+
+    @staticmethod
+    def _raise_for_incomplete_search(
+        response: Mapping[str, object],
+        settings: Mapping[str, object],
+        *,
+        limit: int | None,
+    ) -> None:
+        """Reject responses Meilisearch may have truncated before producing hits."""
+        if response.get("degraded") is True:
+            raise MeilisearchSearchCompletenessError("degraded")
+        cutoff = MeilisearchBackend._search_cutoff_ms(settings)
+        if cutoff is None:
+            raise MeilisearchSearchCompletenessError("cutoff_evidence")
+        processing_time = MeilisearchBackend._int_field(response, "processingTimeMs")
+        if processing_time is None or processing_time < 0:
+            raise MeilisearchSearchCompletenessError("processing_time")
+        if processing_time >= cutoff:
+            raise MeilisearchSearchCompletenessError("cutoff")
+        raw_hit_count = MeilisearchBackend._raw_search_hit_count(response)
+        if (
+            raw_hit_count is not None
+            and limit is not None
+            and not isinstance(limit, bool)
+            and limit >= 0
+            and raw_hit_count > limit
+        ):
+            raise MeilisearchSearchCompletenessError("overdelivery")
+
+    @staticmethod
+    def _effective_response_page(
+        response: Mapping[str, object],
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[int, int] | None:
+        """Validate optional Meilisearch page echoes and return their effective size."""
+        if (
+            isinstance(limit, bool)
+            or isinstance(offset, bool)
+            or limit < 0
+            or offset < 0
+        ):
+            return None
+
+        effective_limit = limit
+        if "limit" in response:
+            returned_limit = MeilisearchBackend._int_field(response, "limit")
+            if returned_limit is None or returned_limit < 0 or returned_limit > limit:
+                raise MeilisearchSearchCompletenessError("page_limit")
+            effective_limit = returned_limit
+
+        if "offset" in response:
+            returned_offset = MeilisearchBackend._int_field(response, "offset")
+            if (
+                returned_offset is None
+                or returned_offset < 0
+                or returned_offset != offset
+            ):
+                raise MeilisearchSearchCompletenessError("page_offset")
+
+        return effective_limit, offset
+
+    @staticmethod
+    def _search_exhausted(
+        response: Mapping[str, object],
+        settings: Mapping[str, object],
+        *,
+        limit: int | None,
+        offset: int | None,
+    ) -> bool:
+        """Return whether response evidence proves the configured result set ended."""
+        raw_hit_count = MeilisearchBackend._well_formed_search_hit_count(response)
+        max_total_hits = MeilisearchBackend._max_total_hits(settings)
+        cutoff = MeilisearchBackend._search_cutoff_ms(settings)
+        processing_time = MeilisearchBackend._int_field(response, "processingTimeMs")
+        if (
+            raw_hit_count is None
+            or max_total_hits is None
+            or cutoff is None
+            or processing_time is None
+            or limit is None
+            or offset is None
+            or isinstance(limit, bool)
+            or isinstance(offset, bool)
+            or limit < 0
+            or offset < 0
+        ):
+            return False
+        return (
+            raw_hit_count < limit
+            and offset + raw_hit_count < max_total_hits
+            and processing_time < cutoff
+        )
+
+    @staticmethod
+    def _well_formed_search_hit_count(response: Mapping[str, object]) -> int | None:
+        """Return raw hit count only when no response entry was discarded."""
+        raw_hits = response.get("hits")
+        if not isinstance(raw_hits, Sequence) or isinstance(raw_hits, (str, bytes)):
+            return None
+        if not all(isinstance(hit, Mapping) for hit in raw_hits):
+            return None
+        return len(raw_hits)
+
+    @staticmethod
+    def _raw_search_hit_count(response: Mapping[str, object]) -> int | None:
+        """Return raw sequence length before malformed entries are normalized away."""
+        raw_hits = response.get("hits")
+        if not isinstance(raw_hits, Sequence) or isinstance(raw_hits, (str, bytes)):
+            return None
+        return len(raw_hits)
+
+    @staticmethod
+    def _max_total_hits(settings: Mapping[str, object]) -> int | None:
+        """Read a non-negative configured Meilisearch pagination cap."""
+        pagination = settings.get("pagination")
+        if not isinstance(pagination, Mapping):
+            return None
+        max_total_hits = pagination.get("maxTotalHits")
+        if isinstance(max_total_hits, bool) or not isinstance(max_total_hits, int):
+            return None
+        return max_total_hits if max_total_hits >= 0 else None
+
+    @staticmethod
+    def _search_cutoff_ms(settings: Mapping[str, object]) -> int | None:
+        """Read a valid cutoff, preserving Meilisearch's 1500 ms null default."""
+        if "searchCutoffMs" not in settings:
+            return None
+        configured = settings.get("searchCutoffMs")
+        if configured is None:
+            return 1500
+        if isinstance(configured, bool) or not isinstance(configured, int):
+            return None
+        return configured if configured >= 0 else None
 
     def _get_or_create_index(self, index_name: str) -> _MeilisearchIndex:
         """

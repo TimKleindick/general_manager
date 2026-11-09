@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from types import MappingProxyType, UnionType
@@ -291,7 +292,9 @@ def projection_filter_fields(
     return fields
 
 
-def validate_projection_fallback(config: SearchConfigSpec, field: str) -> None:
+def validate_projection_fallback(
+    manager_class: type[GeneralManager], config: SearchConfigSpec, field: str
+) -> None:
     """Prevent an opted-in projection from reading an undeclared native fallback."""
     dependencies = config.field_dependencies
     if (
@@ -299,4 +302,15 @@ def validate_projection_fallback(config: SearchConfigSpec, field: str) -> None:
         and dependencies is not None
         and field not in dependencies.get(field, ())
     ):
-        raise SearchProjectionError.undeclared_fallback(field)
+        # Terminal relations serialize every native identity leaf. Reuse the
+        # native projection owner to prove that all of those leaves are declared;
+        # a business-field dependency alone cannot authorize this fallback.
+        native_config = replace(config, to_document=None, field_dependencies=None)
+        try:
+            required = native_search_source_paths(
+                manager_class, native_config, (field,)
+            )
+        except SearchProjectionError:
+            raise SearchProjectionError.undeclared_fallback(field) from None
+        if not set(required).issubset(dependencies.get(field, ())):
+            raise SearchProjectionError.undeclared_fallback(field)

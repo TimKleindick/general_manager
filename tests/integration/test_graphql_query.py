@@ -102,22 +102,22 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
     @override_settings(
         GENERAL_MANAGER={"GRAPHQL_DEFAULT_PAGE_SIZE": 2, "GRAPHQL_MAX_PAGE_SIZE": 3}
     )
-    def test_default_root_page_is_finite_with_full_metadata(self):
+    def test_omitted_root_pagination_returns_all_items_with_unpaged_metadata(self):
         response = self.query(
             "{ commercialsList { items { id } pageInfo { totalCount pageSize currentPage totalPages } } }"
         )
         self.assertResponseNoErrors(response)
         payload = response.json()["data"]["commercialsList"]
-        self.assertEqual(len(payload["items"]), 2)
+        self.assertEqual(len(payload["items"]), 10)
         self.assertEqual(
             payload["pageInfo"],
-            {"totalCount": 10, "pageSize": 2, "currentPage": 1, "totalPages": 5},
+            {"totalCount": 10, "pageSize": None, "currentPage": 1, "totalPages": 1},
         )
 
     @override_settings(
         GENERAL_MANAGER={"GRAPHQL_DEFAULT_PAGE_SIZE": 2, "GRAPHQL_MAX_PAGE_SIZE": 3}
     )
-    def test_default_nested_and_group_pages_are_finite(self):
+    def test_omitted_nested_and_group_pagination_returns_all_items(self):
         parent = self.commercials.create(
             name="Page Parent", capex="1 USD", opex="1 USD", creator_id=self.user.id
         )
@@ -143,9 +143,10 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
             parent_data["projectGroups"],
             data["projectGroups"],
         ):
-            self.assertEqual(len(payload["items"]), 2)
+            self.assertEqual(len(payload["items"]), 5)
             self.assertEqual(
-                payload["pageInfo"], {"totalCount": 5, "pageSize": 2, "totalPages": 3}
+                payload["pageInfo"],
+                {"totalCount": 5, "pageSize": None, "totalPages": 1},
             )
 
     @override_settings(

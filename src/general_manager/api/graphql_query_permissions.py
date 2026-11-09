@@ -68,12 +68,27 @@ class _NativePathNode:
     children: dict[str, _NativePathNode] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class QueryFieldAuthorizationBudget:
+    """Share only accounting across authorization calls in one operation."""
+
+    decisions: int = 0
+
+    def charge(self) -> None:
+        """Reject work exceeding the operation's field/path decision limit."""
+        self.decisions += 1
+        if self.decisions > MAX_QUERY_PERMISSION_CANDIDATES:
+            raise GraphQLError(_LIMIT_ERROR)
+
+
 def authorize_query_fields(
     candidates: Iterable[GeneralManager],
     info: ResolveInfo,
     paths: Iterable[str],
     *,
     native_paths: bool = False,
+    budget_additional_permissions_only: bool = False,
+    budget: QueryFieldAuthorizationBudget | None = None,
 ) -> None:
     """Check all operands against every row-visible candidate, never just hits.
 
@@ -84,6 +99,9 @@ def authorize_query_fields(
     Their shared prefixes are walked once for each candidate/member occurrence;
     all child fields and related-row gates remain required. No decision is
     reused between candidates, unrelated source branches or authorization calls.
+    Native list resolvers may budget only additional or unknown field policies.
+    That mode still executes every runtime field and related-row check; it
+    changes accounting, never the authorization decision or candidate scope.
     """
     from general_manager.api.graphql_relations import (
         resolve_general_manager_type,
@@ -108,7 +126,32 @@ def authorize_query_fields(
             node = native_root
             for part in native_parts:
                 node = node.children.setdefault(part, _NativePathNode())
-    decisions = 0
+    budget = budget or QueryFieldAuthorizationBudget()
+
+    def needs_additional_budget(instance: GeneralManager, names: set[str]) -> bool:
+        """Inspect the current policy, including subtype and instance overrides."""
+        from inspect import getattr_static
+
+        from general_manager.permission.base_permission import BasePermission
+        from general_manager.permission.manager_based_permission import (
+            additional_local_read_permission,
+        )
+
+        permission = getattr(instance, "Permission", None)
+        if permission is None:
+            return False
+        if not isinstance(permission, type) or not issubclass(
+            permission, BasePermission
+        ):
+            return True
+        # A delegated object's runtime type and nullable fallback can tighten
+        # the local rule. Keep that proof outside this accounting shortcut.
+        if getattr_static(permission, "__based_on__", None) is not None:
+            return True
+        return any(
+            additional_local_read_permission(permission, name) is not False
+            for name in names
+        )
 
     def check(
         instance: GeneralManager,
@@ -116,10 +159,8 @@ def authorize_query_fields(
         native_node: _NativePathNode | None = None,
     ) -> None:
         """Authorize one exact operand path, charging each visited field decision."""
-        nonlocal decisions
-        decisions += 1
-        if decisions > MAX_QUERY_PERMISSION_CANDIDATES:
-            raise GraphQLError(_LIMIT_ERROR)
+        if not budget_additional_permissions_only:
+            budget.charge()
         field, *rest = parts
         attributes = instance.Interface.get_attribute_types()
         # Backend collection lookup names can differ from public manager names.
@@ -152,6 +193,10 @@ def authorize_query_fields(
                 names.add(relation)
                 if native_paths:
                     native_relations.add(relation)
+        if budget_additional_permissions_only and needs_additional_budget(
+            instance, names
+        ):
+            budget.charge()
         known_fields = set(attributes) | set(instance.identification)
         known_fields.update(instance.Interface.get_graph_ql_properties())
         known_fields.update(instance.Interface.get_attributes())
@@ -187,7 +232,11 @@ def authorize_query_fields(
             target_field = getattr(foreign_key, "target_field", None)
             if not isinstance(target_field, models.Field):
                 raise GraphQLError(_RELATION_ERROR)
-            check(value, ("id" if target_field.primary_key else target_field.name,))
+            target_names = {target_field.name}
+            if target_field.primary_key:
+                target_names.add("id")
+            for target_name in sorted(target_names):
+                check(value, (target_name,))
         if not rest and not (native_node and native_node.children):
             return
         if len(aliases) > 1:

@@ -893,7 +893,7 @@ def _attribute_permission_definitions(
 
 
 def additional_local_read_permission(
-    permission_class: type[BasePermission] | None, attribute: str
+    permission_class: object, attribute: str
 ) -> bool | None:
     """Compare declarative field rules with the row gate without evaluating users.
 
@@ -911,7 +911,7 @@ def additional_local_read_permission(
         OverrideManagerPermission,
         ManagerBasedPermission,
     )
-    if not issubclass(
+    if not isinstance(permission_class, type) or not issubclass(
         permission_class, (AdditiveManagerPermission, OverrideManagerPermission)
     ):
         return None
@@ -921,8 +921,9 @@ def additional_local_read_permission(
         if cls in implementations or cls in BasePermission.__mro__:
             continue
         if any(
-            callable(value) or getattr_static(value, "__get__", None) is not None
-            for value in vars(cls).values()
+            name != "__annotate_func__"
+            and (callable(value) or getattr_static(value, "__get__", None) is not None)
+            for name, value in vars(cls).items()
         ):
             return None
     base = (

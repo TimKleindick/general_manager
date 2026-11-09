@@ -30,7 +30,7 @@ from general_manager.interface.base_interface import AttributeTypedDict
 from general_manager.interface.utils.errors import DuplicateFieldNameError
 from general_manager.interface.capabilities.orm_utils.collection_probes import (
     NativeCollectionProbe,
-    collection_is_proven_empty,
+    collection_probe_hint,
     register_collection_probe,
 )
 from general_manager.measurement.measurement import Measurement
@@ -536,6 +536,7 @@ class _FieldDescriptorBuilder:
                 source_model=self.model,
                 relation_field_name=relation_field_name,
                 relation_filter_name=relation_filter_name,
+                cache_attribute_name=attribute_name,
             )
             relation_type = cast(type[object], general_manager_class)
         else:
@@ -995,6 +996,7 @@ def _general_manager_many_accessor(
     source_model: type[models.Model],
     relation_field_name: str | None = None,
     relation_filter_name: str | None = None,
+    cache_attribute_name: str | None = None,
 ) -> DescriptorAccessor:
     """
     Create an accessor that returns a manager filtered to objects related to the given source model instance.
@@ -1051,15 +1053,24 @@ def _general_manager_many_accessor(
         manager_cls = cast("type[GeneralManager]", general_manager_class)
         search_date = getattr(self, "_search_date", None)
         source_row = getattr(self, "_instance", None)
+        hint = (
+            collection_probe_hint(source_row, probe)
+            if isinstance(source_row, source_model)
+            else None
+        )
         if (
             search_date is None
+            and hint is not None
             and isinstance(source_row, source_model)
-            and collection_is_proven_empty(source_row, probe)
             and probe.can_probe(source_row._state.db or "default")
         ):
             # Keep the native bucket's filters and dependency tracking. Only
             # physical emptiness from the candidate SELECT avoids loading rows;
             # populated/unknown relations still take the existing path below.
+            if cache_attribute_name is not None:
+                hints = vars(self).setdefault("_gm_collection_probe_hints", {})
+                if isinstance(hints, dict):
+                    hints[cache_attribute_name] = hint
             return manager_cls.filter(**dict.fromkeys(probe.filters, self.pk)).none()
         if is_many_to_many and search_date is not None:
             from general_manager.bucket.database_bucket import DatabaseBucket

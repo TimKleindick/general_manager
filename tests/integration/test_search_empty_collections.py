@@ -11,6 +11,7 @@ from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 
 from general_manager.cache.run_context import CalculationRunContext
+from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
 from general_manager.manager.meta import GeneralManagerMeta
@@ -226,6 +227,83 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
             assert self.search(query="")["total"] == 1
         self.index(owner)
         assert self.search(query="")["total"] == 1
+
+    def test_retained_search_result_reloads_relation_after_mutation(self) -> None:
+        owner = self.Owner.Factory.create(name="empty owner")
+        self.index(owner)
+
+        with CalculationRunContext() as context:
+            result = self.search(query="empty")
+            retained_owner = result["results"][0]
+            generation = context.orm_bucket_invalidation_generation
+
+            child = self.Child.create(
+                ignore_permission=True,
+                text="new child",
+                owner=owner,
+                visibility="public",
+            )
+
+            assert context.orm_bucket_invalidation_generation > generation
+
+            assert [item.id for item in retained_owner.children_list] == [child.id]
+
+    def test_retained_search_result_expires_hint_after_context_exit(self) -> None:
+        owner = self.Owner.Factory.create(name="context owner")
+        self.index(owner)
+
+        with CalculationRunContext():
+            retained_owner = self.search(query="context")["results"][0]
+
+        child = self.Child.create(
+            ignore_permission=True,
+            text="new child",
+            owner=owner,
+            visibility="public",
+        )
+
+        assert [item.id for item in retained_owner.children_list] == [child.id]
+
+    def test_retained_result_without_probe_reloads_relation_after_mutation(
+        self,
+    ) -> None:
+        owner = self.Owner.Factory.create(name="ordinary owner")
+        self.index(owner)
+
+        with (
+            CalculationRunContext(),
+            patch.object(
+                DatabaseBucket,
+                "_with_empty_relation_probes",
+                autospec=True,
+                side_effect=lambda bucket, _attributes: bucket,
+            ),
+        ):
+            result = self.search(query="ordinary")
+            retained_owner = result["results"][0]
+            child = self.Child.create(
+                ignore_permission=True,
+                text="new child",
+                owner=owner,
+                visibility="public",
+            )
+
+            assert [item.id for item in retained_owner.children_list] == [child.id]
+
+    def test_descriptor_caches_ordinary_none_value(self) -> None:
+        owner = self.Owner.Factory.create(name="owner")
+        calls = 0
+
+        def none_value(_interface: object) -> None:
+            nonlocal calls
+            calls += 1
+            return None
+
+        with patch.dict(self.Owner._attributes, {"name": none_value}):
+            assert owner.name is None
+            assert owner.name is None
+
+        assert calls == 1
 
     def test_custom_child_filter_is_not_replaced_by_empty_probe(self) -> None:
         owner = self.Owner.Factory.create(name="owner")

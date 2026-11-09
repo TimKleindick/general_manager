@@ -638,15 +638,17 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(self.transport.execution_count, 0)
 
-    def test_remote_request_forwards_finite_default_page(self) -> None:
+    def test_remote_request_omits_upstream_pagination_for_a_complete_response(
+        self,
+    ) -> None:
         response = self.query(
             "{ remoteRequestSortItemList { items { id } pageInfo { pageSize currentPage } } }"
         )
         self.assertResponseNoErrors(response)
         payload = response.json()["data"]["remoteRequestSortItemList"]
-        self.assertEqual(payload["pageInfo"], {"pageSize": 10, "currentPage": 1})
-        self.assertEqual(self.remote_transport.requests[0].body["page"], 1)
-        self.assertEqual(self.remote_transport.requests[0].body["page_size"], 10)
+        self.assertEqual(payload["pageInfo"], {"pageSize": None, "currentPage": 1})
+        self.assertNotIn("page", self.remote_transport.requests[0].body)
+        self.assertNotIn("page_size", self.remote_transport.requests[0].body)
 
     def test_upstream_page_metadata_cannot_bypass_output_page_size(self) -> None:
         self.transport.result_page = 1
@@ -664,13 +666,13 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
             {"totalCount": 10, "pageSize": 2, "currentPage": 1, "totalPages": 5},
         )
 
-    def test_incomplete_upstream_page_must_match_default_coordinates(self) -> None:
+    def test_omitted_pagination_rejects_an_incomplete_upstream_response(self) -> None:
         self.transport.result_page = 2
         self.transport.result_page_size = 3
         self.transport.result_total_count = 10
         response = self.query("{ requestSortItemList { items { id } } }")
         self.assertResponseHasErrors(response)
-        self.assertIn("global pagination", response.json()["errors"][0]["message"])
+        self.assertIn("unpaginated result", response.json()["errors"][0]["message"])
 
     def test_denied_request_operands_never_fetch_upstream(self) -> None:
         for total_count in [2, 10]:
@@ -868,7 +870,7 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
         self.assertEqual(len(self.transport.requests), 1)
         self.assertEqual(self.transport.requests[0].operation_name, "list")
 
-    def test_partial_disjunctive_request_still_rejects_pagination(self):
+    def test_partial_disjunctive_request_rejects_an_unpaged_result(self):
         original_send = self.remote_transport.send
 
         def partial(*args, **kwargs):
@@ -881,7 +883,7 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
                 "{ disjunctiveRemoteRequestSortItemList { items { id } } }"
             )
         self.assertResponseHasErrors(response)
-        self.assertIn("global pagination", response.json()["errors"][0]["message"])
+        self.assertIn("unpaginated result", response.json()["errors"][0]["message"])
 
     def test_complete_permission_union_does_not_reapply_remote_predicates_locally(self):
         from general_manager.bucket._materialized_bucket import MaterializedBucket
