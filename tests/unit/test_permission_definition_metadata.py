@@ -12,6 +12,34 @@ from general_manager.permission import manager_based_permission as policies
 
 
 class TestPermissionDefinitionMetadata(SimpleTestCase):
+    def test_structure_probe_never_compares_an_unknown_container_metaclass(
+        self,
+    ) -> None:
+        class ExecutableType(type):
+            def __eq__(cls, other: object) -> bool:
+                raise AssertionError
+
+        class Rules(metaclass=ExecutableType):
+            pass
+
+        class Permission(policies.OverrideManagerPermission):
+            __read__: ClassVar[list[str]] = ["public"]
+
+        with patch.object(Permission, "__read__", Rules()):
+            assert policies._can_prepare_local_read_definitions(Permission) is False
+
+    def test_structure_probe_does_not_normalize_dynamic_default_settings(self) -> None:
+        with patch.object(
+            policies, "_get_default_permissions", side_effect=AssertionError("not lazy")
+        ) as defaults:
+            for permission in (
+                policies.AdditiveManagerPermission,
+                policies.OverrideManagerPermission,
+                policies.ManagerBasedPermission,
+            ):
+                assert policies._can_prepare_local_read_definitions(permission) is False
+        defaults.assert_not_called()
+
     def test_builtin_declarations_do_not_repeat_descriptor_discovery(self) -> None:
         class Permission(policies.OverrideManagerPermission):
             __read__: ClassVar[list[str]] = ["public"]

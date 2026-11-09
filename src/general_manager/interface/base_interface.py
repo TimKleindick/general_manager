@@ -31,6 +31,7 @@ from general_manager.as_of import (
     reject_historical_mutation,
 )
 from general_manager.utils._args_to_kwargs import args_to_kwargs
+from general_manager.utils.executable_contract import executable_signature
 from general_manager.api.property import GraphQLProperty
 from general_manager.interface.unit_contract import FieldUnitContract
 from general_manager.interface.capabilities.base import (
@@ -1792,3 +1793,20 @@ class InterfaceBase(ABC):
 
 # Keep owner classification stable when callers patch the public module export.
 _INTERFACE_BASE_CLASS = InterfaceBase
+
+# Pin the owning implementations before applications install dynamic overrides.
+# Native list structure preparation may only reuse these metadata operations.
+_NATIVE_QUERY_METADATA_METHODS = tuple(
+    (
+        name,
+        InterfaceBase.__dict__[name],
+        executable_signature(InterfaceBase.__dict__[name].__func__),
+    )
+    for name in (
+        "get_attribute_types",
+        "get_attributes",
+        "get_graph_ql_properties",
+        "get_capability_handler",
+        "require_capability",
+    )
+)

@@ -19,6 +19,7 @@ from general_manager.as_of import (
 )
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.cache.run_context import current_calculation_run_context
+from general_manager.utils.executable_contract import executable_signature
 from general_manager.interface.base_interface import AttributeTypedDict, InterfaceBase
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.builtin import BaseCapability
@@ -1243,3 +1244,24 @@ def discard_orm_instance_cache(
     context = current_calculation_run_context()
     if context is not None:
         context.discard_prefix(("orm_instance", interface_cls, pk))
+
+
+# Capture actual standard metadata owners, including their executable state.
+_NATIVE_QUERY_METADATA_METHODS = {
+    capability: tuple(
+        (
+            name,
+            capability.__dict__[name],
+            executable_signature(capability.__dict__[name]),
+        )
+        for name in names
+    )
+    for capability, names in (
+        (OrmReadCapability, ("get_attribute_types", "get_attributes")),
+        (OrmPersistenceSupportCapability, ("get_field_descriptors",)),
+    )
+}
+_NATIVE_QUERY_SUPPORT_RESOLVER = (
+    get_support_capability,
+    executable_signature(get_support_capability),
+)
