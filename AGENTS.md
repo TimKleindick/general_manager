@@ -54,6 +54,22 @@ Follow [CONTRIBUTING.md](CONTRIBUTING.md) for repository-specific contribution, 
   changes. Ensure examples remain accurate.
 - Use clear language and formatting consistent with existing documentation.
 
+## Repository Artifact Hygiene
+
+- Do not add temporary benchmark reports, measurement dumps, verification
+  receipts, execution logs, or other task-specific evidence files to the
+  repository, regardless of format (including Markdown and JSON).
+- Do not add Superpowers artifacts or other agent workflow artifacts, such as
+  generated plans, progress notes, review transcripts, or handoff documents.
+- Keep these artifacts outside the repository, for example in a task-specific
+  directory under `/tmp`. Summarize relevant results in the pull request
+  description instead of committing the raw evidence.
+- Keep reusable automated tests, intentional test fixtures, and permanent
+  product documentation in their existing repository locations. These are not
+  temporary evidence or workflow artifacts.
+- Before committing or updating a pull request, inspect its file list and
+  remove any temporary evidence or workflow artifacts introduced by the change.
+
 ## Issue and Release Hygiene
 
 - Reference existing GitHub issues or create one before starting significant
