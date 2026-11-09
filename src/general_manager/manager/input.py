@@ -1285,3 +1285,15 @@ _COMMON_INPUT_EXECUTABLES = tuple(
     (function, executable_signature(function))
     for function in (Input.cast, Input.normalize)
 )
+_COMMON_DATE_RANGE_DOMAIN_EXECUTABLES = tuple(
+    (function, executable_signature(function))
+    for function in (
+        DateRangeDomain.normalize,
+        DateRangeDomain.__iter__,
+        DateRangeDomain._normalize_if_representable,
+        DateRangeDomain._next_if_representable,
+        DateRangeDomain._advance,
+        DateRangeDomain.contains,
+        DateRangeDomain.__contains__,
+    )
+)

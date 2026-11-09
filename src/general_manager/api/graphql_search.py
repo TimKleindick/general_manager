@@ -108,6 +108,7 @@ SEARCH_TOTAL_MODE_ERROR = "must be one of: exact, bounded."
 SEARCH_TOTAL_SCAN_LIMIT_ERROR = (
     "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT must be a positive integer."
 )
+_MALFORMED_NATIVE_ID = object()
 
 _SEARCH_SCAN_LIMIT_EXCEEDED = (
     "Exact search total cannot be established within the server scan limit; "
@@ -1022,6 +1023,8 @@ def normalize_id_filter_value(
     field_type: type[GeneralManager],
     lookup: str,
     value: object,
+    *,
+    _skip_malformed_native_id: bool = False,
 ) -> object:
     """
     Convert confirmed identity equality operands to their native types.
@@ -1047,6 +1050,22 @@ def normalize_id_filter_value(
     interface = getattr(field_type, "Interface", None)
     if interface is None:
         return value
+
+    def cast_identity(converter: Callable[[object], object], item: object) -> object:
+        """Cast one identity without hiding metadata or custom-converter failures."""
+        try:
+            return _cast_identity_scalar(converter, item)
+        except (TypeError, ValueError):
+            # The metadata and converter have already been selected above. At
+            # this point only the proven built-in scalar conversion may be
+            # ignored for an indexed candidate; application converters and
+            # metadata failures must remain observable.
+            if _skip_malformed_native_id and _identity_filter_uses_plain_input(
+                field_type, attribute_name
+            ):
+                return _MALFORMED_NATIVE_ID
+            raise
+
     prop = interface.get_graph_ql_properties().get(attribute_name)
     if prop is not None:
         if not prop.is_identifier:
@@ -1060,8 +1079,8 @@ def normalize_id_filter_value(
         if operator == "in" and not isinstance(value, (list, tuple)):
             return value
         if isinstance(value, (list, tuple)):
-            return [_cast_identity_scalar(scalar_input.cast, item) for item in value]
-        return _cast_identity_scalar(scalar_input.cast, value)
+            return [cast_identity(scalar_input.cast, item) for item in value]
+        return cast_identity(scalar_input.cast, value)
 
     converter = _identity_filter_converter(field_type, attribute_name)
     if converter is None:
@@ -1070,8 +1089,8 @@ def normalize_id_filter_value(
     if operator == "in" and not isinstance(value, (list, tuple)):
         return value
     if isinstance(value, (list, tuple)):
-        return [_cast_identity_scalar(converter, item) for item in value]
-    return _cast_identity_scalar(converter, value)
+        return [cast_identity(converter, item) for item in value]
+    return cast_identity(converter, value)
 
 
 def _identity_filter_converter(
@@ -1107,6 +1126,64 @@ def _identity_filter_converter(
     if input_field is not None:
         converter = input_field.cast
     return converter
+
+
+def _identity_filter_uses_plain_input(
+    field_type: type[GeneralManager], attribute_name: str
+) -> bool:
+    """Identify the built-in scalar cast used by a native ORM identity.
+
+    Search may discard malformed backend IDs only for the standard, callback-free
+    input declaration. Custom normalizers, domains, validators and input classes
+    keep their converter errors observable to the application.
+    """
+    interface = field_type.Interface
+    input_fields = getattr(interface, "input_fields", {})
+    if type(input_fields) is not dict:
+        return False
+    input_field = input_fields.get(attribute_name)
+    model = getattr(interface, "_model", None)
+    if isinstance(model, type) and issubclass(model, models.Model):
+        try:
+            model_field = model._meta.get_field(attribute_name)
+        except FieldDoesNotExist:
+            return False
+        if model_field.primary_key:
+            input_field = input_fields.get("id")
+    if type(input_field) is not Input:
+        return False
+    plain_input: Input[Any] = input_field
+    from general_manager.api.graphql_filter_contract import (
+        _INPUT_CAST,
+        _INPUT_NORMALIZE,
+    )
+
+    if (
+        getattr(plain_input.cast, "__func__", None) is not _INPUT_CAST
+        or getattr(plain_input.normalize, "__func__", None) is not _INPUT_NORMALIZE
+        or getattr(plain_input.cast, "__self__", None) is not plain_input
+        or getattr(plain_input.normalize, "__self__", None) is not plain_input
+    ):
+        return False
+    from general_manager.manager.input import _COMMON_INPUT_EXECUTABLES
+
+    if not all(
+        executable_matches(function, signature)
+        for function, signature in _COMMON_INPUT_EXECUTABLES
+    ):
+        return False
+    return (
+        any(
+            plain_input.type is scalar_type
+            for scalar_type in (str, bool, int, float, Decimal, date, datetime, UUID)
+        )
+        and plain_input.possible_values is None
+        and plain_input.min_value is None
+        and plain_input.max_value is None
+        and plain_input.validator is None
+        and plain_input.normalizer is None
+        and not plain_input.depends_on
+    )
 
 
 def _cast_identity_scalar(
@@ -1699,6 +1776,9 @@ def register_search_query(
             candidate_hits_for_manager = 0
             offset_cursor = 0
             manager_total_is_exact = True
+            skip_malformed_native_ids = (
+                fast_source is not None and common_filter_execution_valid()
+            )
             while True:
                 remaining_scan_budget = total_scan_limit - scanned_hits
                 if remaining_scan_budget <= 0:
@@ -1755,9 +1835,20 @@ def register_search_query(
                                 GraphQLID.parse_value(identifier)
                         except (GraphQLError, KeyError, TypeError, ValueError):
                             continue
-                        identifiers.append(
-                            normalize_id_filter_value(manager_class, "id", identifier)
-                        )
+                        if skip_malformed_native_ids:
+                            normalized_identifier = normalize_id_filter_value(
+                                manager_class,
+                                "id",
+                                identifier,
+                                _skip_malformed_native_id=True,
+                            )
+                        else:
+                            normalized_identifier = normalize_id_filter_value(
+                                manager_class, "id", identifier
+                            )
+                        if normalized_identifier is _MALFORMED_NATIVE_ID:
+                            continue
+                        identifiers.append(normalized_identifier)
                     # Bucket filtering keeps the native source restriction and
                     # reuses its batch ORM hydration. Arbitrary indexed IDs never
                     # acquire membership by construction.

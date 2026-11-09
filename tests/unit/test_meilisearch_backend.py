@@ -223,6 +223,43 @@ class _FakeClient:
         return {"status": "succeeded"}
 
 
+class _MetadataClient:
+    """Read-only metadata client used to model a separately scoped API key."""
+
+    def __init__(
+        self,
+        index: _FakeIndex,
+        version: object = {"pkgVersion": "1.7.6"},
+    ) -> None:
+        self.index = index
+        self.version = version
+        self.index_requests: list[str] = []
+        self.version_calls = 0
+
+    def get_index(self, name: str) -> _FakeIndex:
+        self.index_requests.append(name)
+        return self.index
+
+    def get_version(self) -> object:
+        self.version_calls += 1
+        if isinstance(self.version, Exception):
+            raise self.version
+        return self.version
+
+    def get_or_create_index(self, _name: str, _payload: object) -> _FakeIndex:
+        raise AssertionError
+
+    def create_index(self, _name: str, _payload: object) -> object:
+        raise AssertionError
+
+
+class _SearchOnlyIndex(_SearchResponseIndex):
+    """Search index whose key is intentionally forbidden from reading settings."""
+
+    def get_settings(self) -> object:
+        raise PermissionError
+
+
 class _FailingClient(_FakeClient):
     def wait_for_task(self, task_uid: int, *, timeout_in_ms: int) -> dict[str, object]:
         """
@@ -848,6 +885,181 @@ def test_meilisearch_search_reuses_one_settings_read_for_sort_and_completeness()
 
     assert result.exhausted is True
     assert index.settings_reads == 1
+
+
+@pytest.mark.parametrize("sort", [None, ("name",)])
+def test_meilisearch_search_uses_separately_scoped_metadata_client(
+    sort: tuple[str, ...] | None,
+) -> None:
+    """A search-only key need not have settings or version permissions."""
+    search_index = _SearchOnlyIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    metadata_index = _FakeIndex()
+    metadata_index.attributes.update(
+        {"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10}
+    )
+    metadata_index.ranking_rules = ["sort", "words"]
+    search_client = _FakeClient(search_index)
+    metadata_client = _MetadataClient(metadata_index)
+
+    result = MeilisearchBackend(
+        client=search_client,
+        metadata_client=metadata_client,
+    ).search("private-index", "Project", sort=sort)
+
+    assert result.exhausted is True
+    assert search_index.search_payloads[0]["limit"] == 10
+    assert search_index.search_payloads[0]["offset"] == 0
+    assert search_index.search_payloads[0].get("sort") == (
+        ["name:asc"] if sort else None
+    )
+    assert metadata_client.index_requests == ["private-index"]
+    assert metadata_index.settings_reads == 1
+    assert metadata_client.version_calls == 0
+    assert metadata_index.search_payloads == []
+    assert metadata_index.added == []
+    assert metadata_index.deleted == []
+
+
+def test_meilisearch_search_propagates_metadata_settings_errors() -> None:
+    """Settings authorization failures must not fall back to the search key."""
+
+    class _ForbiddenMetadataIndex(_FakeIndex):
+        def get_settings(self) -> object:
+            raise PermissionError
+
+    search_index = _SearchOnlyIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    metadata_client = _MetadataClient(_ForbiddenMetadataIndex())
+
+    with pytest.raises(PermissionError):
+        MeilisearchBackend(
+            client=_FakeClient(search_index),
+            metadata_client=metadata_client,
+        ).search("private-index", "Project")
+
+    assert search_index.search_payloads == []
+
+
+def test_meilisearch_search_attests_known_v1_7_without_search_cutoff_setting() -> None:
+    """A verified 1.7 server predates cutoff support and can prove a short page."""
+    search_index = _SearchOnlyIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    metadata_index = _FakeIndex()
+    metadata_index.attributes = {"pagination": {"maxTotalHits": 100}}
+    metadata_client = _MetadataClient(metadata_index, {"pkgVersion": "1.7.6"})
+
+    result = MeilisearchBackend(
+        client=_FakeClient(search_index), metadata_client=metadata_client
+    ).search("private-index", "Project")
+
+    assert result.exhausted is True
+    assert metadata_index.settings_reads == 1
+    assert metadata_client.version_calls == 1
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        {"pkgVersion": "1.8.0"},
+        {"pkgVersion": "1.7"},
+        {"pkgVersion": "1.7.06"},
+        {"pkgVersion": "1.7.²"},
+    ],
+)
+def test_meilisearch_search_rejects_absent_cutoff_without_known_v1_7_version(
+    version: object,
+) -> None:
+    """Absent cutoff settings require a successful, supported legacy attestation."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.attributes = {"pagination": {"maxTotalHits": 100}}
+    metadata_client = _MetadataClient(index, version)
+
+    with pytest.raises(SearchBackendError, match="cutoff"):
+        MeilisearchBackend(
+            client=_FakeClient(index), metadata_client=metadata_client
+        ).search("index", "Project")
+
+    assert metadata_client.version_calls == 1
+
+
+def test_meilisearch_search_rejects_absent_cutoff_without_version_api() -> None:
+    """A metadata key without version access cannot establish legacy behavior."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.attributes = {"pagination": {"maxTotalHits": 100}}
+
+    with pytest.raises(SearchBackendError, match="cutoff"):
+        MeilisearchBackend(
+            client=_FakeClient(index), metadata_client=_FakeClient(index)
+        ).search("index", "Project")
+
+
+def test_meilisearch_search_propagates_metadata_version_errors() -> None:
+    """Version authorization errors are not converted into legacy compatibility."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.attributes = {"pagination": {"maxTotalHits": 100}}
+    metadata_client = _MetadataClient(index, PermissionError("version forbidden"))
+
+    with pytest.raises(PermissionError, match="version forbidden"):
+        MeilisearchBackend(
+            client=_FakeClient(index), metadata_client=metadata_client
+        ).search("index", "Project")
+
+    assert metadata_client.version_calls == 1
+
+
+def test_meilisearch_search_validates_processing_time_for_known_v1_7() -> None:
+    """Legacy no-cutoff support still rejects malformed timing provenance."""
+    index = _SearchResponseIndex({"hits": [], "estimatedTotalHits": 0})
+    index.attributes = {"pagination": {"maxTotalHits": 100}}
+    metadata_client = _MetadataClient(index, {"pkgVersion": "1.7.6"})
+
+    with pytest.raises(SearchBackendError, match="processing time"):
+        MeilisearchBackend(
+            client=_FakeClient(index), metadata_client=metadata_client
+        ).search("index", "Project")
+
+
+def test_meilisearch_search_reads_legacy_version_only_when_cutoff_is_absent() -> None:
+    """Configured cutoffs do not require the metadata client's version action."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+    metadata_client = _MetadataClient(index, PermissionError("must not be read"))
+
+    result = MeilisearchBackend(
+        client=_FakeClient(index), metadata_client=metadata_client
+    ).search("index", "Project")
+
+    assert result.exhausted is True
+    assert index.settings_reads == 1
+    assert metadata_client.version_calls == 0
+
+
+def test_meilisearch_search_does_not_cache_legacy_version_attestation() -> None:
+    """Every absent-cutoff request rechecks version evidence across upgrades."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.attributes = {"pagination": {"maxTotalHits": 100}}
+    metadata_client = _MetadataClient(index, {"pkgVersion": "1.7.6"})
+    backend = MeilisearchBackend(
+        client=_FakeClient(index), metadata_client=metadata_client
+    )
+
+    assert backend.search("index", "Project").exhausted is True
+    assert backend.search("index", "Project").exhausted is True
+    assert metadata_client.version_calls == 2
 
 
 def test_meilisearch_backend_search_prefers_gm_document_id() -> None:

@@ -294,9 +294,17 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
                 "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
                 3,
             ),
+            patch.object(self.backend, "search", wraps=self.backend.search) as search,
             self.assertRaisesMessage(GraphQLError, "candidate limit"),
         ):
-            self.search(index="relations", types=["RouteOwner"], query="")
+            self.search(
+                index="relations",
+                types=["RouteOwner"],
+                query="",
+                page=1,
+                page_size=1,
+            )
+        assert search.call_count == 2
 
     def test_nullable_related_source_remains_searchable(self):
         owner = self.Owner.Factory.create(name="needle", related=None)
@@ -466,7 +474,11 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
     def test_malformed_fast_path_identifications_are_discarded(self):
         self.Record.Factory.create(name="ordinary", visibility="public")
         expected_data = {"name": "ordinary", "visibility": "public"}
-        for malformed_identification in (True, {"id": True}):
+        for malformed_identification in (
+            True,
+            {"id": True},
+            {"id": "not-an-integer"},
+        ):
             with self.subTest(identification=malformed_identification):
                 result = SearchResult(
                     hits=[
@@ -486,6 +498,97 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
 
                 assert response["results"] == []
                 assert response["total"] == 0
+
+    def test_custom_identity_converter_errors_remain_observable(self):
+        self.Record.Factory.create(name="ordinary", visibility="public")
+        result = SearchResult(
+            hits=[
+                SearchHit(
+                    id="custom-converter-error",
+                    type="RouteRecord",
+                    identification={"id": "not-an-integer"},
+                    data={"name": "ordinary", "visibility": "public"},
+                )
+            ],
+            total=1,
+        )
+        with patch(
+            "general_manager.api.graphql_search._identity_filter_converter",
+            side_effect=ValueError("custom converter failed"),
+        ):
+            with self.assertRaisesRegex(ValueError, "custom converter failed"):
+                with patch.object(self.backend, "search", return_value=result):
+                    self.search(query="ordinary")
+
+    def test_identity_metadata_errors_remain_observable(self):
+        record = self.Record.Factory.create(name="ordinary", visibility="public")
+        result = SearchResult(
+            hits=[
+                SearchHit(
+                    id="metadata-error",
+                    type="RouteRecord",
+                    identification={"id": str(record.id)},
+                    data={"name": "ordinary", "visibility": "public"},
+                )
+            ],
+            total=1,
+        )
+
+        class RaisingIdentityMetadata(dict):
+            """Raise only when identity metadata is selected for conversion."""
+
+            class MetadataUnavailableError(ValueError):
+                """Signal that identity metadata could not be resolved."""
+
+            def get(self, key, default=None):
+                if key == "id":
+                    raise self.MetadataUnavailableError
+                return super().get(key, default)
+
+        metadata = RaisingIdentityMetadata(self.Record.Interface.get_attribute_types())
+        with patch.object(
+            self.Record.Interface, "get_attribute_types", return_value=metadata
+        ):
+            with self.assertRaises(RaisingIdentityMetadata.MetadataUnavailableError):
+                with patch.object(self.backend, "search", return_value=result):
+                    self.search(query="ordinary")
+
+    def test_custom_input_cast_and_normalize_errors_remain_observable(self):
+        self.Record.Factory.create(name="ordinary", visibility="public")
+        result = SearchResult(
+            hits=[
+                SearchHit(
+                    id="custom-input-error",
+                    type="RouteRecord",
+                    identification={"id": "12"},
+                    data={"name": "ordinary", "visibility": "public"},
+                )
+            ],
+            total=1,
+        )
+        input_field = self.Record.Interface.input_fields["id"]
+
+        class CustomCastError(ValueError):
+            """Signal that the application-owned cast callback was invoked."""
+
+        class CustomNormalizeError(ValueError):
+            """Signal that the application-owned normalizer was invoked."""
+
+        def raising_cast(value, *args, **kwargs):
+            raise CustomCastError
+
+        def raising_normalize(value, *args, **kwargs):
+            raise CustomNormalizeError
+
+        for attribute, callback, error_type in (
+            ("cast", raising_cast, CustomCastError),
+            ("normalize", raising_normalize, CustomNormalizeError),
+        ):
+            with self.subTest(attribute=attribute):
+                with patch.object(input_field, attribute, callback):
+                    with self.assertRaises(error_type):
+                        with patch.object(self.backend, "search", return_value=result):
+                            self.search(query="ordinary")
 
     def test_replaced_native_descriptor_requires_complete_dependencies(self):
         from general_manager.api.graphql_search import register_search_query

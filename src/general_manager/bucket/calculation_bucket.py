@@ -1,7 +1,7 @@
 """Bucket implementation that enumerates calculation interface combinations."""
 
 from __future__ import annotations
-from collections.abc import Hashable, Iterable, Iterator
+from collections.abc import Hashable, Iterable, Iterator, Mapping
 from datetime import datetime
 from types import UnionType
 from itertools import islice
@@ -914,6 +914,10 @@ class CalculationBucket(Bucket[GeneralManagerType]):
                     break
             field_type = attributes.get(part, {}).get("type")
             input_field = inputs.get(part)
+            if input_field is None and part in properties:
+                input_field = CalculationBucket.transform_properties_to_input_fields(
+                    properties, inputs
+                ).get(part)
             is_manager_field = (input_field is not None and input_field.is_manager) or (
                 isinstance(field_type, type) and issubclass(field_type, GeneralManager)
             )
@@ -960,6 +964,29 @@ class CalculationBucket(Bucket[GeneralManagerType]):
 
         if operator and operator not in _SUPPORTED_LOOKUPS:
             raise FrozenCalculationLookupError.unsupported(operator)
+
+        if not operator and isinstance(candidate, GeneralManager):
+            identification = candidate.identification
+            identity_input = candidate.Interface.input_fields.get("id")
+            if (
+                "id" in identification
+                and identity_input is not None
+                and not isinstance(expected, (GeneralManager, Mapping))
+            ):
+                # A direct nested-manager predicate follows the same id
+                # semantics as a manager input. Do not reconstruct the
+                # manager: a frozen row can have other required constructor
+                # inputs that the id predicate intentionally does not need.
+                return identification["id"] == identity_input.cast(expected)
+            manager_input = (
+                input_field
+                if input_field is not None and input_field.is_manager
+                else Input(type(candidate))
+            )
+            expected_manager = manager_input.cast(expected)
+            if not isinstance(expected_manager, GeneralManager):
+                return False
+            return candidate.identification == expected_manager.identification
 
         # Normalize JSON sequence operands through the native scalar contract;
         # other membership containers retain the existing lookup grammar.

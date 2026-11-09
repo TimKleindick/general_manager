@@ -49,6 +49,13 @@ from general_manager.manager.general_manager import (
     _COMMON_MANAGER_EXECUTABLES,
 )
 from general_manager.manager.group_manager import GroupManager
+from general_manager.manager.input import (
+    DateRangeDomain,
+    Input,
+    InputDomain,
+    _COMMON_DATE_RANGE_DOMAIN_EXECUTABLES,
+    _COMMON_INPUT_EXECUTABLES,
+)
 from general_manager.measurement.measurement import Measurement
 from general_manager.api.property import GraphQLProperty
 from general_manager.api.graphql_type import GraphQLType
@@ -290,6 +297,59 @@ def build_query_parameter_plan(
     )
 
 
+def _is_proven_daily_date_range_input(input_field: Input[type[object]]) -> bool:
+    """Return whether a static daily date range preserves raw constructor values."""
+
+    domain = input_field.possible_values
+    if (
+        type(domain) is not DateRangeDomain
+        or input_field.type is not date
+        or input_field.normalizer is not None
+        or input_field.validator is not None
+        or input_field.min_value is not None
+        or input_field.max_value is not None
+        or input_field.depends_on
+    ):
+        return False
+    date_domain = domain
+    (
+        common_normalize,
+        common_iter,
+        common_normalize_if_representable,
+        common_next_if_representable,
+        common_advance,
+        common_contains,
+        common_dunder_contains,
+    ) = (function for function, _signature in _COMMON_DATE_RANGE_DOMAIN_EXECUTABLES)
+    return (
+        type(date_domain.frequency) is str
+        and date_domain.frequency == "day"
+        and type(date_domain.start) is date
+        and type(date_domain.end) is date
+        and type(date_domain.step) is int
+        and date_domain.step > 0
+        and getattr(date_domain.normalize, "__func__", None) is common_normalize
+        and getattr(date_domain.normalize, "__self__", None) is date_domain
+        and type(date_domain).__iter__ is common_iter
+        and getattr(date_domain._normalize_if_representable, "__func__", None)
+        is common_normalize_if_representable
+        and getattr(date_domain._normalize_if_representable, "__self__", None)
+        is date_domain
+        and getattr(date_domain._next_if_representable, "__func__", None)
+        is common_next_if_representable
+        and getattr(date_domain._next_if_representable, "__self__", None) is date_domain
+        and getattr(date_domain._advance, "__func__", None) is common_advance
+        and getattr(date_domain._advance, "__self__", None) is date_domain
+        and getattr(date_domain.contains, "__func__", None) is common_contains
+        and getattr(date_domain.contains, "__self__", None) is date_domain
+        and type(date_domain).__contains__ is common_dunder_contains
+        and all(
+            executable_matches(function, signature)
+            for function, signature in _COMMON_DATE_RANGE_DOMAIN_EXECUTABLES
+        )
+    )
+
+
 def partition_calculation_query_plan(
     manager_class: type[GeneralManager],
     plan: QueryParameterPlan,
@@ -320,15 +380,37 @@ def partition_calculation_query_plan(
         if root not in known_names:
             raise UnknownInputFieldError(root)
         field = input_fields.get(root)
+        if field is None or root in computed_names or field.is_collection:
+            return False
+        # Constructor-domain pruning must not run user callbacks. The
+        # normalizer (including an InputDomain normalizer) owns scalar
+        # canonicalization during construction, so those predicates are
+        # evaluated later against the authorized manager instance.
+        if type(field) is not Input:
+            return False
+        input_field = field
+        common_cast, common_normalize = (
+            function for function, _signature in _COMMON_INPUT_EXECUTABLES
+        )
         if (
-            field is None
-            or root in computed_names
-            or field.is_collection
+            input_field.normalizer is not None
+            or (
+                isinstance(input_field.possible_values, InputDomain)
+                and not _is_proven_daily_date_range_input(input_field)
+            )
+            or getattr(input_field.cast, "__func__", None) is not common_cast
+            or getattr(input_field.cast, "__self__", None) is not input_field
+            or getattr(input_field.normalize, "__func__", None) is not common_normalize
+            or getattr(input_field.normalize, "__self__", None) is not input_field
+            or not all(
+                executable_matches(function, signature)
+                for function, signature in _COMMON_INPUT_EXECUTABLES
+            )
             or not _manager_source(manager_class, root)
         ):
             return False
-        if safe_issubclass(field.type, GeneralManager):
-            related = cast(type[GeneralManager], field.type)
+        if safe_issubclass(input_field.type, GeneralManager):
+            related = cast(type[GeneralManager], input_field.type)
             return (
                 "id" in related.Interface.input_fields
                 and _manager_source(related, "id")
@@ -1849,6 +1931,15 @@ def create_list_resolver(
                 preparation, manager_class, info, source="list"
             )
             qs = authorization_result.queryset
+            if operand_paths and (
+                deferred_plan.filters
+                or deferred_plan.excludes
+                or deferred_plan.normalized_excludes
+            ):
+                # Query-field callbacks and deferred calculation getters can
+                # both rely on per-instance state. Keep their one authorized
+                # row instance instead of reconstructing it for the predicate.
+                qs = qs.with_instances(qs)
             authorize_query_fields(
                 qs,
                 info,

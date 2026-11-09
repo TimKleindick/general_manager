@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db.models import CharField
+from django.test import override_settings
 from django.utils.crypto import get_random_string
 
 from general_manager.as_of import as_of
@@ -17,6 +18,7 @@ from general_manager.bucket.calculation_bucket import (
     FrozenCalculationLookupError,
 )
 from general_manager.bucket.database_bucket import QuerysetFilteringError
+from general_manager.interface.base_interface import InvalidInputConstraintError
 from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.manager import GeneralManager, Input
 from general_manager.permission.base_permission import (
@@ -518,6 +520,69 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         assert result["pageInfo"]["total_count"] == 0
         assert self.Calculation.authorization_checks == []
 
+    def test_daily_date_range_scope_limits_the_row_gate_to_requested_dates(
+        self,
+    ) -> None:
+        """A plain daily range remains safe to narrow before row authorization."""
+
+        class DailyRangeCalculation(GeneralManager):
+            authorization_checks: ClassVar[list[date]] = []
+
+            class Interface(CalculationInterface):
+                as_of = Input.date_range(
+                    start=date(2022, 1, 1),
+                    end=date(2031, 12, 31),
+                )
+
+            class Permission(BasePermission):
+                def describe_operation_permissions(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                ) -> tuple[str, ...]:
+                    return ()
+
+                def check_operation_permission(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                ) -> bool:
+                    return True
+
+                def check_permission(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                    attribute: str,
+                ) -> bool:
+                    return True
+
+                def get_read_permission_plan(self) -> ReadPermissionPlan:
+                    return ReadPermissionPlan(
+                        filters=[{"filter": {}, "exclude": {}}],
+                        requires_instance_check=True,
+                        instance_check_reasons=("unfilterable_read_rule",),
+                    )
+
+                def can_read_instance(self) -> bool:
+                    calculation = cast(DailyRangeCalculation, self.instance)
+                    DailyRangeCalculation.authorization_checks.append(calculation.as_of)
+                    return True
+
+        resolver = create_list_resolver(
+            lambda *_: DailyRangeCalculation.all(), DailyRangeCalculation
+        )
+        start = date(2025, 5, 1)
+        end = date(2025, 5, 31)
+
+        result = resolver(
+            None,
+            SimpleNamespace(context=SimpleNamespace(user=self.user)),
+            filter={"as_of__gte": start, "as_of__lte": end},
+        )
+
+        assert result["pageInfo"]["total_count"] == 31
+        assert DailyRangeCalculation.authorization_checks == [
+            date(2025, 5, day) for day in range(1, 32)
+        ]
+
     def test_constructor_scope_only_narrows_an_exact_materialized_source(self) -> None:
         """A client constructor input cannot introduce rows absent from a snapshot."""
         subject_row = self.Calculation(
@@ -539,9 +604,199 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
 
         assert result["pageInfo"]["total_count"] == 1
         assert result["items"] == [subject_row]
+        assert result["items"][0] is subject_row
         assert self.Calculation.authorization_checks == [
             (self.subject.id, date(2026, 2, 28))
         ]
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=False)
+    def test_constructor_scope_filters_normalized_domain_values(self) -> None:
+        """Constructor predicates compare the normalized value stored by calculations."""
+
+        class NormalizedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                code = Input(
+                    str,
+                    possible_values=[" A "],
+                    normalizer=lambda value: value.strip(),
+                )
+
+        resolver = create_list_resolver(
+            lambda *_: NormalizedCalculation.all(), NormalizedCalculation
+        )
+
+        result = resolver(
+            None,
+            SimpleNamespace(context=SimpleNamespace(user=self.user)),
+            filter={"code": "A"},
+        )
+
+        assert result["pageInfo"]["total_count"] == 1
+        assert result["items"][0].code == "A"
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=False)
+    def test_constructor_scope_defers_rebound_input_casts(self) -> None:
+        """Only unmodified Input conversion can safely constrain raw domains."""
+
+        code_input = Input(str, possible_values=[" A "])
+        code_input.cast = lambda value, *_args, **_kwargs: value.strip()
+
+        class ReboundInputCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                code = code_input
+
+        resolver = create_list_resolver(
+            lambda *_: ReboundInputCalculation.all(), ReboundInputCalculation
+        )
+
+        result = resolver(
+            None,
+            SimpleNamespace(context=SimpleNamespace(user=self.user)),
+            filter={"code": "A"},
+        )
+
+        assert result["pageInfo"]["total_count"] == 1
+        assert result["items"][0].code == "A"
+
+    @override_settings(GENERAL_MANAGER_VALIDATE_INPUT_VALUES=False)
+    def test_constructor_scope_defers_rebound_input_class_methods(self) -> None:
+        """Class-level Input conversion replacements cannot prune raw domains."""
+
+        def resolved_code_with(
+            method: str,
+            replacement: object,
+        ) -> tuple[int, str]:
+            code_input = Input(str, possible_values=[" A "])
+
+            class ReboundInputCalculation(GeneralManager):
+                class Interface(CalculationInterface):
+                    code = code_input
+
+            resolver = create_list_resolver(
+                lambda *_: ReboundInputCalculation.all(), ReboundInputCalculation
+            )
+            with patch.object(Input, method, replacement):
+                result = resolver(
+                    None,
+                    SimpleNamespace(context=SimpleNamespace(user=self.user)),
+                    filter={"code": "A"},
+                )
+                return result["pageInfo"]["total_count"], result["items"][0].code
+
+        original_cast = Input.cast
+
+        def strip_cast(
+            self: Input[type[object]], value: object, *args: object, **kwargs: object
+        ) -> object:
+            return cast(str, original_cast(self, value, *args, **kwargs)).strip()
+
+        original_normalize = Input.normalize
+
+        def strip_normalize(
+            self: Input[type[object]], value: object, *args: object, **kwargs: object
+        ) -> object:
+            return cast(str, original_normalize(self, value, *args, **kwargs)).strip()
+
+        assert resolved_code_with("cast", strip_cast) == (1, "A")
+        assert resolved_code_with("normalize", strip_normalize) == (1, "A")
+
+    def test_unfiltered_scalar_domains_normalize_only_when_constructed(self) -> None:
+        """Domain enumeration leaves scalar callback and validation timing unchanged."""
+
+        normalizer_calls: list[str] = []
+        validator_calls: list[str] = []
+
+        def normalize(value: str) -> str:
+            normalizer_calls.append(value)
+            return f"{value}!"
+
+        def validate(value: str) -> bool:
+            validator_calls.append(value)
+            return True
+
+        class NormalizedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                code = Input(
+                    str,
+                    possible_values=["raw"],
+                    normalizer=normalize,
+                    validator=validate,
+                )
+
+        rows = list(CalculationBucket(NormalizedCalculation))
+        assert normalizer_calls == ["raw"]
+        assert validator_calls == ["raw!"]
+        assert rows[0].code == "raw!!"
+        assert normalizer_calls == ["raw", "raw!"]
+
+        rejected_normalizer_calls: list[str] = []
+
+        class RejectedCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                code = Input(
+                    str,
+                    possible_values=["raw"],
+                    normalizer=lambda value: (
+                        rejected_normalizer_calls.append(value) or f"{value}!"
+                    ),
+                    validator=lambda _value: False,
+                )
+
+        with self.assertRaises(InvalidInputConstraintError):
+            list(CalculationBucket(RejectedCalculation))
+        assert rejected_normalizer_calls == ["raw"]
+
+    def test_deferred_predicate_reuses_authorized_calculation_instance(self) -> None:
+        """A field callback and deferred getter observe the same calculation row."""
+
+        class StatefulCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                axis = Input(int, possible_values=[1])
+
+            class Permission(BasePermission):
+                def describe_operation_permissions(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                ) -> tuple[str, ...]:
+                    return ()
+
+                def check_operation_permission(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                ) -> bool:
+                    return True
+
+                def check_permission(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                    attribute: str,
+                ) -> bool:
+                    if attribute == "visible":
+                        self.instance._field_authorized = True
+                    return True
+
+                def get_read_permission_plan(self) -> ReadPermissionPlan:
+                    return ReadPermissionPlan(
+                        filters=[{"filter": {}, "exclude": {}}],
+                        requires_instance_check=False,
+                    )
+
+            @graph_ql_property(filterable=True)
+            def visible(self) -> bool:
+                return bool(getattr(self, "_field_authorized", False))
+
+        resolver = create_list_resolver(
+            lambda *_: StatefulCalculation.all(), StatefulCalculation
+        )
+
+        result = resolver(
+            None,
+            SimpleNamespace(context=SimpleNamespace(user=self.user)),
+            filter={"visible": True},
+        )
+
+        assert result["pageInfo"]["total_count"] == 1
+        assert result["items"][0].visible is True
 
     def test_nested_manager_constraints_traverse_native_values(self) -> None:
         """Nested manager predicates retain values rather than raw identity mappings."""
@@ -567,6 +822,85 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         assert row.middle.leaf.name == "secret"
         assert list(matcher.filter_instances([row])) == [row]
         assert list(exclusion.filter_instances([row])) == []
+
+    def test_frozen_nested_property_uses_its_declared_scalar_type(self) -> None:
+        """Nested non-input properties cast filter operands through their annotation."""
+
+        class Leaf(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(int)
+
+            @graph_ql_property(filterable=True)
+            def occurred(self) -> date | None:
+                return self._occurred
+
+        class Middle(GeneralManager):
+            class Interface(CalculationInterface):
+                leaf = Input(Leaf)
+
+        class Top(GeneralManager):
+            class Interface(CalculationInterface):
+                middle = Input(Middle)
+
+        dated = Top(
+            middle={"leaf": {"id": 1}},
+        )
+        dated.middle.leaf._occurred = date(2026, 2, 28)
+        empty = Top(
+            middle={"leaf": {"id": 2}},
+        )
+        empty.middle.leaf._occurred = None
+
+        assert list(
+            CalculationBucket(Top)
+            .filter(middle__leaf__occurred="2026-02-28")
+            .filter_instances([dated])
+        ) == [dated]
+        assert list(
+            CalculationBucket(Top)
+            .filter(middle__leaf__occurred__exact=None)
+            .filter_instances([empty])
+        ) == [empty]
+
+    def test_frozen_terminal_manager_identity_uses_its_input_semantics(self) -> None:
+        """Permission exclusions compare a terminal relation with its identity."""
+
+        class Leaf(GeneralManager):
+            class Interface(CalculationInterface):
+                id = Input(int)
+                name = Input(str)
+
+        class Middle(GeneralManager):
+            class Interface(CalculationInterface):
+                leaf = Input(Leaf)
+
+        class Top(GeneralManager):
+            class Interface(CalculationInterface):
+                middle = Input(Middle)
+                axis = Input(int)
+
+        row = Top(middle={"leaf": {"id": 7, "name": "secret"}}, axis=1)
+        assert (
+            list(CalculationBucket(Top).exclude(middle__leaf=7).filter_instances([row]))
+            == []
+        )
+
+        resolver = create_list_resolver(lambda *_: Top.all().with_instances([row]), Top)
+        permission_plan = ReadPermissionPlan(
+            filters=[{"filter": {}, "exclude": {"middle__leaf": 7}}],
+            requires_instance_check=False,
+        )
+        with patch(
+            "general_manager.api.graphql_resolvers.get_read_permission_filter",
+            return_value=permission_plan,
+        ):
+            result = resolver(
+                None,
+                SimpleNamespace(context=SimpleNamespace(user=self.user)),
+                filter={"axis": 1},
+            )
+
+        assert result["pageInfo"]["total_count"] == 0
 
         resolver = create_list_resolver(
             lambda *_: Top.all().with_instances([row]),
