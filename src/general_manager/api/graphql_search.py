@@ -1819,7 +1819,18 @@ def register_search_query(
                         _SEARCH_BACKEND_SCAN_LIMIT_EXCEEDED,
                         extensions={"code": "SEARCH_SCAN_LIMIT_EXCEEDED"},
                     )
-                if result.exhausted is False and len(result.hits) < query_limit:
+                can_continue_page = (
+                    result.exhausted is False
+                    and isinstance(result.next_offset, int)
+                    and not isinstance(result.next_offset, bool)
+                    and bool(result.hits)
+                    and result.next_offset == offset_cursor + len(result.hits)
+                )
+                if (
+                    result.exhausted is False
+                    and len(result.hits) < query_limit
+                    and not can_continue_page
+                ):
                     # A backend cap may yield an empty or short page before the
                     # actual result set ends. Its prefix cannot establish an
                     # authorized total or page.
@@ -1957,7 +1968,7 @@ def register_search_query(
                 )
                 if result.exhausted is True:
                     break
-                if len(result.hits) < query_limit:
+                if len(result.hits) < query_limit and not can_continue_page:
                     break
                 if scanned_hits >= total_scan_limit:
                     manager_total_is_exact = False

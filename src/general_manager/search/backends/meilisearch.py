@@ -513,17 +513,24 @@ class MeilisearchBackend:
             )
             for hit in self._search_hits(response)
         ]
+        exhausted = self._search_exhausted(
+            response,
+            settings,
+            cutoff_policy,
+            limit=effective_page[0] if effective_page is not None else None,
+            offset=effective_page[1] if effective_page is not None else None,
+        )
         return SearchResult(
             hits=hits,
             total=self._int_field(response, "estimatedTotalHits") or len(hits),
             took_ms=self._int_field(response, "processingTimeMs"),
             raw=response,
-            exhausted=self._search_exhausted(
+            exhausted=exhausted,
+            next_offset=self._next_offset(
                 response,
-                settings,
-                cutoff_policy,
-                limit=effective_page[0] if effective_page is not None else None,
-                offset=effective_page[1] if effective_page is not None else None,
+                effective_page=effective_page,
+                hits=hits,
+                exhausted=exhausted,
             ),
         )
 
@@ -648,6 +655,37 @@ class MeilisearchBackend:
         ):
             return False
         return raw_hit_count < limit and offset + raw_hit_count < max_total_hits
+
+    @staticmethod
+    def _next_offset(
+        response: Mapping[str, object],
+        *,
+        effective_page: tuple[int, int] | None,
+        hits: Sequence[SearchHit],
+        exhausted: bool,
+    ) -> int | None:
+        """Attest cursor progress only for a complete, echoed effective page."""
+        if (
+            exhausted
+            or effective_page is None
+            or "limit" not in response
+            or "offset" not in response
+        ):
+            return None
+        effective_limit, offset = effective_page
+        raw_hit_count = MeilisearchBackend._raw_search_hit_count(response)
+        if (
+            isinstance(effective_limit, bool)
+            or isinstance(offset, bool)
+            or not isinstance(effective_limit, int)
+            or not isinstance(offset, int)
+            or effective_limit <= 0
+            or raw_hit_count is None
+            or raw_hit_count != effective_limit
+            or raw_hit_count != len(hits)
+        ):
+            return None
+        return offset + raw_hit_count
 
     @staticmethod
     def _well_formed_search_hit_count(response: Mapping[str, object]) -> int | None:
