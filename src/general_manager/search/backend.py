@@ -75,7 +75,13 @@ class SearchResult:
     adapter-proven guarantee that this page reaches the end of the matching
     result set. `False` means the adapter determined the page is incomplete or
     cannot make that guarantee. `None` preserves the legacy contract for
-    adapters that do not report enumeration completeness.
+    adapters that do not report enumeration completeness. When `exhausted` is
+    `False`, `next_offset` can attest that the hits cover one complete effective
+    backend page, even when the provider returned fewer than the requested
+    `limit`. It must equal the requested offset plus the number of returned
+    hits, with positive progress and no raw hits discarded during normalization.
+    It permits another page request; it does not prove that more hits exist or
+    that enumeration is complete. `None` retains the existing paging contract.
     """
 
     hits: Sequence[SearchHit]
@@ -83,6 +89,7 @@ class SearchResult:
     took_ms: int | None = None
     raw: object | None = None
     exhausted: bool | None = None
+    next_offset: int | None = None
 
 
 @runtime_checkable

@@ -413,11 +413,25 @@ missing timing proof and raw page overdelivery fail explicitly. This inspects
 backend pagination and response metadata; it does not check indexed content
 freshness.
 
+A provider may return a smaller effective page than requested. When Meilisearch
+echoes a valid limit and the requested offset, and the raw response fills that
+effective page without discarded entries, the adapter attests its
+`SearchResult.next_offset`. GraphQL can then continue from that offset while
+counting every returned hit against the existing scan budget. A full effective
+page does not establish the final total; a later page must still prove exhaustion.
+Missing or inconsistent pagination evidence, unproven short pages and cap-boundary
+responses retain the existing fail-closed behavior.
+
 Custom adapters can set `SearchResult.exhausted` to attest complete enumeration
 (`True`) or to prevent a short page being treated as complete (`False`). The
 compatibility default `None` retains the existing short-page contract. Adapters
 must reject a truncated intermediate page themselves: a later terminal page
 cannot repair an earlier incomplete response.
+An optional `next_offset` can accompany `exhausted=False` to prove that a
+nonempty page is complete at a smaller effective limit. It must be an integer
+(not a boolean) equal to the requested offset plus the number of normalized hits,
+with no raw entries omitted. It permits continuation without changing the
+exhaustion contract. The default `None` leaves legacy adapters unchanged.
 
 ::: general_manager.search.backends.opensearch.OpenSearchBackend
 

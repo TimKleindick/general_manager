@@ -30,6 +30,7 @@ from general_manager.permission.permission_checks import (
     permission_functions,
 )
 from general_manager.search.backends.dev import DevSearchBackend
+from general_manager.search.backends.meilisearch import MeilisearchBackend
 from general_manager.search.backend import SearchDocument, SearchHit, SearchResult
 from general_manager.search import backend_registry
 from general_manager.search.backend_registry import configure_search_backend
@@ -786,6 +787,160 @@ class GraphQLSearchTests(SimpleTestCase):
                 assert caught.exception.extensions == {
                     "code": "SEARCH_SCAN_LIMIT_EXCEEDED"
                 }
+
+    def _configure_clamped_meilisearch_backend(
+        self, *, max_total_hits: int = 100
+    ) -> MagicMock:
+        """Provide complete two-hit backend pages, including a denied source row."""
+        backend = self._configure_counting_backend_with_public_rows(public_count=5)
+        raw_hits = [
+            {
+                "id": hit.id,
+                "type": hit.type,
+                "identification": hit.identification,
+                "data": hit.data,
+                "_rankingScore": hit.score,
+            }
+            for hit in backend.search("global", "", limit=10).hits
+        ]
+        ProjectInterface.data_store[2]["status"] = "private"
+        index = MagicMock()
+        index.get_settings.return_value = {
+            "pagination": {"maxTotalHits": max_total_hits},
+            "searchCutoffMs": 10,
+            "rankingRules": ["sort"],
+        }
+
+        def clamped_search(query: str, payload: dict[str, Any]) -> dict[str, Any]:
+            """Echo the effective page size and preserve the requested offset."""
+            limit = min(payload["limit"], 2)
+            offset = payload["offset"]
+            return {
+                "hits": raw_hits[:max_total_hits][offset : offset + limit],
+                "limit": limit,
+                "offset": offset,
+                "estimatedTotalHits": min(len(raw_hits), max_total_hits),
+                "processingTimeMs": 1,
+            }
+
+        index.search.side_effect = clamped_search
+        client = MagicMock()
+        client.get_or_create_index.return_value = index
+        configure_search_backend(MeilisearchBackend(client=client))
+        return index
+
+    def test_graphql_search_continues_full_clamped_meilisearch_pages(self) -> None:
+        """Effective backend pages preserve authorized totals, order and UI pages."""
+        index = self._configure_clamped_meilisearch_backend()
+        info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
+        for page, expected_ids in ((1, [1, 3, 4]), (2, [5]), (3, [])):
+            with self.subTest(page=page):
+                index.search.reset_mock()
+                response = GraphQL._query_fields["search"].resolver(
+                    None,
+                    info,
+                    query="",
+                    order_by=[{"field": "name"}],
+                    page=page,
+                    page_size=3,
+                )
+                assert response["total"] == 4
+                assert response["total_is_exact"] is True
+                assert response["page_info"]["total_pages"] == 2
+                assert [row.identification["id"] for row in response["results"]] == (
+                    expected_ids
+                )
+                assert [
+                    call.args[1]["offset"] for call in index.search.call_args_list
+                ] == [
+                    0,
+                    2,
+                    4,
+                ]
+
+    def test_graphql_search_accepts_empty_clamped_meilisearch_page(self) -> None:
+        """A proven empty page remains a complete empty search result."""
+        index = self._configure_clamped_meilisearch_backend()
+        index.search.side_effect = None
+        index.search.return_value = {
+            "hits": [],
+            "limit": 2,
+            "offset": 0,
+            "processingTimeMs": 1,
+        }
+        response = GraphQL._query_fields["search"].resolver(
+            None,
+            SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+            query="",
+            page_size=10,
+        )
+        assert response["results"] == []
+        assert response["total"] == 0
+        assert response["total_is_exact"] is True
+        index.search.assert_called_once()
+
+    def test_graphql_search_clamped_pages_preserve_scan_and_backend_caps(self) -> None:
+        """Neither effective pages nor denied rows bypass either enumeration cap."""
+        for mode in ("exact", "bounded"):
+            for cap, budget, offsets, limits in (
+                (4, 100, [0, 2, 4], [10, 10, 10]),
+                (100, 3, [0, 2], [3, 1]),
+            ):
+                with (
+                    self.subTest(mode=mode, cap=cap, budget=budget),
+                    override_settings(
+                        GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": budget}
+                    ),
+                ):
+                    index = self._configure_clamped_meilisearch_backend(
+                        max_total_hits=cap
+                    )
+                    with self.assertRaisesRegex(GraphQLError, "scan limit") as caught:
+                        GraphQL._query_fields["search"].resolver(
+                            None,
+                            SimpleNamespace(
+                                context=SimpleNamespace(user=AnonymousUser())
+                            ),
+                            query="",
+                            page_size=10,
+                            total_mode=mode,
+                        )
+                    assert caught.exception.extensions == {
+                        "code": "SEARCH_SCAN_LIMIT_EXCEEDED"
+                    }
+                    assert [
+                        call.args[1]["offset"] for call in index.search.call_args_list
+                    ] == offsets
+                    assert [
+                        call.args[1]["limit"] for call in index.search.call_args_list
+                    ] == limits
+
+    def test_graphql_search_rejects_unproven_continuation_offsets(self) -> None:
+        """A continuation may neither skip hits nor retain a nonadvancing cursor."""
+        backend = self._configure_counting_backend_with_public_rows(public_count=1)
+        hit = backend.search("global", "", limit=10).hits[0]
+        for cursor in (None, -1, 0, True, False, 1.0, "1", 2):
+            with (
+                self.subTest(cursor=cursor),
+                patch.object(
+                    backend,
+                    "search",
+                    return_value=SearchResult(
+                        hits=[hit],
+                        total=1,
+                        exhausted=False,
+                        next_offset=cast(int | None, cursor),
+                    ),
+                ) as search,
+                self.assertRaisesRegex(GraphQLError, "scan limit"),
+            ):
+                GraphQL._query_fields["search"].resolver(
+                    None,
+                    SimpleNamespace(context=SimpleNamespace(user=AnonymousUser())),
+                    query="",
+                    page_size=10,
+                )
+            search.assert_called_once()
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 2})
     def test_graphql_search_accepts_explicitly_exhausted_full_scan_boundary(

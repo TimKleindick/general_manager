@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import UserList
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 import pytest
 
@@ -688,7 +689,7 @@ def test_meilisearch_search_rejects_response_offset_mismatch() -> None:
 
 
 def test_meilisearch_search_uses_present_clamped_limit_for_short_page_proof() -> None:
-    """A full provider-clamped page is not short relative to its effective limit."""
+    """A full provider-clamped page attests a safe continuation offset."""
     index = _SearchResponseIndex(
         {
             "hits": [_search_hit(1), _search_hit(2)],
@@ -704,6 +705,102 @@ def test_meilisearch_search_uses_present_clamped_limit_for_short_page_proof() ->
     )
 
     assert result.exhausted is False
+    assert result.next_offset == 2
+
+
+def test_meilisearch_search_omits_next_offset_when_raw_hit_is_malformed() -> None:
+    """A discarded raw hit cannot safely advance the provider cursor."""
+    index = _SearchResponseIndex(
+        {
+            "hits": [_search_hit(1), "malformed"],
+            "estimatedTotalHits": 2,
+            "processingTimeMs": 1,
+            "limit": 2,
+        }
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    result = MeilisearchBackend(client=_FakeClient(index)).search(
+        "index", "Project", limit=10, offset=0
+    )
+
+    assert result.exhausted is False
+    assert len(result.hits) == 1
+    assert result.next_offset is None
+
+
+@pytest.mark.parametrize("echo", [{}, {"limit": 2}, {"offset": 0}])
+def test_meilisearch_search_omits_next_offset_without_both_page_echoes(
+    echo: dict[str, int],
+) -> None:
+    """A page without either validated echo cannot supply a continuation cursor."""
+
+    class _NoPageEchoIndex(_FakeIndex):
+        def search(self, _query: str, payload: dict[str, object]) -> dict[str, object]:
+            self.search_payloads.append(payload)
+            return {
+                "hits": [_search_hit(1), _search_hit(2)],
+                "estimatedTotalHits": 2,
+                "processingTimeMs": 1,
+                **echo,
+            }
+
+    index = _NoPageEchoIndex()
+    index.attributes.update({"pagination": {"maxTotalHits": 2}, "searchCutoffMs": 10})
+
+    result = MeilisearchBackend(client=_FakeClient(index)).search(
+        "index", "Project", limit=10, offset=0
+    )
+
+    assert result.exhausted is False
+    assert result.next_offset is None
+
+
+@pytest.mark.parametrize(
+    ("limit", "offset"),
+    [(0, 0), (-1, 0), (False, 0), (1, -1), (1, False)],
+)
+def test_meilisearch_search_omits_next_offset_for_invalid_or_empty_page_request(
+    limit: int,
+    offset: int,
+) -> None:
+    """Zero and invalid request boundaries never attest cursor progress."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    result = MeilisearchBackend(client=_FakeClient(index)).search(
+        "index", "Project", limit=limit, offset=offset
+    )
+
+    assert result.next_offset is None
+
+
+def test_meilisearch_search_rejects_float_limit_before_cursor_attestation() -> None:
+    """A non-integer request limit cannot produce a continuation cursor."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    with pytest.raises(SearchBackendError, match="page limit"):
+        MeilisearchBackend(client=_FakeClient(index)).search(
+            "index", "Project", limit=cast(int, 1.0), offset=0
+        )
+
+
+def test_meilisearch_search_preserves_non_integer_limit_error() -> None:
+    """Unsupported request types retain the existing pagination validation error."""
+    index = _SearchResponseIndex(
+        {"hits": [], "estimatedTotalHits": 0, "processingTimeMs": 1}
+    )
+    index.attributes.update({"pagination": {"maxTotalHits": 100}, "searchCutoffMs": 10})
+
+    with pytest.raises(TypeError):
+        MeilisearchBackend(client=_FakeClient(index)).search(
+            "index", "Project", limit=cast(int, "1"), offset=0
+        )
 
 
 @pytest.mark.parametrize("offset", [100, 101])
