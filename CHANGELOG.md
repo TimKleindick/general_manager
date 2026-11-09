@@ -2,6 +2,56 @@
 
 <!-- version list -->
 
+## v0.87.6 (2026-11-09)
+
+### Bug Fixes
+
+- Close remaining authorization review edge cases
+  ([`084239a`](https://github.com/TimKleindick/general_manager/commit/084239a7c64f1b3f962f1e1cb12a5bac74fe6a94))
+
+- Continue complete clamped search pages
+  ([`28e8b7c`](https://github.com/TimKleindick/general_manager/commit/28e8b7ccd0c51a043abd4b2befcf37308e694f98))
+
+- Preserve authorization and search conversion contracts
+  ([`d870d7e`](https://github.com/TimKleindick/general_manager/commit/d870d7e27b07a978885026efd1e0139a40f70ab2))
+
+- Preserve GraphQL ordering input errors
+  ([`a9ab79c`](https://github.com/TimKleindick/general_manager/commit/a9ab79cd660a436745f1d1db208ec8dbdd9a5827))
+
+- Restore authorized list and search compatibility
+  ([`b24d65c`](https://github.com/TimKleindick/general_manager/commit/b24d65ccdd1d3ee0d111ef3039e4c0f0e7702d9e))
+
+- Reuse native list authorization structure
+  ([`f7fa353`](https://github.com/TimKleindick/general_manager/commit/f7fa35377b846681473ef89d71ac0eff8e795b4e))
+
+- **search**: Route proven projections through authorized fast path
+  ([`e972055`](https://github.com/TimKleindick/general_manager/commit/e9720550bbfc9e138079c887a81d843a85f70419))
+
+### Documentation
+
+- Keep temporary verification artifacts out of repository
+  ([`30d208d`](https://github.com/TimKleindick/general_manager/commit/30d208d779427336886d93d214c504a09851d059))
+
+- Record verified KH frontend compatibility
+  ([`bf2c613`](https://github.com/TimKleindick/general_manager/commit/bf2c613b7f2550f887f2ba113f2c2ea3e01224f1))
+
+- Remove internal workflow plans
+  ([`3c0e638`](https://github.com/TimKleindick/general_manager/commit/3c0e63892d7d23d2a36b2e92f00c4ba99955155e))
+
+### Performance Improvements
+
+- Reduce native list authorization overhead
+  ([`b959946`](https://github.com/TimKleindick/general_manager/commit/b95994623e68b1728e509c349aba81955815a2d1))
+
+### Testing
+
+- Preserve classmethod protocol in hydration observers
+  ([`25caec8`](https://github.com/TimKleindick/general_manager/commit/25caec89ac1016ca580d8dddf4d7df2f7244b2f9))
+
+- Respect native database collation in permission assertions
+  ([`98cba5b`](https://github.com/TimKleindick/general_manager/commit/98cba5b12690406ad84213b4a11a06a4c97c182a))
+
+
 ## v0.87.5 (2026-11-05)
 
 ### Bug Fixes
