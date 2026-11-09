@@ -55,6 +55,12 @@ Custom adapters retain their existing short-page contract when
 | Original 1,000-booking and 20/365-day calendar tests | 3 passed, 4 subtests; original assertions preserved |
 | GM Ruff, formatting, strict mypy, pre-commit, strict docs build | Passed |
 | KH backend Ruff, formatting, mypy | Passed; 885 typed source files |
+| KH frontend formatting, lint, TypeScript | Passed |
+| KH frontend unit / integration | 1,198 / 565 passed; 186 / 58 files |
+| KH Linux production / Storybook builds | Passed |
+| KH Linux Storybook interactions | 394 Jest stories and 12 Playwright tests passed |
+| KH Linux visual regression | 179 passed; unchanged baselines |
+| KH Linux E2E | Exit 0; 5 passed initially, 1 passed on existing retry; see stability note below |
 | Independent scoped reviews | No remaining blocking findings |
 
 The first final-source GM run had 16,540 passes and three expectations for the
@@ -73,6 +79,12 @@ The entire affected module passes on SQLite, PostgreSQL 18 and MariaDB 11.8:
 24 tests and 9 subtests per backend. The isolated MariaDB check used PyMySQL;
 the hosted matrix separately exercises mysqlclient.
 
+The complete hosted [Quality run #456](https://github.com/TimKleindick/general_manager/actions/runs/42593154253)
+passed on `ef8d1d15c9b198343c65ce79d08271806d18a564`: Python 3.12, 3.13 and 3.14
+each report 16,553 passes and 120 skips; PostgreSQL 18 and MariaDB 11.8 each
+report 16,455 passes, 120 skips and 98 deselections. Packaging, quality,
+documentation and monitoring checks also passed.
+
 KH uses published PR #10933 HEAD `3dd8149665c4d8413713260e6c1f18a33135a44b` plus
 its existing local consumer changes: 97 tracked changed paths and 8 additional
 source/test files, with no content differences in the isolated candidate.
@@ -87,6 +99,45 @@ not that metadata, identify the candidate.
 commands, environments, original test names and artifact hashes. Temporary raw
 logs remain in `/tmp/kh-gm583-followup/`. These are isolated candidate results;
 no hosted KH result for a new published GM release is claimed.
+
+## Frontend follow-up
+
+Installing the exact locked private UI package exposed 26 unit, 96 integration
+and two Storybook fixture failures. Custom handlers were bypassing the existing
+`paginateGraphqlFixture` / `reply` owner and omitted the private completeness
+metadata required by the outgoing query. Repairs reuse that owner and supply
+real parent IDs, valid empty connections and coherent page counts. Runtime
+authorization, transport, collector logic, test assertions and error payloads
+remain unchanged. Duplicate IDs within one complete connection are invalid;
+the customer-scope test still verifies deduplication across distinct lists.
+
+The work-center fixture now has truthful 30+1 pages; customer volumes have
+100+2. The latter retains its decisive rows on page two. Its isolated test
+timeout increased from 10 to 60 seconds because rendering 102 rows replaces an
+invalid five-row mock; the focused run took 28.36 seconds. This is not a timing
+benchmark, and no original backend benchmark assertion or limit changed.
+
+Independent review found no remaining blockers in the 16 test/story repairs.
+These and the updated documentation were copied to the original KH checkout
+only after checking all 17 baseline hashes.
+Other user changes were preserved. Production helpers, configuration, dependency
+versions and the lockfile are unchanged; these KH changes remain local. Full
+unit and integration suites pass. macOS checks used Node 24.22.2 / npm 11.19.1;
+browser checks used the Playwright 1.61.1 Ubuntu image under Linux/amd64 emulation
+with Node 24.17.0 / npm 11.13.0. Browser inputs match the final candidate; the
+visual run remains applicable because the later repairs affect other stories,
+Vitest tests and documentation.
+
+**E2E stability limitation:** the unchanged SSO return-marker test occasionally
+observes duplicate login return URLs. It passed on the workflow's existing
+retry, so the E2E command exited successfully. A bounded three-repeat check
+reproduced one retry-flaky occurrence. Authentication source/tests match the
+original KH head; retries and global test configuration were not changed.
+This is not a claim of flake-free E2E behavior.
+
+[Frontend evidence](kh-frontend-validation.json) records commands, runtimes,
+source/lockfile hashes, the repaired-file manifest and the initial/final results.
+Full raw reports remain under `/tmp/kh-gm583-followup/frontend-validation/`.
 
 ## Balanced performance comparison
 
@@ -149,8 +200,11 @@ KH's dependency manifests still name the published GM 0.87.5. Publishing a new
 GM release and adopting its actual version in KH are separate from these source
 checks; no manual GM version bump was made.
 
-The exact private frontend dependency `@constellium/know-ui-library@3.20.0` is
-absent from the local cache. The current normal registry fetch with existing
-configuration fails with HTTP 401. Credentials and permissions were unchanged,
-and older package versions were not substituted. Full frontend validation and
-the hosted KH result for the eventual new version remain unverified.
+The exact private frontend dependency `@constellium/know-ui-library@3.20.0`
+was installed from the unchanged lockfile using the existing deployment token,
+as explicitly authorized by the user. Authentication was scoped to the install;
+package lifecycle scripts and validation ran without the token. No dependency
+version or registry configuration was changed. This resolves the earlier
+HTTP 401 blocker. Local frontend gates pass with the E2E stability limitation
+above. The hosted KH result for the eventual published GM version remains
+unverified.
