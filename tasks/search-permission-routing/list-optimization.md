@@ -95,7 +95,7 @@ GM 0.86.4 performs only 8,000 runtime field checks in this flow. The retained
 authorization work is the main remaining gap; no callback decision is skipped
 or reused to improve the timing.
 
-Local verification of the unchanged final production/test inputs:
+Local verification of the optimized production source:
 
 - GM full suite: 16,557 passed, 130 skipped, 2,585 subtests; four tests were
   blocked only by sandbox restrictions on local loopback sockets and Docker.
@@ -108,6 +108,14 @@ Local verification of the unchanged final production/test inputs:
 - Original KH 1,000-booking and complete-calendar gates: 3 passed, 4 subtests,
   with the original queries, fixtures and assertions.
 - Independent scoped review: no remaining blocking findings.
+
+The first hosted run found a Django 6.1 incompatibility in the new hydration
+test observer: a bare mock of `from_db` lacked the `__func__` attribute Django
+inspects. The observer now preserves the real classmethod protocol. Production
+source and benchmark inputs are unchanged. The same seven hydration tests pass
+on Django 5.2 and 6.1; all 139 focused tests pass on Django 6.1. The repaired
+observer still fails against the prior production source with 25 versus the
+expected 15 hydrations, so the regression assertion was not weakened.
 
 [Per-sample comparison evidence](list-optimization-comparison.json) records
 commands, source bindings, equality hashes, cold/warm samples and dispersion.
