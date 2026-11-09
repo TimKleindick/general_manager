@@ -6,12 +6,15 @@ blockers in the earlier [search report](kh-pr-validation.md). GM is based on
 `origin/main` at `715c942f2a94a5b2cf1435dd06b71228cb730448`; the existing PR is
 [#583](https://github.com/TimKleindick/general_manager/pull/583). PR #582 remains closed.
 
-The later [native list optimization](list-optimization.md) contains the current
-performance measurements and repeated GM/KH backend validation. It reduces the
-raw 1,000-booking flow from 2.340 to 1.103 seconds with identical results. The
-comparison below records the earlier compatibility checkpoint at `4f220906`;
-its 8.3× raw-flow gap is superseded by the new measured 3.9× gap. Contracts and
-the unchanged frontend evidence remain applicable.
+The [query-structure preparation report](query-structure-optimization.md)
+contains the current comparison: the raw 1,000-booking flow takes 519 ms versus
+1,068 ms for the previous PR and 276 ms for GM 0.86.4, with identical results.
+The earlier [native list optimization](list-optimization.md) records the
+intermediate 3.9× gap. The comparison below is the older `4f220906` checkpoint
+with an 8.3× gap. The current measured gap is 1.9×; the explicit structure
+preparation contract is documented in the new report. The unchanged frontend
+evidence remains applicable. Current GM/KH backend verification is recorded
+in the new report; the validation table below preserves the older checkpoint.
 
 ## Contracts and ownership
 

@@ -1,5 +1,9 @@
 # Native list CPU and hydration optimization
 
+This report describes the earlier `d05ce4e8` checkpoint. The subsequent
+[query-structure preparation](query-structure-optimization.md) contains the
+current comparison and its explicit per-call static-definition contract.
+
 This follow-up addresses the raw 1,000-booking regression reported for
 PR #583 at `4f220906f186c57d8078b7f6ffd1d318cdaa63a9`. Search, raw bookings,
 summaries and the original complete-year calendar remain separate gates.

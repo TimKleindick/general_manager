@@ -891,6 +891,10 @@ class GeneralManager(metaclass=GeneralManagerMeta):
 _COMMON_MANAGER_ALL = GeneralManager.__dict__["all"].__func__
 _COMMON_MANAGER_FILTER = GeneralManager.__dict__["filter"].__func__
 _COMMON_MANAGER_GETATTR = GeneralManager.__dict__["__getattr__"]
+_COMMON_MANAGER_IDENTIFICATION = (
+    GeneralManager.__dict__["identification"],
+    executable_signature(GeneralManager.__dict__["identification"].fget),
+)
 _COMMON_MANAGER_EXECUTABLES = tuple(
     (function, executable_signature(function))
     for function in (

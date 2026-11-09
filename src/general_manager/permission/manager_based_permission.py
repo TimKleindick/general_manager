@@ -950,6 +950,62 @@ _DECLARATIVE_VALUE_TYPES = frozenset(
 )
 
 
+def _can_prepare_local_read_definitions(permission_class: object) -> bool:
+    """Attest plain read declarations without invoking unknown containers.
+
+    A stable class definition may still contain an executable list/dictionary
+    subclass. Inspect exact builtin shapes before the normal rule comparison.
+    Direct built-in policies use runtime settings providers and remain dynamic.
+    """
+    if permission_class is None:
+        return True
+    implementations = (
+        _ConfiguredManagerPermission,
+        AdditiveManagerPermission,
+        OverrideManagerPermission,
+        ManagerBasedPermission,
+    )
+    if type(permission_class) is not type(AdditiveManagerPermission):
+        return False
+    permission_class = cast(type[BasePermission], permission_class)
+    if (
+        not issubclass(
+            permission_class, (AdditiveManagerPermission, OverrideManagerPermission)
+        )
+        or permission_class in implementations
+    ):
+        return False
+
+    def plain_rules(value: object) -> bool:
+        if type(value) is not list and type(value) is not tuple:
+            return False
+        return all(
+            type(rule) is str for rule in cast(list[object] | tuple[object, ...], value)
+        )
+
+    if not plain_rules(getattr_static(permission_class, "__read__", None)):
+        return False
+    for owner in permission_class.__mro__:
+        if owner in implementations or owner in BasePermission.__mro__:
+            continue
+        for name, value in vars(owner).items():
+            if type(name) is not str:
+                return False
+            if name.startswith("__"):
+                continue
+            if (
+                type(type(value)) is not type
+                or type(value) not in _DECLARATIVE_VALUE_TYPES
+            ):
+                return False
+            if type(value) is dict:
+                if not all(type(key) is str for key in value):
+                    return False
+                if "read" in value and not plain_rules(value["read"]):
+                    return False
+    return additional_local_read_permission(permission_class, "") is not None
+
+
 def additional_local_read_permission(
     permission_class: object, attribute: str
 ) -> bool | None:

@@ -1971,11 +1971,14 @@ def create_list_resolver(
                 source="list",
             )
             qs = authorization_result.queryset
+            from general_manager.bucket.database_bucket import DatabaseBucket
+
             authorize_query_fields(
                 qs,
                 info,
                 operand_paths,
                 budget_additional_permissions_only=True,
+                prepare_native_structure=isinstance(qs, DatabaseBucket),
             )
             qs = apply_query_parameter_plan(qs, plan, None)
         if grouping_validator is not None:

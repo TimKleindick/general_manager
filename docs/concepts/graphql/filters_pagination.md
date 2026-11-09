@@ -48,6 +48,25 @@ and reintroduce unauthorized candidates. Computed-property predicates are
 evaluated only after per-instance authorization; declared-input predicates do
 not reduce the candidate set before that authorization step.
 
+Native database lists authorize filter and sort operands across the row-visible
+source before applying those operands or pagination. For ordinary ORM scalar
+fields and foreign-key identity aliases, the resolver prepares field/alias
+structure and additional-rule accounting lazily once per authorization call.
+This standard path treats schema definitions and declarative permission rules
+(including their dictionaries and lists) as unchanged during that call. A new
+call reads the definitions again. Mutating those definitions from a permission
+callback is outside this static contract.
+
+Preparation stores no user/object decision and reuses no Permission instance.
+Every runtime field check and callback still executes, including repeated
+operands, nonmatching candidates and rows outside the requested page. A later
+denial or exception retains its existing effect. Custom metadata providers,
+dynamic descriptors, executable/delegated Permission implementations, custom
+rule-container subclasses and direct settings-backed policies use the general
+path, as do properties, ambiguous aliases and multi-step relationships. The
+eligibility probe does not execute these custom providers. Search, request and
+calculation paths retain their existing behavior.
+
 The resolver parses and normalizes all query arguments before authorization. For
 non-calculation, non-request lists, permission prefilters and the row gate run first, then
 normalized positive filter predicates, explicit excludes, and the accumulated
