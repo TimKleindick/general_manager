@@ -55,6 +55,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
         super().setUpClass()
 
     def setUp(self) -> None:
+        """Create twelve rows spanning the matching and excluded operand domains."""
         super().setUp()
         self.model = self.Record.Interface._model
         self.model.objects.bulk_create(
@@ -67,6 +68,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
         self.resolver = create_list_resolver(lambda *_: self.Record.all(), self.Record)
 
     def test_paged_list_hydrates_operand_domain_and_page_only(self) -> None:
+        """Authorize all source rows but rehydrate only the requested page."""
         with (
             CalculationRunContext(),
             record_hydrations(self.model) as hydrated,
@@ -92,6 +94,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
         assert len(hydrated) == 12 + 3
 
     def test_denied_nonmatch_or_offpage_row_still_rejects(self) -> None:
+        """Reject denied source rows even when filtering or pagination excludes them."""
         for denied_rank in (0, 11):
             with self.subTest(denied_rank=denied_rank):
                 seen = []
@@ -120,6 +123,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
                 assert denied_rank in seen
 
     def test_unpaged_list_keeps_existing_materialized_count(self) -> None:
+        """Omitting pagination must return and hydrate the complete filtered domain."""
         with (
             CalculationRunContext(),
             record_hydrations(self.model) as hydrated,
@@ -141,6 +145,8 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
         assert len(hydrated) == 12 + 10
 
     def test_custom_count_and_length_remain_authoritative(self) -> None:
+        """Custom count, length, and dynamic count hooks must control page totals."""
+
         class CustomCount(DatabaseBucket):
             def count(self) -> int:
                 return 31
@@ -151,6 +157,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
 
         class DynamicCount(DatabaseBucket):
             def __getattribute__(self, name):
+                """Expose a dynamic count hook to exercise the custom-count fallback."""
                 if name == "count":
                     return lambda: 51
                 return super().__getattribute__(name)
@@ -178,6 +185,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
                 assert [item.rank for item in result["items"]] == [9, 8, 7]
 
     def test_page_count_reuses_exact_snapshots_and_honors_invalidation(self) -> None:
+        """Reuse exact row or key snapshots until explicit context invalidation."""
         source = self.Record.filter(name="match")
         with CalculationRunContext() as context:
             tuple(source)

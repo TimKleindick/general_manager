@@ -234,6 +234,7 @@ class NoopUpdateTests(GeneralManagerTransactionTestCase):
         )
 
     def test_empty_collection_probe_preserves_non_pk_through_membership(self):
+        """Non-primary-key through relations must remain visible and permission checked."""
         self.record.update(coded_targets_id_list=["first"], ignore_permission=True)
         with CalculationRunContext(), CaptureQueriesContext(connection) as queries:
             bucket = self.Record.filter(id=self.record.id)._with_empty_relation_probes(

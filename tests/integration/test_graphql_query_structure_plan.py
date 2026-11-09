@@ -41,6 +41,7 @@ def metadata_calls():
     previous = sys.getprofile()
 
     def observe(frame, event, arg):
+        """Count selected metadata calls while preserving the previous profile hook."""
         if event == "call" and frame.f_code in codes:
             counts[codes[frame.f_code]] += 1
         if previous is not None:
@@ -99,6 +100,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         )
 
     def test_standard_structure_work_does_not_grow_with_candidate_visits(self):
+        """Metadata preparation must stay constant as the candidate domain grows."""
         resolver = graphql_resolvers.create_list_resolver(
             lambda *_: self.Record.all(), self.Record
         )
@@ -136,6 +138,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
             assert repeated[kind] <= single[kind], (kind, single, repeated)
 
     def test_runtime_field_order_matches_unprepared_execution(self):
+        """Prepared and general execution must check the same fields in the same order."""
         paths = ["rank__lte", "target_id", "rank", "name", "rank__gte"]
         runs = []
         original = graphql_resolvers.check_read_permission
@@ -149,11 +152,13 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         assert len(runs[1]) == 12
 
     def test_repeated_declarative_callback_denial_and_error_remain_live(self):
+        """Repeated declarative callbacks must retain later denials and exceptions."""
         for error in (None, RuntimeError("second callback failed")):
             with self.subTest(error=error):
                 calls = []
 
                 def callback(instance, _user, _config, *, error=error, calls=calls):
+                    """Record each callback and deny or raise on the second evaluation."""
                     calls.append(instance)
                     if len(calls) == 2 and error is not None:
                         raise error
@@ -191,6 +196,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         assert check.call_count == 2
 
     def test_resolver_checks_denied_nonmatching_and_offpage_candidates(self):
+        """Authorization must inspect rows excluded by filters or the requested page."""
         self.Record.Factory.create(name="match", rank=2, target=self.target)
         self.Record.Factory.create(name="outside", rank=3, target=self.target)
         resolver = graphql_resolvers.create_list_resolver(
@@ -240,6 +246,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         check.assert_not_called()
 
     def test_later_unknown_operand_does_not_preempt_earlier_denial(self):
+        """An earlier field denial must occur before a later unknown operand is resolved."""
         with (
             patch.object(
                 graphql_resolvers, "check_read_permission", return_value=False
@@ -325,6 +332,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         assert check.call_count == 2
 
     def test_metadata_changes_between_calls_are_read_again(self):
+        """Separate authorization calls must observe changed field lookup aliases."""
         descriptors = self.Record.Interface.require_capability(
             "orm_support"
         ).get_field_descriptors(self.Record.Interface)
@@ -338,10 +346,12 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         assert [call.args[2] for call in check.call_args_list] == ["name", "rank"]
 
     def test_instance_interface_override_keeps_dynamic_alias_metadata_live(self):
+        """An instance interface override must resolve aliases on every candidate visit."""
         original = self.Record.Interface.get_attribute_types
         visits = 0
 
         def metadata():
+            """Move the operand alias from name to rank after its first metadata read."""
             nonlocal visits
             values = original()
             name = "name" if visits == 0 else "rank"
@@ -362,10 +372,13 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         assert [call.args[2] for call in check.call_args_list] == ["name", "rank"]
 
     def test_custom_read_capability_keeps_dynamic_alias_metadata_live(self):
+        """A custom read capability must resolve aliases on every candidate visit."""
+
         class DynamicRead(OrmReadCapability):
             visits = 0
 
             def get_attribute_types(self, interface_cls):
+                """Move the operand alias from name to rank after the first capability call."""
                 values = super().get_attribute_types(interface_cls)
                 name = "name" if self.visits == 0 else "rank"
                 self.visits += 1
@@ -460,6 +473,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
             visits = 0
 
             def __get__(self, _instance, _owner):
+                """Return descriptors whose operand alias changes after the first access."""
                 name = "name" if self.visits == 0 else "rank"
                 self.visits += 1
                 descriptors = dict(original)
@@ -495,6 +509,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
             accesses = []
 
             def identify(instance, *, accesses=accesses):
+                """Return identification once, then raise to detect skipped runtime accesses."""
                 accesses.append(instance)
                 if len(accesses) == 2:
                     message = "second identification access"
@@ -531,6 +546,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
                 self.returned = []
 
             def __get__(self, _instance, _owner):
+                """Alternate allowing and denying policies while recording descriptor accesses."""
                 permission = (
                     AllowPermission if len(self.returned) % 2 == 0 else DenyPermission
                 )
@@ -556,6 +572,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
                 self.read_results = []
 
             def __contains__(self, key):
+                """Alternate read-rule membership to expose changes in runtime access order."""
                 if key != "read":
                     return super().__contains__(key)
                 present = len(self.read_results) % 2 == 0
@@ -590,6 +607,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
                 self.iterations = 0
 
             def __iter__(self):
+                """Yield a denying rule on the fourth iteration to detect skipped evaluations."""
                 self.iterations += 1
                 if self.iterations == 4:
                     return iter(["isAuthenticated"])

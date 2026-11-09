@@ -26,6 +26,7 @@ TOKEN_B = UUID("00112233-4455-6677-8899-aabbccddee02")
 
 @pytest.fixture(params=["dev", "meilisearch"])
 def precision_index(request, monkeypatch):
+    """Index adjacent large identities in each provider and clean up persistent indexes."""
     for name in (
         "all_classes",
         "read_only_classes",
@@ -126,6 +127,7 @@ def identifiers(result):
 
 
 def reindex_fields(backend, manager, index_name, fields):
+    """Replace indexed fields and their dependency declarations before reindexing fixtures."""
     manager.SearchConfig.indexes = [
         IndexConfig(name=index_name, fields=fields, filters=fields)
     ]
@@ -275,6 +277,7 @@ def test_stale_and_mixed_meilisearch_documents_require_reindex(precision_index):
 
 
 def test_shared_index_native_kinds_and_business_roles_are_scoped(precision_index):
+    """Shared-index filters must retain each manager type's native identity semantics."""
     backend, integer_manager, index_name = precision_index
     from general_manager.search.identity import bind_search_filters
 

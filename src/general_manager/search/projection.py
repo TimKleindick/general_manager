@@ -228,6 +228,7 @@ def native_search_source_paths(
         prefix: str,
         seen: frozenset[tuple[type[GeneralManager], str]],
     ) -> None:
+        """Expand related identities into scalar paths, rejecting cycles and unknown sources."""
         key = (owner, path)
         if key in seen:
             raise SearchProjectionError.invalid_source(prefix + path)

@@ -6,10 +6,11 @@ from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
 from functools import wraps
 from time import perf_counter
-from typing import Callable, ParamSpec, TypeVar, cast, overload
+from typing import Callable, Iterable, ParamSpec, TypeVar, cast, overload
 
-from django.db import DEFAULT_DB_ALIAS, connections, transaction
+from django.db import DEFAULT_DB_ALIAS, connections, models, transaction
 from django.dispatch import Signal
+from django.db.models.signals import m2m_changed
 from django.utils.connection import ConnectionDoesNotExist
 
 from general_manager.cache.data_change_context import (
@@ -37,6 +38,83 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 logger = get_logger("cache.signals")
+
+_ORM_M2M_RUN_CONTEXT_INVALIDATION_UID = "general_manager.cache.orm_m2m"
+
+
+def clear_run_scoped_orm_and_bucket_caches() -> None:
+    """Invalidate only active-run ORM and bucket snapshots after a mutation."""
+    from general_manager.cache.run_context import current_calculation_run_context
+
+    context = current_calculation_run_context()
+    if context is not None:
+        context.clear_orm_bucket_results()
+        context.clear_bucket_indexes()
+        context.clear_bucket_projections()
+        context.clear_trusted_orm_managers()
+
+
+def _receive_orm_m2m_run_context_invalidation(
+    sender: type[models.Model],
+    *,
+    action: str,
+    **_: object,
+) -> None:
+    """Clear active-run snapshots after one configured native M2M mutation."""
+    del sender
+    if action in {"post_add", "post_remove", "post_clear"}:
+        clear_run_scoped_orm_and_bucket_caches()
+
+
+def _orm_m2m_through_models(
+    managers: Iterable[type[object]] | None = None,
+) -> tuple[type[models.Model], ...]:
+    """Return unique through models owned by initialized ORM managers."""
+    from general_manager.interface.orm_interface import OrmInterfaceBase
+    from general_manager.manager.general_manager import GeneralManager
+    from general_manager.manager.meta import GeneralManagerMeta
+
+    if managers is None:
+        managers = GeneralManagerMeta.all_classes
+    through_models: list[type[models.Model]] = []
+    seen: set[type[models.Model]] = set()
+    for manager in managers:
+        if not isinstance(manager, type) or not issubclass(manager, GeneralManager):
+            continue
+        interface = getattr(manager, "Interface", None)
+        if not isinstance(interface, type) or not issubclass(
+            interface, OrmInterfaceBase
+        ):
+            continue
+        model = getattr(interface, "_model", None)
+        if not isinstance(model, type) or not issubclass(model, models.Model):
+            continue
+        for field in model._meta.many_to_many:
+            through = getattr(getattr(field, "remote_field", None), "through", None)
+            if (
+                isinstance(through, type)
+                and issubclass(through, models.Model)
+                and through not in seen
+            ):
+                seen.add(through)
+                through_models.append(through)
+    return tuple(through_models)
+
+
+def configure_orm_m2m_run_context_invalidation() -> tuple[type[models.Model], ...]:
+    """Idempotently watch GM-owned M2M through models for local cache expiry."""
+    through_models = _orm_m2m_through_models()
+    for through_model in through_models:
+        m2m_changed.connect(
+            _receive_orm_m2m_run_context_invalidation,
+            sender=through_model,
+            weak=False,
+            dispatch_uid=cast(
+                str,
+                (_ORM_M2M_RUN_CONTEXT_INVALIDATION_UID, through_model),
+            ),
+        )
+    return through_models
 
 
 def _caller_in_atomic_block(database_alias: str) -> bool:
@@ -127,7 +205,6 @@ def data_change(
             end_dependency_data_change,
             is_dependency_data_change_active,
         )
-        from general_manager.cache.run_context import current_calculation_run_context
         from general_manager.cache.transaction_barrier import (
             collect_transaction_rewarm_keys,
             flush_transaction_rewarm_keys,
@@ -191,12 +268,7 @@ def data_change(
         try:
             if is_orm_backed:
                 hold_dependency_transaction_barrier(database_alias)
-            context = current_calculation_run_context()
-            if context is not None:
-                context.clear_orm_bucket_results()
-                context.clear_bucket_indexes()
-                context.clear_bucket_projections()
-                context.clear_trusted_orm_managers()
+            clear_run_scoped_orm_and_bucket_caches()
             transaction_context: AbstractContextManager[None]
             if not is_orm_backed:
                 transaction_context = nullcontext()
@@ -280,12 +352,7 @@ def data_change(
                                 database_alias,
                             )
 
-                context = current_calculation_run_context()
-                if context is not None:
-                    context.clear_orm_bucket_results()
-                    context.clear_bucket_indexes()
-                    context.clear_bucket_projections()
-                    context.clear_trusted_orm_managers()
+                clear_run_scoped_orm_and_bucket_caches()
 
                 instance = result
                 identification = getattr(instance, "identification", None)

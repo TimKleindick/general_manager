@@ -213,6 +213,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         )
 
     def test_input_filter_bounds_candidate_authorization(self) -> None:
+        """An input filter narrows candidates before their row checks run."""
         response = self.query(
             """
             query($subjectId: ID!) {
@@ -243,6 +244,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         )
 
     def test_computed_property_filter_is_applied_after_authorization(self) -> None:
+        """A computed predicate evaluates only after rows pass authorization."""
         response = self.query(
             """
             query($subjectId: ID!) {
@@ -286,6 +288,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         )
 
     def test_input_exclude_bounds_candidate_authorization(self) -> None:
+        """An input exclusion removes candidates before row authorization."""
         response = self.query(
             """
             query {
@@ -326,6 +329,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         )
 
     def test_permission_filter_cannot_replace_same_key_user_filter(self) -> None:
+        """Permission constraints intersect, rather than overwrite, user filters."""
         self.Calculation.permission_constraints = [
             {
                 "filter": {"period": date(2026, 2, 28)},
@@ -361,6 +365,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         )
 
     def test_permission_exclude_cannot_replace_same_key_user_exclude(self) -> None:
+        """Permission exclusions compose without replacing user exclusions."""
         self.Calculation.permission_constraints = [
             {
                 "filter": {},
@@ -404,6 +409,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
         )
 
     def test_manager_id_aliases_bound_authorization_candidates(self) -> None:
+        """Manager id aliases restrict candidates before their authorization checks."""
         resolver = create_list_resolver(
             lambda _parent, _include_inactive: self.Calculation.all(),
             self.Calculation,
@@ -444,6 +450,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                 raise AssertionError
 
             def filter(self, **kwargs):
+                """Delegate the tested identity constraint without enumerating this domain."""
                 assert "id" in kwargs or "id__exact" in kwargs
                 return subject_class.filter(**kwargs)
 
@@ -771,6 +778,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                     action: Literal["create", "read", "update", "delete"],
                     attribute: str,
                 ) -> bool:
+                    """Mark the instance when the deferred property is authorized."""
                     if attribute == "visible":
                         self.instance._field_authorized = True
                     return True
@@ -797,6 +805,115 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
 
         assert result["pageInfo"]["total_count"] == 1
         assert result["items"][0].visible is True
+
+    def test_computed_ordering_reuses_the_field_authorized_instances(self) -> None:
+        """A sort-only computed field sees state established by its field check."""
+
+        class StatefulCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                axis = Input(int, possible_values=[1, 2])
+
+            class Permission(BasePermission):
+                def describe_operation_permissions(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                ) -> tuple[str, ...]:
+                    return ()
+
+                def check_operation_permission(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                ) -> bool:
+                    return True
+
+                def check_permission(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                    attribute: str,
+                ) -> bool:
+                    """Mark the instance before its computed sort value is read."""
+                    if attribute == "rank":
+                        self.instance._field_authorized = True
+                    return True
+
+                def get_read_permission_plan(self) -> ReadPermissionPlan:
+                    return ReadPermissionPlan(
+                        filters=[{"filter": {}, "exclude": {}}],
+                        requires_instance_check=False,
+                    )
+
+            @graph_ql_property(sortable=True)
+            def rank(self) -> int:
+                return -self.axis if getattr(self, "_field_authorized", False) else 0
+
+        resolver = create_list_resolver(
+            lambda *_: StatefulCalculation.all(), StatefulCalculation
+        )
+
+        result = resolver(
+            None,
+            SimpleNamespace(context=SimpleNamespace(user=self.user)),
+            order_by=[{"field": "rank", "direction": "ASC"}],
+        )
+
+        assert [item.axis for item in result["items"]] == [2, 1]
+
+    def test_replaced_input_ordering_reuses_the_field_authorized_instances(
+        self,
+    ) -> None:
+        """A replaced input getter keeps callback state while sorting."""
+
+        class StatefulCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                axis = Input(int, possible_values=[1, 2])
+
+            class Permission(BasePermission):
+                def describe_operation_permissions(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                ) -> tuple[str, ...]:
+                    return ()
+
+                def check_operation_permission(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                ) -> bool:
+                    return True
+
+                def check_permission(
+                    self,
+                    action: Literal["create", "read", "update", "delete"],
+                    attribute: str,
+                ) -> bool:
+                    """Mark the instance before its replaced input getter is read."""
+                    if attribute == "axis":
+                        self.instance._field_authorized = True
+                    return True
+
+                def get_read_permission_plan(self) -> ReadPermissionPlan:
+                    return ReadPermissionPlan(
+                        filters=[{"filter": {}, "exclude": {}}],
+                        requires_instance_check=False,
+                    )
+
+            @property
+            def axis(self) -> int:
+                """Return the authorization-sensitive replacement input value."""
+                if getattr(self, "_field_authorized", False):
+                    return -cast(int, self.identification["axis"])
+                return 0
+
+        resolver = create_list_resolver(
+            lambda *_: StatefulCalculation.all(), StatefulCalculation
+        )
+
+        result = resolver(
+            None,
+            SimpleNamespace(context=SimpleNamespace(user=self.user)),
+            order_by=[{"field": "axis", "direction": "ASC"}],
+        )
+
+        assert [item.identification["axis"] for item in result["items"]] == [2, 1]
 
     def test_nested_manager_constraints_traverse_native_values(self) -> None:
         """Nested manager predicates retain values rather than raw identity mappings."""
@@ -880,14 +997,56 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                 axis = Input(int)
 
         row = Top(middle={"leaf": {"id": 7, "name": "secret"}}, axis=1)
+        middle = row.middle
+        assert list(
+            CalculationBucket(Middle)
+            .filter(leaf__exact=middle.leaf)
+            .filter_instances([middle])
+        ) == [middle]
+        assert (
+            list(
+                CalculationBucket(Middle)
+                .exclude(leaf__exact={"id": 7, "name": "secret"})
+                .filter_instances([middle])
+            )
+            == []
+        )
+        assert list(
+            CalculationBucket(Top).filter(middle__leaf__exact=7).filter_instances([row])
+        ) == [row]
         assert (
             list(CalculationBucket(Top).exclude(middle__leaf=7).filter_instances([row]))
+            == []
+        )
+        assert (
+            list(
+                CalculationBucket(Top)
+                .exclude(middle__leaf__exact=7)
+                .filter_instances([row])
+            )
             == []
         )
 
         resolver = create_list_resolver(lambda *_: Top.all().with_instances([row]), Top)
         permission_plan = ReadPermissionPlan(
             filters=[{"filter": {}, "exclude": {"middle__leaf": 7}}],
+            requires_instance_check=False,
+        )
+        with patch(
+            "general_manager.api.graphql_resolvers.get_read_permission_filter",
+            return_value=permission_plan,
+        ):
+            result = resolver(
+                None,
+                SimpleNamespace(context=SimpleNamespace(user=self.user)),
+                filter={"axis": 1},
+            )
+
+        assert result["pageInfo"]["total_count"] == 0
+
+        resolver = create_list_resolver(lambda *_: Top.all().with_instances([row]), Top)
+        permission_plan = ReadPermissionPlan(
+            filters=[{"filter": {}, "exclude": {"middle__leaf__exact": 7}}],
             requires_instance_check=False,
         )
         with patch(

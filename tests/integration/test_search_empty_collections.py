@@ -14,6 +14,7 @@ from general_manager.cache.run_context import (
     CalculationRunContext,
     current_calculation_run_context,
 )
+from general_manager.cache.signals import configure_orm_m2m_run_context_invalidation
 from general_manager.bucket.database_bucket import DatabaseBucket
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
@@ -72,6 +73,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
 
                 @staticmethod
                 def to_document(instance: GeneralManager) -> dict[str, object]:
+                    """Serialize owner collections into the test search document."""
                     return {
                         "name": instance.name,
                         "source_names": [
@@ -98,6 +100,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
         cls.Source = EmptyCollectionSource
         cls.Owner = EmptyCollectionOwner
         cls.Child = EmptyCollectionChild
+        configure_orm_m2m_run_context_invalidation()
         cls.general_manager_classes = [
             EmptyCollectionSource,
             EmptyCollectionOwner,
@@ -134,6 +137,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
         SearchIndexer(self.backend).index_instance(fresh_owner)
 
     def test_empty_collections_use_one_root_query(self) -> None:
+        """Empty native collections stay in the single root query fast path."""
         owner = self.Owner.Factory.create(name="empty needle")
         self.index(owner)
 
@@ -153,6 +157,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
         assert "EXISTS" in queries[0]["sql"].upper()
 
     def test_populated_public_collections_remain_visible(self) -> None:
+        """Public related objects remain eligible for the search result."""
         source = self.Source.Factory.create(name="visible source", visibility="public")
         owner = self.Owner.Factory.create(name="owner")
         self.Owner.Interface._model.objects.get(pk=owner.id).sources.add(source.id)
@@ -167,6 +172,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
         assert child.id in {item.id for item in owner.children_list}
 
     def test_hidden_related_rows_are_removed_before_count_and_pagination(self) -> None:
+        """Unreadable related rows cannot affect totals or pagination."""
         hidden_source = self.Source.Factory.create(
             name="hidden source", visibility="private"
         )
@@ -232,6 +238,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
         assert self.search(query="")["total"] == 1
 
     def test_retained_search_result_reloads_relation_after_mutation(self) -> None:
+        """Retained reverse collections reload after a manager mutation."""
         owner = self.Owner.Factory.create(name="empty owner")
         self.index(owner)
 
@@ -254,6 +261,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
     def test_retained_search_result_reloads_many_to_many_after_direct_update(
         self,
     ) -> None:
+        """Direct interface M2M updates invalidate retained empty witnesses."""
         owner = self.Owner.Factory.create(name="empty sources")
         source = self.Source.Factory.create(name="new source", visibility="public")
         self.index(owner)
@@ -271,6 +279,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
     def test_retained_search_result_reloads_many_to_many_after_manager_update(
         self,
     ) -> None:
+        """Manager M2M writes invalidate retained empty-relation witnesses."""
         owner = self.Owner.Factory.create(name="empty manager sources")
         source = self.Source.Factory.create(name="new source", visibility="public")
         self.index(owner)
@@ -288,7 +297,62 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
             assert context.orm_bucket_invalidation_generation > generation
             assert [item.id for item in retained_owner.sources_list] == [source.id]
 
+    def test_native_m2m_changes_invalidate_active_run_snapshots(self) -> None:
+        """Native forward and reverse writes expire local cached search state."""
+        owner = self.Owner.Factory.create(name="native sources")
+        hidden_source = self.Source.Factory.create(
+            name="hidden source",
+            visibility="private",
+        )
+        owner_model = self.Owner.Interface._model.objects.get(pk=owner.id)
+        source_model = self.Source.Interface._model.objects.get(pk=hidden_source.id)
+        self.index(owner)
+        # Startup and repeated test setup both use idempotent registration.
+        configure_orm_m2m_run_context_invalidation()
+        configure_orm_m2m_run_context_invalidation()
+
+        with CalculationRunContext() as context:
+            retained_owner = self.search(query="")["results"][0]
+            assert retained_owner.id == owner.id
+
+            generation = context.orm_bucket_invalidation_generation
+            source_model.empty_collection_owners.add(owner.id)
+            assert context.orm_bucket_invalidation_generation == generation + 1
+
+            # A subsequent search must still apply source permissions, even
+            # after the native relation write invalidated the local snapshot.
+            assert self.search(query="")["total"] == 0
+
+            generation = context.orm_bucket_invalidation_generation
+            owner_model.sources.remove(hidden_source.id)
+            assert context.orm_bucket_invalidation_generation == generation + 1
+
+            owner_model.sources.add(hidden_source.id)
+            generation = context.orm_bucket_invalidation_generation
+            owner_model.sources.clear()
+            assert context.orm_bucket_invalidation_generation == generation + 1
+
+            source_model.empty_collection_owners.add(owner.id)
+            generation = context.orm_bucket_invalidation_generation
+            source_model.empty_collection_owners.clear()
+            assert context.orm_bucket_invalidation_generation == generation + 1
+
+    def test_native_m2m_change_without_run_context_is_a_noop_for_caches(self) -> None:
+        """Native M2M writes remain usable when no run-local cache exists."""
+        owner = self.Owner.Factory.create(name="outside context")
+        source = self.Source.Factory.create(name="source", visibility="public")
+
+        assert current_calculation_run_context() is None
+        self.Owner.Interface._model.objects.get(pk=owner.id).sources.add(source.id)
+        assert list(
+            self.Owner.Interface._model.objects.get(pk=owner.id).sources.values_list(
+                "pk",
+                flat=True,
+            )
+        ) == [source.id]
+
     def test_cached_row_probe_does_not_cross_mutation_generation(self) -> None:
+        """Bounded cached rows cannot carry empty witnesses past mutation."""
         first = self.Owner.Factory.create(name="first")
         second = self.Owner.Factory.create(name="second")
         source = self.Source.Factory.create(name="new source", visibility="public")
@@ -301,6 +365,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
             *,
             search_date: object = None,
         ) -> GeneralManager:
+            """Mutate after the first trusted hydration to expose stale rows."""
             nonlocal mutated
             if not mutated:
                 self.Owner.Interface._model.objects.get(pk=second.id).sources.add(
@@ -334,7 +399,48 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
             )
             assert [item.id for item in repeated_second.sources_list] == [source.id]
 
+    def test_row_snapshot_precedes_django_hydration_invalidation(self) -> None:
+        """A field converter cannot rebind pre-mutation EXISTS annotations."""
+        owner = self.Owner.Factory.create(name="owner")
+        source = self.Source.Factory.create(name="new source", visibility="public")
+        name_field = self.Owner.Interface._model._meta.get_field("name")
+        mutated = False
+
+        def mutate_during_hydration(
+            value: object,
+            expression: object,
+            connection: object,
+        ) -> object:
+            del expression, connection
+            nonlocal mutated
+            if not mutated:
+                # The raw lookup below hydrates the same model again.
+                mutated = True
+                self.Owner.Interface._model.objects.get(pk=owner.id).sources.add(
+                    source.id
+                )
+                context = current_calculation_run_context()
+                assert context is not None
+                context.clear_orm_bucket_results()
+            return value
+
+        with CalculationRunContext():
+            bucket = self.Owner.filter(id=owner.id)
+            bucket = bucket._with_empty_relation_probes(["sources_list"])
+            with patch.object(
+                name_field,
+                "from_db_value",
+                mutate_during_hydration,
+                create=True,
+            ):
+                result = list(bucket)
+
+            assert [item.id for item in result[0].sources_list] == [source.id]
+
+        assert mutated
+
     def test_uncached_row_probe_does_not_cross_mutation_generation(self) -> None:
+        """Over-cap queryset rows cannot acquire a post-mutation witness."""
         first = self.Owner.Factory.create(name="first")
         second = self.Owner.Factory.create(name="second")
         source = self.Source.Factory.create(name="new source", visibility="public")
@@ -347,6 +453,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
             *,
             search_date: object = None,
         ) -> GeneralManager:
+            """Mutate during first hydration while Django retains raw rows."""
             nonlocal mutated
             if not mutated:
                 self.Owner.Interface._model.objects.get(pk=second.id).sources.add(
@@ -389,6 +496,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
             assert [item.id for item in repeated_second.sources_list] == [source.id]
 
     def test_uncached_queryset_rows_keep_original_probe_generation(self) -> None:
+        """Repeated over-cap iteration keeps the original row provenance."""
         first = self.Owner.Factory.create(name="first")
         second = self.Owner.Factory.create(name="second")
         source = self.Source.Factory.create(name="new source", visibility="public")
@@ -415,6 +523,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
             assert [item.id for item in second_result.sources_list] == [source.id]
 
     def test_uncached_queryset_rows_do_not_cross_context_lifetimes(self) -> None:
+        """Rows from one CalculationRunContext are untrusted in another."""
         first = self.Owner.Factory.create(name="first")
         second = self.Owner.Factory.create(name="second")
         source = self.Source.Factory.create(name="new source", visibility="public")
@@ -441,6 +550,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
                 assert [item.id for item in second_result.sources_list] == [source.id]
 
     def test_uncached_queryset_rows_do_not_cross_context_reentry(self) -> None:
+        """Exiting and re-entering one context expires row SQL provenance."""
         first = self.Owner.Factory.create(name="first")
         second = self.Owner.Factory.create(name="second")
         source = self.Source.Factory.create(name="new source", visibility="public")
@@ -465,6 +575,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
                 assert [item.id for item in second_result.sources_list] == [source.id]
 
     def test_uncached_queryset_rows_from_outside_context_stay_untrusted(self) -> None:
+        """Rows materialized outside a run cannot receive a later witness."""
         first = self.Owner.Factory.create(name="first")
         second = self.Owner.Factory.create(name="second")
         source = self.Source.Factory.create(name="new source", visibility="public")
@@ -500,6 +611,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
         assert len(queries) == 0
 
     def test_retained_search_result_expires_hint_after_context_exit(self) -> None:
+        """A retained result reloads relation data after its context closes."""
         owner = self.Owner.Factory.create(name="context owner")
         self.index(owner)
 
@@ -518,6 +630,7 @@ class TestSearchEmptyCollections(GeneralManagerTransactionTestCase):
     def test_retained_result_without_probe_reloads_relation_after_mutation(
         self,
     ) -> None:
+        """The non-probe relation path retains its normal mutation semantics."""
         owner = self.Owner.Factory.create(name="ordinary owner")
         self.index(owner)
 

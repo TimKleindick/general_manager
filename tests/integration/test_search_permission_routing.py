@@ -121,11 +121,13 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         super().tearDown()
 
     def search(self, *, index="global", types=None, **kwargs):
+        """Resolve the global search field for the test actor."""
         return self.resolver(
             None, self.info, index=index, types=types or ["RouteRecord"], **kwargs
         )
 
     def test_native_fast_path_skips_domain_field_scan_and_keeps_output_checks(self):
+        """Fast search filters the source domain while retaining output checks."""
         for name, visibility in [
             ("Alpha", "public"),
             ("Beta", "private"),
@@ -162,6 +164,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         backend.assert_not_called()
 
     def test_mutated_index_lists_cannot_reuse_startup_fast_approval(self):
+        """Runtime index mutations invalidate the startup fast-path proof."""
         self.Record.Factory.create(name="ordinary", visibility="public")
         index = self.Record.SearchConfig.indexes[0]
         for key in ("fields", "filters", "sorts"):
@@ -186,6 +189,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         backend.assert_not_called()
 
     def test_sparse_query_over_large_source_only_hydrates_backend_candidates(self):
+        """Sparse backend matches hydrate only the candidate primary keys."""
         model = self.Record.Interface._model
         model.objects.bulk_create(
             [
@@ -213,6 +217,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         assert len(captured) == 0
 
     def test_native_source_restriction_and_stale_index_ids_are_retained(self):
+        """Native source restrictions exclude stale and out-of-domain IDs."""
         visible = self.Record.Factory.create(name="visible", visibility="public")
         outside = self.Record.Factory.create(name="outside", visibility="public")
         stale = self.Record.Factory.create(name="stale", visibility="public")
@@ -225,6 +230,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         assert result["total"] == 1
 
     def test_hidden_related_text_cannot_affect_results_count_sort_or_pages(self):
+        """Unreadable related text cannot affect count, order, or pagination."""
         owners = []
         for text, visibility in [
             ("A", "public"),
@@ -284,6 +290,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         )
 
     def test_fast_path_relation_authorization_shares_one_resolver_budget(self):
+        """Relation authorization consumes one candidate budget across backend pages."""
         for text in ("first", "second"):
             related = self.Related.Factory.create(text=text, visibility="public")
             self.Owner.Factory.create(name="owner", related=related)
@@ -307,6 +314,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         assert search.call_count == 2
 
     def test_nullable_related_source_remains_searchable(self):
+        """Rows with a null relation remain searchable through the native source."""
         owner = self.Owner.Factory.create(name="needle", related=None)
         SearchIndexer(self.backend).index_instance(owner)
         result = self.search(index="relations", types=["RouteOwner"], query="needle")
@@ -314,6 +322,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 2})
     def test_bounded_scan_never_exposes_a_hidden_dependent_prefix(self):
+        """Bounded scans reject prefixes whose hidden relation values can change."""
         for text in ("A", "C"):
             related = self.Related.Factory.create(text=text, visibility="public")
             self.Owner.Factory.create(name="owner", related=related)
@@ -432,6 +441,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         backend.assert_not_called()
 
     def test_removed_index_field_cannot_match_or_rank_after_schema_rebuild(self):
+        """Stored fields removed from the rebuilt schema cannot match or rank."""
         record = self.Record.Factory.create(name="ordinary", visibility="public")
         self.backend.upsert(
             "global",
@@ -472,6 +482,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
                 self.search(query="private-needle")
 
     def test_malformed_fast_path_identifications_are_discarded(self):
+        """Malformed native IDs are discarded before source hydration."""
         self.Record.Factory.create(name="ordinary", visibility="public")
         expected_data = {"name": "ordinary", "visibility": "public"}
         for malformed_identification in (
@@ -500,6 +511,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
                 assert response["total"] == 0
 
     def test_custom_identity_converter_errors_remain_observable(self):
+        """Application identity converter errors remain visible to callers."""
         self.Record.Factory.create(name="ordinary", visibility="public")
         result = SearchResult(
             hits=[
@@ -521,6 +533,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
                     self.search(query="ordinary")
 
     def test_identity_metadata_errors_remain_observable(self):
+        """Identity metadata provider errors are not mistaken for bad IDs."""
         record = self.Record.Factory.create(name="ordinary", visibility="public")
         result = SearchResult(
             hits=[
@@ -541,6 +554,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
                 """Signal that identity metadata could not be resolved."""
 
             def get(self, key, default=None):
+                """Raise for identity metadata while preserving other lookups."""
                 if key == "id":
                     raise self.MetadataUnavailableError
                 return super().get(key, default)
@@ -554,6 +568,7 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
                     self.search(query="ordinary")
 
     def test_custom_input_cast_and_normalize_errors_remain_observable(self):
+        """Input cast and normalization callbacks retain their error semantics."""
         self.Record.Factory.create(name="ordinary", visibility="public")
         result = SearchResult(
             hits=[

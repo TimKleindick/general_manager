@@ -1055,15 +1055,21 @@ def normalize_id_filter_value(
         """Cast one identity without hiding metadata or custom-converter failures."""
         try:
             return _cast_identity_scalar(converter, item)
-        except (TypeError, ValueError):
+        except (AttributeError, TypeError, ValueError) as exc:
             # The metadata and converter have already been selected above. At
             # this point only the proven built-in scalar conversion may be
             # ignored for an indexed candidate; application converters and
             # metadata failures must remain observable.
-            if _skip_malformed_native_id and _identity_filter_uses_plain_input(
-                field_type, attribute_name
-            ):
-                return _MALFORMED_NATIVE_ID
+            if _skip_malformed_native_id:
+                plain_input = (
+                    _identity_filter_uses_plain_input(field_type, attribute_name)
+                    if not isinstance(exc, AttributeError)
+                    else _identity_filter_uses_plain_input(
+                        field_type, attribute_name, expected_type=UUID
+                    )
+                )
+                if plain_input:
+                    return _MALFORMED_NATIVE_ID
             raise
 
     prop = interface.get_graph_ql_properties().get(attribute_name)
@@ -1129,13 +1135,18 @@ def _identity_filter_converter(
 
 
 def _identity_filter_uses_plain_input(
-    field_type: type[GeneralManager], attribute_name: str
+    field_type: type[GeneralManager],
+    attribute_name: str,
+    *,
+    expected_type: type | None = None,
 ) -> bool:
     """Identify the built-in scalar cast used by a native ORM identity.
 
     Search may discard malformed backend IDs only for the standard, callback-free
     input declaration. Custom normalizers, domains, validators and input classes
-    keep their converter errors observable to the application.
+    keep their converter errors observable to the application. When
+    ``expected_type`` is supplied, the declaration must use that exact scalar;
+    this keeps exceptional conversion handling narrower than ordinary casts.
     """
     interface = field_type.Interface
     input_fields = getattr(interface, "input_fields", {})
@@ -1177,6 +1188,7 @@ def _identity_filter_uses_plain_input(
             plain_input.type is scalar_type
             for scalar_type in (str, bool, int, float, Decimal, date, datetime, UUID)
         )
+        and (expected_type is None or plain_input.type is expected_type)
         and plain_input.possible_values is None
         and plain_input.min_value is None
         and plain_input.max_value is None
@@ -1417,6 +1429,7 @@ def register_search_query(
     }
 
     def index_definitions(config: SearchConfigSpec | None) -> tuple[object, ...]:
+        """Snapshot mutable index declarations for startup-proof invalidation."""
         # IndexConfig is frozen, but its application-supplied sequences/mapping
         # can be mutable. Detach the values used to guard startup proof reuse.
         return (

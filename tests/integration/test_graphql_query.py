@@ -118,6 +118,7 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         GENERAL_MANAGER={"GRAPHQL_DEFAULT_PAGE_SIZE": 2, "GRAPHQL_MAX_PAGE_SIZE": 3}
     )
     def test_omitted_nested_and_group_pagination_returns_all_items(self):
+        """Omitted pagination must ignore configured defaults for nested lists and groups."""
         parent = self.commercials.create(
             name="Page Parent", capex="1 USD", opex="1 USD", creator_id=self.user.id
         )

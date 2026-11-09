@@ -173,6 +173,7 @@ class TestSearchRoutingBenchmark(GeneralManagerTransactionTestCase):
         cls.general_manager_classes = [SearchRoutingRecord]
 
     def setUp(self) -> None:
+        """Prepare opt-in benchmark rows and indexes outside the measured requests."""
         super().setUp()
         if not _enabled():
             self.skipTest(
@@ -215,6 +216,7 @@ class TestSearchRoutingBenchmark(GeneralManagerTransactionTestCase):
         SearchIndexer(self.backend).reindex_manager(self.Record)
 
     def tearDown(self) -> None:
+        """Reset the search backend and restore any diagnostic scan-limit override."""
         configure_search_backend(None)
         settings_override = getattr(self, "_settings_override", None)
         if settings_override is not None:

@@ -184,9 +184,13 @@ class GeneralmanagerConfig(AppConfig):
         from general_manager.search.m2m_invalidation import (
             configure_search_m2m_invalidation,
         )
+        from general_manager.cache.signals import (
+            configure_orm_m2m_run_context_invalidation,
+        )
 
         configure_search_invalidation()
         configure_search_m2m_invalidation()
+        configure_orm_m2m_run_context_invalidation()
         configure_workflow_engine_from_settings(settings)
         configure_event_registry_from_settings(settings)
         configure_workflow_signal_bridge_from_settings(settings)

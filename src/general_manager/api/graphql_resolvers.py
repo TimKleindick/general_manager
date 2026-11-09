@@ -1781,6 +1781,7 @@ def create_list_resolver(
         group_by: list[str] | None = None,
         include_inactive: bool = False,
     ) -> ListResolverPayload:
+        """Resolve one authorized list request before grouping, sorting, and paging."""
         effective_pagination = normalize_pagination(page, page_size)
         _ensure_as_of_compatible(self)
         base_queryset = base_getter(self, include_inactive)
@@ -1811,10 +1812,11 @@ def create_list_resolver(
         )
         from general_manager.api.graphql_query_permissions import authorize_query_fields
 
+        ordering_paths = {term.field for term in order_by_to_sort_terms(order_by)}
         operand_paths = (
             set(plan.filters) | set(plan.excludes) | set(plan.normalized_excludes)
         )
-        operand_paths.update(term.field for term in order_by_to_sort_terms(order_by))
+        operand_paths.update(ordering_paths)
         from general_manager.interface import CalculationInterface
 
         interface = getattr(manager_class, "Interface", None)
@@ -1931,14 +1933,28 @@ def create_list_resolver(
                 preparation, manager_class, info, source="list"
             )
             qs = authorization_result.queryset
-            if operand_paths and (
-                deferred_plan.filters
-                or deferred_plan.excludes
-                or deferred_plan.normalized_excludes
+            from general_manager.api.graphql_value_contract import _manager_source
+
+            ordering_roots = {path.split("__", 1)[0] for path in ordering_paths}
+            ordering_requires_frozen_instances = any(
+                "__" in path for path in ordering_paths
+            ) or any(
+                root not in manager_class.Interface.input_fields
+                or not _manager_source(manager_class, root)
+                for root in ordering_roots
+            )
+            if ordering_requires_frozen_instances or (
+                operand_paths
+                and (
+                    deferred_plan.filters
+                    or deferred_plan.excludes
+                    or deferred_plan.normalized_excludes
+                )
             ):
-                # Query-field callbacks and deferred calculation getters can
-                # both rely on per-instance state. Keep their one authorized
-                # row instance instead of reconstructing it for the predicate.
+                # Query-field callbacks can establish per-instance state used
+                # by deferred predicates or computed/nested ordering. Keep
+                # those authorized instances without materializing plain
+                # constructor-input ordering such as daily date ranges.
                 qs = qs.with_instances(qs)
             authorize_query_fields(
                 qs,

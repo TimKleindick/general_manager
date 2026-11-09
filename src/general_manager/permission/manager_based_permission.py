@@ -889,9 +889,11 @@ class _AttributePermissionDefinitions(Mapping[str, dict[permission_type, list[st
     """
 
     def __init__(self, permission_class: type[BasePermission]) -> None:
+        """Snapshot class namespaces in MRO order without invoking descriptors."""
         self.sources = tuple(vars(cls).copy() for cls in permission_class.__mro__)
 
     def __getitem__(self, attribute: str) -> dict[permission_type, list[str]]:
+        """Return the first dictionary declaration for a non-dunder attribute."""
         if not attribute.startswith("__"):
             for source in self.sources:
                 value = source.get(attribute)
@@ -900,6 +902,7 @@ class _AttributePermissionDefinitions(Mapping[str, dict[permission_type, list[st
         raise KeyError(attribute)
 
     def __iter__(self) -> Iterator[str]:
+        """Iterate unique dictionary declarations in base-to-derived insertion order."""
         return iter(
             dict.fromkeys(
                 name
@@ -910,6 +913,7 @@ class _AttributePermissionDefinitions(Mapping[str, dict[permission_type, list[st
         )
 
     def __len__(self) -> int:
+        """Count distinct non-dunder dictionary declarations across the class hierarchy."""
         return sum(1 for _ in self)
 
 
@@ -977,6 +981,7 @@ def _can_prepare_local_read_definitions(permission_class: object) -> bool:
         return False
 
     def plain_rules(value: object) -> bool:
+        """Accept only builtin lists or tuples containing exact string rule values."""
         if type(value) is not list and type(value) is not tuple:
             return False
         return all(

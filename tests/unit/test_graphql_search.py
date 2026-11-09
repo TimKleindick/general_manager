@@ -335,6 +335,7 @@ class GraphQLSearchTests(SimpleTestCase):
         assert [item.identification for item in response["results"]] == [{"id": 1}]
 
     def test_duplicate_index_names_use_first_custom_projection_operands(self) -> None:
+        """Duplicate index names must use the first projection and its permission operands."""
         original_indexes = Project.SearchConfig.indexes
         Project.SearchConfig.indexes = [
             IndexConfig(name="global", fields=["name"]),
@@ -760,6 +761,7 @@ class GraphQLSearchTests(SimpleTestCase):
         assert len(backend.search_calls) == 6
 
     def test_graphql_search_rejects_explicitly_incomplete_terminal_pages(self) -> None:
+        """A terminal page marked incomplete must fail instead of claiming an exact total."""
         backend = self._configure_counting_backend_with_public_rows(public_count=1)
         complete_hit = backend.search("global", "", limit=10, offset=0).hits[0]
         info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
@@ -960,6 +962,7 @@ class GraphQLSearchTests(SimpleTestCase):
     def test_graphql_search_bounded_total_marks_best_effort_limit_inexact(
         self,
     ) -> None:
+        """Best-effort totals must not permit success when the scan budget is exhausted."""
         backend = self._configure_counting_backend_with_public_rows(
             public_count=5,
             backend=BestEffortTotalSearchBackend(),
@@ -993,6 +996,7 @@ class GraphQLSearchTests(SimpleTestCase):
     def test_graphql_search_bounded_total_is_conservative_at_scan_boundary(
         self,
     ) -> None:
+        """Reaching the scan boundary without proven exhaustion must fail conservatively."""
         backend = self._configure_counting_backend_with_public_rows(public_count=5)
         field = GraphQL._query_fields["search"]
         info = MagicMock()
@@ -1046,6 +1050,7 @@ class GraphQLSearchTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 2})
     def test_graphql_search_large_window_cannot_expand_scan_budget(self) -> None:
+        """Large pages or offsets must never enlarge the configured search scan budget."""
         backend = self._configure_counting_backend_with_public_rows(public_count=5)
         field = GraphQL._query_fields["search"]
         info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
@@ -1097,6 +1102,7 @@ class GraphQLSearchTests(SimpleTestCase):
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 3})
     def test_graphql_search_shares_scan_budget_across_manager_types(self) -> None:
+        """All requested manager types must consume one shared search scan budget."""
         GeneralManagerMeta.all_classes = [Project, AlternateProject]
         GraphQL._query_fields = {}
         GraphQL.graphql_type_registry = {}
@@ -1768,6 +1774,8 @@ class GraphQLSearchTests(SimpleTestCase):
         ]
 
     def test_graphql_search_sorting_numeric_and_dates(self) -> None:
+        """Search ordering must compare numeric values and ISO dates in their proper order."""
+
         class RankedInterface(BaseTestInterface):
             input_fields: ClassVar[dict[str, Input]] = {"id": Input(int)}
             data_store: ClassVar[dict[int, dict[str, object]]] = {

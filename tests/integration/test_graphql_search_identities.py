@@ -24,12 +24,16 @@ from general_manager.api.graphql_query_permissions import (
 from general_manager.api.property import graph_ql_property
 from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.manager import GeneralManager, Input
-from general_manager.permission import ManagerBasedPermission, OverrideManagerPermission
+from general_manager.permission import (
+    AdditiveManagerPermission,
+    ManagerBasedPermission,
+    OverrideManagerPermission,
+)
 from general_manager.permission.base_permission import ReadPermissionPlan
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.backends.meilisearch import MeilisearchBackend
-from general_manager.search.backend import SearchResult
+from general_manager.search.backend import SearchHit, SearchResult
 from general_manager.search.config import IndexConfig, SearchConfigSpec
 from general_manager.search.indexer import _serialize_document
 from general_manager.search.indexer import SearchIndexer
@@ -43,10 +47,17 @@ class SearchIdentityPermission(ManagerBasedPermission):
     __read__: ClassVar[list[str]] = ["public"]
 
 
+class SearchUuidPermission(AdditiveManagerPermission):
+    """Use the declarative row gate required to exercise UUID fast search."""
+
+    __read__: ClassVar[list[str]] = ["public"]
+
+
 def search_config(
     *fields,
     property_dependencies: dict[str, tuple[str, ...]] | None = None,
 ):
+    """Build a global identity-focused search configuration for a test manager."""
     dependencies = {field: (field,) for field in fields}
     dependencies.update(property_dependencies or {})
     return type(
@@ -215,6 +226,15 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
             def record_keys(self) -> list[UUID]:
                 return [self.token]
 
+        class SearchUuidId(GeneralManager):
+            class Interface(DatabaseInterface):
+                input_fields: ClassVar[dict[str, Input]] = {"id": Input(UUID)}
+                id = models.UUIDField(primary_key=True)
+                label = models.CharField(max_length=20, default="public")
+
+            Permission = SearchUuidPermission
+            SearchConfig = search_config("label")
+
         class SearchAuto(GeneralManager):
             class Interface(DatabaseInterface):
                 serial = models.BigAutoField(primary_key=True)
@@ -250,12 +270,14 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
         cls.Integer = SearchInteger
         cls.Code = SearchCode
         cls.Uuid = SearchUuid
+        cls.UuidId = SearchUuidId
         cls.Auto = SearchAuto
         cls.Composite = SearchComposite
         cls.general_manager_classes = [
             SearchInteger,
             SearchCode,
             SearchUuid,
+            SearchUuidId,
             SearchAuto,
             SearchComposite,
         ]
@@ -277,8 +299,9 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
             )
             self.Auto.Interface._model.objects.create(serial=key)
         self.Uuid.Interface._model.objects.create(token=TOKEN)
+        self.UuidId.Interface._model.objects.create(id=TOKEN, label="public")
         indexer = SearchIndexer(self.backend)
-        for manager in (self.Integer, self.Code, self.Uuid, self.Auto):
+        for manager in (self.Integer, self.Code, self.Uuid, self.UuidId, self.Auto):
             indexer.reindex_manager(manager)
         indexer.index_instance(self.Composite(id=7, account="007"))
 
@@ -395,6 +418,105 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
                     self.assertGreater(expected, 0)
                     self.assert_total(manager, {field + suffix: serialized}, expected)
                     self.assert_total(manager, {field + suffix: native}, expected)
+
+    def test_fast_uuid_search_discards_numeric_identifier_and_keeps_valid_hit(
+        self,
+    ) -> None:
+        """A numeric UUID hit is ignored without hiding a valid UUID hit."""
+        stored_hit = self.backend.search(
+            "global", "", types=[self.UuidId.__name__]
+        ).hits[0]
+        result = SearchResult(
+            hits=[
+                SearchHit(
+                    id="numeric-uuid",
+                    type=self.UuidId.__name__,
+                    identification={"id": 12},
+                    data=stored_hit.data,
+                ),
+                SearchHit(
+                    id=stored_hit.id,
+                    type=self.UuidId.__name__,
+                    identification={"id": str(TOKEN)},
+                    data=stored_hit.data,
+                ),
+            ],
+            total=2,
+        )
+        with patch.object(self.backend, "search", return_value=result):
+            response = self.execute_search(self.UuidId, {})
+
+        self.assertIsNone(response.errors, response.errors)
+        self.assertEqual(response.data["search"]["total"], 1)
+
+    def test_uuid_attribute_errors_remain_observable_for_custom_converter_metadata(
+        self,
+    ) -> None:
+        """Custom UUID conversion and metadata AttributeErrors still propagate."""
+        stored_hit = self.backend.search(
+            "global", "", types=[self.UuidId.__name__]
+        ).hits[0]
+        result = SearchResult(
+            hits=[
+                SearchHit(
+                    id="uuid-error",
+                    type=self.UuidId.__name__,
+                    identification={"id": str(TOKEN)},
+                    data=stored_hit.data,
+                )
+            ],
+            total=1,
+        )
+
+        class CustomUUIDConversionError(AttributeError):
+            """Signal that the application-owned UUID converter was invoked."""
+
+        class CustomUUIDNormalizationError(AttributeError):
+            """Signal that the application-owned UUID normalizer was invoked."""
+
+        def raising_cast(_input, value, *args, **kwargs):
+            raise CustomUUIDConversionError
+
+        def raising_normalize(_input, value, *args, **kwargs):
+            raise CustomUUIDNormalizationError
+
+        class RaisingUUIDMetadata(dict):
+            """Raise when the UUID identity metadata is selected."""
+
+            class MetadataUnavailableError(AttributeError):
+                """Signal that UUID identity metadata is unavailable."""
+
+            def get(self, key, default=None):
+                """Raise for the UUID entry while preserving other metadata."""
+                if key == "id":
+                    raise self.MetadataUnavailableError
+                return super().get(key, default)
+
+        metadata = RaisingUUIDMetadata(self.UuidId.Interface.get_attribute_types())
+        for patcher, error_type in (
+            (
+                patch.object(Input, "cast", raising_cast),
+                CustomUUIDConversionError,
+            ),
+            (
+                patch.object(Input, "normalize", raising_normalize),
+                CustomUUIDNormalizationError,
+            ),
+            (
+                patch.object(
+                    self.UuidId.Interface,
+                    "get_attribute_types",
+                    return_value=metadata,
+                ),
+                RaisingUUIDMetadata.MetadataUnavailableError,
+            ),
+        ):
+            with self.subTest(error_type=error_type.__name__), patcher:
+                with patch.object(self.backend, "search", return_value=result):
+                    response = self.execute_search(self.UuidId, {})
+                self.assertIsNotNone(response.errors)
+                assert response.errors is not None
+                self.assertIsInstance(response.errors[0].original_error, error_type)
 
     def test_declared_properties_convert_scalars_and_collection_candidates(
         self,
