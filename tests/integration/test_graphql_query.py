@@ -460,6 +460,27 @@ class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
         self.assertIn("Expected value of type 'ProjectOrderBy!'", errors[0]["message"])
         self.assertIn("found null", errors[0]["message"])
 
+    def test_duplicate_sort_fields_preserve_the_public_input_error(self):
+        """Schema-valid duplicate sort fields do not become sanitized server errors."""
+        response = self.query(
+            """
+            query {
+              projectList(orderBy: [{field: name}, {field: name, direction: DESC}]) {
+                items { id }
+              }
+            }
+            """
+        )
+
+        self.assertResponseHasErrors(response)
+        error = response.json()["errors"][0]
+        self.assertEqual(
+            error["message"], "Ordering field 'name' occurs more than once."
+        )
+        self.assertNotEqual(
+            error.get("extensions", {}).get("code"), "INTERNAL_SERVER_ERROR"
+        )
+
     def test_project_order_enum_exposes_only_direct_relation_scalars(self):
         query = """
         query {

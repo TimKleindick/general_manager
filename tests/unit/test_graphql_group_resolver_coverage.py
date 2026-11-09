@@ -220,6 +220,28 @@ def test_invalid_ordering_is_translated_for_normal_and_grouped_buckets() -> None
         )
 
 
+@pytest.mark.parametrize(
+    ("order_by", "message"),
+    [
+        ({"field": "name"}, "orderBy must be a list"),
+        ([{"field": "name", "direction": "SIDEWAYS"}], "must be ASC or DESC"),
+        ([{"field": "name"}, {"field": "name"}], "occurs more than once"),
+    ],
+)
+def test_list_operand_ordering_errors_keep_the_public_message_and_cause(
+    order_by: object, message: str
+) -> None:
+    """Early operand parsing retains the established GraphQL input-error contract."""
+    source = SimpleBucket(_ResolverManager, [])
+    resolver = create_list_resolver(lambda _parent, _inactive: source, _ResolverManager)
+
+    with pytest.raises(GraphQLError, match=message) as caught:
+        resolver(object(), _ResolverInfo(), order_by=order_by)
+
+    assert isinstance(caught.value.__cause__, GraphQLOrderingInputError)
+    assert str(caught.value) == str(caught.value.__cause__)
+
+
 def test_grouped_projection_sorting_resolves_relation_ids_from_all_sources() -> None:
     related = _RelatedManager(7)
 
@@ -590,7 +612,7 @@ def test_request_resolver_rejects_global_operations_after_local_materialization(
             "general_manager.api.graphql_resolvers._requested_request_global_operation",
             return_value=None,
         ) as check_global_operation,
-        pytest.raises(GraphQLOrderingInputError, match="must be ASC or DESC"),
+        pytest.raises(GraphQLError, match="must be ASC or DESC"),
     ):
         resolver(
             object(),
