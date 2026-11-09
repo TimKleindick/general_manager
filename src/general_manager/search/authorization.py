@@ -53,6 +53,7 @@ def analyze_search_projection(
         field: str,
         visited: frozenset[type[GeneralManager]],
     ) -> None:
+        """Collect reasons delegated or custom field policies require runtime checks."""
         if owner in visited:
             reasons.add("cyclic delegated permission")
             return

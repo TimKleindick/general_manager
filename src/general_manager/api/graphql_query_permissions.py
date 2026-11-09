@@ -318,6 +318,7 @@ class _NativeQueryStructures:
     def flat_field(
         self, instance: GeneralManager, parts: tuple[str, ...]
     ) -> _FlatQueryField | None:
+        """Return a reusable flat-field plan only for unchanged native manager contracts."""
         manager = type(instance)
         if type(manager) is not GeneralManagerMeta:
             return None

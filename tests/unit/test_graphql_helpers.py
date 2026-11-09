@@ -745,6 +745,7 @@ class GraphQLHelperTests(SimpleTestCase):
         assert [item.identification["id"] for item in first_page] == [0, 1, 2, 3, 4]
 
     def test_apply_pagination_no_args_returns_the_complete_bucket(self) -> None:
+        """Absent pagination arguments must preserve every item in the source bucket."""
         queryset = SimpleBucket(
             _DummyManager, [_DummyManager(id=value) for value in range(12)]
         )

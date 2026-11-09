@@ -487,6 +487,7 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         self,
         instance: models.Model,
     ) -> GeneralManagerType:
+        """Hydrate one trusted row while admitting only current SQL witnesses."""
         self._ensure_as_of_compatible()
         interface_hydrate = getattr(
             self._manager_class.Interface, "_from_trusted_orm_instance", None
@@ -734,17 +735,20 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
             return cast(tuple[models.Model, ...], cached)
 
         queryset_was_evaluated = getattr(self._data, "_result_cache", None) is not None
+        # Capture before evaluating the queryset. Django hydration can run
+        # application field converters which may mutate data and invalidate the
+        # active run while this slice is materialized.
+        snapshot = (
+            _UNTRUSTED_EMPTY_RELATION_PROBE_SNAPSHOT
+            if queryset_was_evaluated
+            else self._empty_relation_probe_snapshot()
+        )
         rows = tuple(self._data[: MAX_RUN_SCOPED_BUCKET_RESULT_ROWS + 1])
         if len(rows) > MAX_RUN_SCOPED_BUCKET_RESULT_ROWS:
             return None
         # A pre-evaluated queryset can have been materialized by another
         # context (or outside every context). Missing provenance is therefore
         # deliberately untrusted, not retroactively bound to this run.
-        snapshot = (
-            _UNTRUSTED_EMPTY_RELATION_PROBE_SNAPSHOT
-            if queryset_was_evaluated
-            else self._empty_relation_probe_snapshot()
-        )
         self._stamp_empty_relation_probe_snapshot(rows, snapshot)
         primary_keys = tuple(row.pk for row in rows)
         context.set_orm_bucket_rows(signature, rows)

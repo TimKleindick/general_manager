@@ -169,6 +169,7 @@ class _AuthenticatedPrecisionTests(GeneralManagerTransactionTestCase):
         return payload
 
     def test_authenticated_conditional_equality_and_membership(self):
+        """Native identity normalization must preserve precision and actor permission checks."""
         for field in ("key", "customer_id"):
             for suffix in ("", "__exact", "__in"):
                 with self.subTest(field=field, suffix=suffix):

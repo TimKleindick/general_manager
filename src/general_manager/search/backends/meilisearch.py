@@ -548,6 +548,7 @@ class MeilisearchBackend:
 
     @staticmethod
     def _sort_has_priority(settings: Mapping[str, object]) -> bool:
+        """Report whether explicit sorting precedes every other ranking rule."""
         rules = settings.get("rankingRules")
         return isinstance(rules, Sequence) and bool(rules) and rules[0] == "sort"
 

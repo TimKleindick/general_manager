@@ -241,6 +241,7 @@ class _MetadataClient:
         return self.index
 
     def get_version(self) -> object:
+        """Record version probes and return or raise the configured provider response."""
         self.version_calls += 1
         if isinstance(self.version, Exception):
             raise self.version

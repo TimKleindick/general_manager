@@ -29,6 +29,7 @@ class TestPermissionDefinitionMetadata(SimpleTestCase):
             assert policies._can_prepare_local_read_definitions(Permission) is False
 
     def test_structure_probe_does_not_normalize_dynamic_default_settings(self) -> None:
+        """Structural eligibility checks must leave dynamic default settings unevaluated."""
         with patch.object(
             policies, "_get_default_permissions", side_effect=AssertionError("not lazy")
         ) as defaults:
@@ -41,6 +42,8 @@ class TestPermissionDefinitionMetadata(SimpleTestCase):
         defaults.assert_not_called()
 
     def test_builtin_declarations_do_not_repeat_descriptor_discovery(self) -> None:
+        """Repeated builtin declarations must avoid repeated descriptor discovery."""
+
         class Permission(policies.OverrideManagerPermission):
             __read__: ClassVar[list[str]] = ["public"]
             secret: ClassVar[dict[str, list[str]]] = {"read": ["isAdmin"]}
@@ -148,6 +151,8 @@ class TestPermissionDefinitionMetadata(SimpleTestCase):
         assert policies.additional_local_read_permission(Permission, "name") is False
 
     def test_preparation_does_not_reuse_another_actors_result(self) -> None:
+        """Prepared rule metadata must never reuse a permission decision across actors."""
+
         class Permission(policies.OverrideManagerPermission):
             __read__: ClassVar[list[str]] = ["public"]
             secret: ClassVar[dict[str, list[str]]] = {"read": ["isAdmin"]}

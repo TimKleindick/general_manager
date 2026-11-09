@@ -265,6 +265,11 @@ collections avoid a subsequent SELECT. Populated, custom, historical and
 cross-database relations retain their normal loading and permission checks.
 Empty-collection proofs belong to their calculation run and expire when that
 run ends or the existing data-change invalidation clears its ORM results.
+Native Django M2M `add`, `remove`, `clear`, and `set` operations on initialized
+GM models also clear these local snapshots, in either relation direction.
+This cache invalidation does not schedule indexing or update persistent
+dependency caches. Arbitrary raw or bulk ORM writes bypass the supported
+mutation lifecycle; do not reuse an existing calculation run after such writes.
 Retained managers cannot reuse a cached empty value derived from an expired proof.
 Validated projection paths are reused from schema construction; runtime field
 and relation checks still run. A changed search configuration, including an

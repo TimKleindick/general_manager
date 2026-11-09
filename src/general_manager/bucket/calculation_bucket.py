@@ -883,6 +883,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         parts = lookup.split("__") if lookup else []
         candidate = value
         scalar_input: Input[type[object]] | None = None
+        input_field: Input[type[object]] | None = None
         nullable_manager_type = declared_manager_type
         operator = ""
         for position, part in enumerate(parts):
@@ -965,7 +966,7 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         if operator and operator not in _SUPPORTED_LOOKUPS:
             raise FrozenCalculationLookupError.unsupported(operator)
 
-        if not operator and isinstance(candidate, GeneralManager):
+        if operator in ("", "exact") and isinstance(candidate, GeneralManager):
             identification = candidate.identification
             identity_input = candidate.Interface.input_fields.get("id")
             if (

@@ -125,6 +125,7 @@ def register_collection_probe(
 
 
 def collection_probe(accessor: object) -> NativeCollectionProbe | None:
+    """Resolve a registered function accessor to its live native collection probe."""
     if not isinstance(accessor, FunctionType):
         return None
     binding = _COLLECTION_PROBES.get(accessor)

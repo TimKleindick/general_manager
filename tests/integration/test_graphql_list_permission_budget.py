@@ -211,6 +211,7 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
         )
 
         def check(instance: GeneralManager, _info: object, field: str) -> bool:
+            """Deny the hidden row only when its first filter field is inspected."""
             return not (instance.name == "hidden" and field == "first_filter")
 
         with (
@@ -253,6 +254,7 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
     def test_repeated_scalar_operands_keep_runtime_checks_per_candidate_occurrence(
         self,
     ) -> None:
+        """Repeated scalar operands must still run permission checks for each occurrence."""
         record = self.Record.Factory.create(
             name="repeat", first_filter="first", second_filter="second", rank=1
         )
@@ -303,6 +305,7 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
                 calls = 0
 
                 def callback(_instance, _user, _config, *, error=error):
+                    """Allow the first callback, then deny or raise on its second invocation."""
                     nonlocal calls
                     calls += 1
                     if calls == 2 and error is not None:
@@ -338,12 +341,14 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
     def test_repeated_scalar_denial_still_covers_nonmatching_and_offpage_rows(
         self,
     ) -> None:
+        """A denied operand outside the filtered page must still reject the request."""
         for rank in (1, 2):
             self.Record.Factory.create(
                 name=str(rank), first_filter="first", second_filter="second", rank=rank
             )
 
         def check(instance: GeneralManager, _info: object, field: str) -> bool:
+            """Deny the second row only when its rank operand is inspected."""
             return not (instance.rank == 2 and field == "rank")
 
         with (
@@ -400,6 +405,7 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
         def tighten_after_first_check(
             instance: GeneralManager, request_info: object, field: str
         ) -> bool:
+            """Tighten the name policy after the first check to expose stale decisions."""
             nonlocal checks
             result = native(instance, request_info, field)
             checks += 1
