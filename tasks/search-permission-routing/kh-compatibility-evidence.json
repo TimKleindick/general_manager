@@ -92,9 +92,15 @@
   "frontend_dependency": {
     "package": "@constellium/know-ui-library@3.20.0",
     "offline_result": "ENOTCACHED",
-    "current_registry_result": "HTTP 401; existing configured token cannot authenticate",
     "log": "/tmp/kh-gm583-followup/ui-package-fetch.log",
-    "credentials_changed": false
+    "historical_registry_result": "HTTP 401; existing configured token cannot authenticate",
+    "current_registry_result": "Exact locked dependency installed successfully with user-authorized existing deploy credential",
+    "registry_configuration_unchanged": true,
+    "lockfile_unchanged": true,
+    "credential_scope": "Ephemeral NODE_AUTH_TOKEN for npm ci --ignore-scripts; removed before offline lifecycle rebuild and all validation",
+    "installation_receipt": "/tmp/kh-gm583-followup/frontend-validation/source-manifest.json",
+    "historical_credentials_changed": false,
+    "persistent_credentials_modified": false
   },
   "publication_boundary": "KH dependency pins still name published 0.87.5. These results bind the candidate source; no hosted new-version KH green or release is claimed.",
   "general_manager_validation": {
@@ -117,5 +123,26 @@
     "django": "5.2.17",
     "log_sha256": "87a06c5ea0e6eacce4fe87e9f88db203accc81f4a6a4e93e3b9bc12b41e9dfee",
     "junit_sha256": "5db18a62fa807afa210c0df572eeb55add39c6ec6c5f98a6b02a545176c665e7"
+  },
+  "hosted_general_manager_validation": {
+    "commit": "ef8d1d15c9b198343c65ce79d08271806d18a564",
+    "run_url": "https://github.com/TimKleindick/general_manager/actions/runs/42593154253",
+    "conclusion": "success",
+    "python_matrix": "3.12 / 3.13 / 3.14: 16553 passed, 120 skipped each",
+    "database_matrix": "PostgreSQL18 / MariaDB11.8: 16455 passed, 120 skipped, 98 deselected each",
+    "production_source_unchanged": true
+  },
+  "frontend_validation": {
+    "receipt": "kh-frontend-validation.json",
+    "status": "Local gates passed; existing SSO race passed with configured retry and reproduced in bounded characterization",
+    "unit_passed": 1198,
+    "integration_passed": 565,
+    "storybook_jest_passed": 394,
+    "storybook_playwright_passed": 12,
+    "visual_passed": 179,
+    "fixtures_and_documentation_repaired": 17,
+    "production_code_or_dependencies_modified": false,
+    "copied_to_original_checkout": true,
+    "kh_committed_or_pushed": false
   }
 }

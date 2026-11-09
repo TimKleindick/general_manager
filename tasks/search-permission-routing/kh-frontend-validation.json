@@ -1,0 +1,309 @@
+{
+  "schema_version": 1,
+  "purpose": "Final KH frontend fixture repairs and validation after authorized private npm installation",
+  "date_utc": "2026-11-09T10:52:45.443212+00:00",
+  "source": {
+    "kh_base_head": "3dd8149665c4d8413713260e6c1f18a33135a44b",
+    "original_checkout": "/Users/tim/Documents/Codex/2026-11-06/task/knowledge_hub-pr10933-gm582",
+    "file_count": 1925,
+    "baseline_matches_original_before_repairs": true,
+    "baseline_manifest_sha256": "d1ae109f72a84a947bb552bee42759939eb9b1b274bb3666740e54d8397b8def",
+    "final_manifest_sha256": "afd899c9020076a763d9bd06dc66512190289f1f4a405e5f5cc90f14313db4f3",
+    "unchanged_during_final_verification": true,
+    "modified_files": {
+      "frontend/docs/graphql-workflow.md": {
+        "before": "a3fa449366929e84d0366a9d1cf57145a0ae247fba30159a8f48766b85f7031a",
+        "after": "0d71a49db02238934a287022d05bb7cb2af48c0c04e4df74b6901c187dffa86e"
+      },
+      "frontend/src/features/absence/components/DetailModal/tests/integration/DetailModal.test.tsx": {
+        "before": "466a75892d93f6d01e9b9012b717126cbf6cd14aad6a0134f4a81f3d5a7f4429",
+        "after": "b25860b4b9749a93599a9a85f72a2f64f8ff92b97bc00a51e3f4a48d7c817766"
+      },
+      "frontend/src/features/absence/components/EditModal/tests/integration/EditModal.test.tsx": {
+        "before": "1e50874fce30f5f0ea5bc74de76a2997a5d7050a9d5d4bc835b457ccb9e748aa",
+        "after": "a822e921c32aff841330b32c6303b59c1e7632fd7446d7a97d500ab135c9b17c"
+      },
+      "frontend/src/features/absence/components/PersonalView/tests/integration/PersonalView.test.tsx": {
+        "before": "e7dde00636daf7f2bb12131582a36f6b47249e0a3737fb0a192486250baf4b5d",
+        "after": "a01bed0737a44457e75c68d94b3a181206c3e7ed013125a1575fcbb724ed09a8"
+      },
+      "frontend/src/features/absence/components/RequestModal/tests/integration/RequestModal.test.tsx": {
+        "before": "b07d6ca247a32258d1a4e7719ecd3f172760dc39f6dcfa04a23c8442237a857c",
+        "after": "beeb666e18d512b030cc32630b8c22e071634c72c13b4ddc6b3832ca46a6f9ad"
+      },
+      "frontend/src/features/derivative/components/KeyInfoAsset/utils/tests/integration/KeyInfoAsset.test.tsx": {
+        "before": "35e55db3a18b3f309aaaf26139302ce83af018c6cd4475fb612845a888b993bb",
+        "after": "dceaddbfad87de037c2e0feead91c114a1962a6684e1c2ec620d8d4e1e9d408b"
+      },
+      "frontend/src/features/derivative/components/SelectionAsset/utils/tests/integration/SelectionAsset.test.tsx": {
+        "before": "cb3d9303c0a8b9f3bb6bfd2807731b3e545cb70fdd1ddf20217544b2117a3620",
+        "after": "944b56152019cdbee2b0e9fb6cc749b2721a3e1757154a46475db25fbfcb1fd1"
+      },
+      "frontend/src/features/hour_tracking/components/BookingAsset/utils/tests/integration/BookingViews.test.tsx": {
+        "before": "276869b7c8dcc34a8550735fb408c0818b6a075e43ab902d9356bbac4ef2bab4",
+        "after": "10c75680b49eca306a6b66841d808f735caed290b91440b306edae5cb4e31226"
+      },
+      "frontend/src/features/project_management/components/SelectionAsset/SelectionAsset.search.play.spec.ts": {
+        "before": "c115fd61bb0969676155ba3866c3ebce740737181b98e51379ea627655b99c34",
+        "after": "6387cb848e99a78f69961bae4890821e5b59bf93e7efdcb4735ed87b6068520a"
+      },
+      "frontend/src/features/project_management/components/SelectionAsset/utils/tests/unit/SelectionView.test.tsx": {
+        "before": "7c52df847a1993b828c5a95a545ece08e790b863fbdd5bc34cd71a454d300725",
+        "after": "422b4b246de8ec08f65ddefccff47a97ab92d2ca20eeab93c4ff2b7cbc33b8d0"
+      },
+      "frontend/src/features/project_management/components/TeamAsset/utils/tests/integration/TeamAsset.test.tsx": {
+        "before": "c89423fd6d94e4bb32d4dd6344870bd48eea339c55431111a588702c340ceb33",
+        "after": "be42f644cc22d6184d4a1c348bba8addc9d452c0fe017f82d0cfb9e9e12fb0a8"
+      },
+      "frontend/src/features/sales/components/DeliveryPlanOverviewAsset/DeliveryPlanOverviewAsset.stories.tsx": {
+        "before": "990a7c88ab4c44c3e49bd79c2baadc5b098300e5b00ff27731c54d27d60d05c5",
+        "after": "95893a19451aab8f0569d530b63f9f94d48e60fd1f648eec7b2dfa2ce3659b58"
+      },
+      "frontend/src/features/sales/components/DeliveryPlanOverviewAsset/utils/tests/unit/SelectionView.test.tsx": {
+        "before": "86772a26ed7853c9c8cc46431190d65ee70d6a3f8d6f0572a654cb12b09679de",
+        "after": "850f58bb4866e8a808ae5199df97023fb4f81300a999a61059594dbc53bc9d90"
+      },
+      "frontend/src/features/volume/components/CustomerAsset/utils/tests/integration/CustomerAsset.test.tsx": {
+        "before": "707c6eb6a135c47c5d2bd4639b590b6971ca0c08d37b96a4675befccafb99226",
+        "after": "de252f90c2d66f4e328855e73d7c61ee277183161ecaa5ef1a8cda5b6b79f4fc"
+      },
+      "frontend/src/features/work_center/components/KeyInfoAsset/utils/tests/integration/DetailView.test.tsx": {
+        "before": "3042250770f5669e678a5c14852bd123219a0477cd64faa4c505ee649ed28c20",
+        "after": "cfa052971ef16e50d63acbda6522f51248dd8833ac597c25a0bb3ba33da0a069"
+      },
+      "frontend/src/features/work_center/components/KeyInfoAsset/utils/tests/integration/EditView.test.tsx": {
+        "before": "3eacd8b1c0a2931080b84aa47feaae4a390faaf66b69d63136f43321c27518ec",
+        "after": "ecba6a035e90639515963b2f8d27f2bc6418c8e488b4250ef01e11345df0faee"
+      },
+      "frontend/src/features/work_center/components/WorkCenterSelection/utils/tests/integration/SelectionView.test.tsx": {
+        "before": "5b8574004d1f8480da6f9e479422165d0b1c93e66c7f2a4888301ae29a472b31",
+        "after": "a2cf4524cfb78c05bc08c5e9225fd5daabb0bdf3354b93d7c509be207367add0"
+      }
+    },
+    "production_helpers_configuration_and_dependencies_unchanged": true,
+    "copied_back_with_before_hash_guards": true,
+    "unrelated_user_work_preserved": true,
+    "kh_changes_committed_or_pushed": false
+  },
+  "dependency_install": {
+    "package": "@constellium/know-ui-library@3.20.0",
+    "lockfile_sha256": "5a3acf3b1c3f6c0cac6896e9f8e963afa12240fbd9945befbf2223c05869d608",
+    "lockfile_unchanged": true,
+    "commands": [
+      {
+        "command": [
+          "npm",
+          "ci",
+          "--ignore-scripts"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 18.588913917541504
+      },
+      {
+        "command": [
+          "npm",
+          "rebuild",
+          "--offline"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.7322878837585449
+      }
+    ],
+    "credential_scope": "Existing user-authorized deploy token passed only as ephemeral NODE_AUTH_TOKEN to npm ci --ignore-scripts. Removed before offline npm rebuild and all validation. No persistent credentials or registry config modified.",
+    "mac_node": "v24.22.2",
+    "mac_npm": "11.19.1"
+  },
+  "repair_contract": {
+    "initial_unit_failures": 26,
+    "initial_integration_failures": 96,
+    "initial_story_failures": 2,
+    "owner_reused": "Existing paginateGraphqlFixture / reply project actual outgoing GraphQL queries; production collector unchanged.",
+    "fixture_fixes": "Supply real parent IDs, valid empty connections, unique IDs within each connection and truthful 100+2 / 30+1 outer pages. Preserve cross-list deduplication, page-two rows, request assertions and negative error payloads.",
+    "assertions_preserved": true,
+    "timeout_exception": "Only the non-performance CustomerVolume 102-row chart/cards test changed from 10s to 60s; focused observed duration 28.36s. Assertions and original backend benchmark limits unchanged.",
+    "independent_review": "All 16 test/story files reviewed; no remaining concrete blockers."
+  },
+  "mac_checks": {
+    "format-check": {
+      "command": [
+        "npm",
+        "run",
+        "format:check"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 6.608794212341309,
+      "log": "/tmp/kh-gm583-followup/frontend-validation/format-check.log",
+      "log_sha256": "3731cc0760f2beb9b1a0b207dc591d23d6ba5ba7a13e6e7d299c6c587c7f444e"
+    },
+    "lint": {
+      "command": [
+        "npm",
+        "run",
+        "lint"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 9.322155952453613,
+      "log": "/tmp/kh-gm583-followup/frontend-validation/lint.log",
+      "log_sha256": "2885e5dd4eb4490ab9fc0d7b42897ecd86e1c2c6d5b5e11ef390f893b0b61dbb"
+    },
+    "typecheck": {
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 8.2894868850708,
+      "log": "/tmp/kh-gm583-followup/frontend-validation/typecheck.log",
+      "log_sha256": "35b0e6159150bfa97d93a88bf9179ccc09dd2e175e3b47cc08901d1eb966b841"
+    },
+    "test-unit": {
+      "command": [
+        "npm",
+        "run",
+        "test:unit"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 13.552011013031006,
+      "log": "/tmp/kh-gm583-followup/frontend-validation/test-unit.log",
+      "log_sha256": "3ec7fd3506c22bbc06e5c7352329d9d2217ea9fb743b43078776e1230ae683fa",
+      "validation_boundary": "Final unit test inputs unchanged since this run; later edits affect only integration tests, browser fixtures and documentation."
+    },
+    "test-integration": {
+      "command": [
+        "npm",
+        "run",
+        "test:integration"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 79.30311489105225,
+      "log": "/tmp/kh-gm583-followup/frontend-validation/test-integration.log",
+      "log_sha256": "512a64d6e0a181ec114b2e57a278748b381ea22a185f1c53e5540279b6464e02",
+      "validation_boundary": "Final full integration run; all 1925 source hashes unchanged before/after."
+    }
+  },
+  "test_totals": {
+    "unit": {
+      "files": 186,
+      "passed": 1198
+    },
+    "integration": {
+      "files": 58,
+      "passed": 565
+    }
+  },
+  "linux_browser": {
+    "image": "mcr.microsoft.com/playwright:v1.61.1-noble",
+    "image_id": "sha256:89924b46ec81c1c0eb0055a7d72790b8067a16a5d0d0512e8117a01aa4a5d7ee",
+    "platform": "linux/amd64 under Docker Desktop emulation",
+    "node": "v24.17.0",
+    "npm": "11.13.0",
+    "environment": {
+      "CI": "true",
+      "KNOWLEDGEHUB_API_URL": "https://www.example.com",
+      "KNOWLEDGEHUB_WS_URL": "wss://www.example.com",
+      "KNOWLEDGEHUB_UI_URL": "https://www.example.com"
+    },
+    "offline_locked_install_exit_code": 0,
+    "build_exit_code": 0,
+    "storybook_build_exit_code": 0,
+    "stories": {
+      "command": "npm run test:stories",
+      "exit_code": 0,
+      "jest_passed": 394,
+      "jest_failed": 0,
+      "playwright": {
+        "startTime": "2026-11-09T10:46:44.779Z",
+        "duration": 47210.911,
+        "expected": 12,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      }
+    },
+    "visual": {
+      "command": "npm run test:visual",
+      "exit_code": 0,
+      "stats": {
+        "startTime": "2026-11-09T10:29:30.196Z",
+        "duration": 524460.473,
+        "expected": 179,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "baselines_changed": false,
+      "reuse_boundary": "Final fixture-only changes do not affect the visual story inputs."
+    },
+    "e2e": {
+      "command": "npm run test:e2e",
+      "exit_code": 0,
+      "stats": {
+        "startTime": "2026-11-09T10:21:21.167Z",
+        "duration": 25418.194,
+        "expected": 5,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 1
+      }
+    },
+    "e2e_characterization": {
+      "command": "npx playwright test --project=e2e --grep \"allows another SSO attempt after a successful return cleared the marker\" --repeat-each=3",
+      "exit_code": 0,
+      "stats": {
+        "startTime": "2026-11-09T10:48:41.138Z",
+        "duration": 28916.584,
+        "expected": 2,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 1
+      },
+      "limitation": "Duplicate-login-return-URL race reproduced. Existing CI retries passed; this is not a claim of a flake-free run. Auth test and production files match the original KH head and were not changed."
+    },
+    "final_candidate_differences_excluded_from_browser_inputs": [
+      "frontend/docs/graphql-workflow.md",
+      "frontend/src/features/absence/components/DetailModal/tests/integration/DetailModal.test.tsx",
+      "frontend/src/features/absence/components/EditModal/tests/integration/EditModal.test.tsx",
+      "frontend/src/features/absence/components/PersonalView/tests/integration/PersonalView.test.tsx",
+      "frontend/src/features/absence/components/RequestModal/tests/integration/RequestModal.test.tsx",
+      "frontend/src/features/derivative/components/KeyInfoAsset/utils/tests/integration/KeyInfoAsset.test.tsx",
+      "frontend/src/features/derivative/components/SelectionAsset/utils/tests/integration/SelectionAsset.test.tsx",
+      "frontend/src/features/hour_tracking/components/BookingAsset/utils/tests/integration/BookingViews.test.tsx",
+      "frontend/src/features/project_management/components/SelectionAsset/utils/tests/unit/SelectionView.test.tsx",
+      "frontend/src/features/project_management/components/TeamAsset/utils/tests/integration/TeamAsset.test.tsx",
+      "frontend/src/features/sales/components/DeliveryPlanOverviewAsset/utils/tests/unit/SelectionView.test.tsx",
+      "frontend/src/features/volume/components/CustomerAsset/utils/tests/integration/CustomerAsset.test.tsx",
+      "frontend/src/features/work_center/components/KeyInfoAsset/utils/tests/integration/DetailView.test.tsx",
+      "frontend/src/features/work_center/components/KeyInfoAsset/utils/tests/integration/EditView.test.tsx",
+      "frontend/src/features/work_center/components/WorkCenterSelection/utils/tests/integration/SelectionView.test.tsx"
+    ],
+    "own_containers_and_networks_cleaned": true
+  },
+  "artifacts": {
+    "/tmp/kh-gm583-followup/frontend-validation/linux/build.log": {
+      "sha256": "e31e6e00b72cdc378fa91ebfdd47dd73f9cd4451d70bb6e08085fd53f574f2ad"
+    },
+    "/tmp/kh-gm583-followup/frontend-validation/linux/build-storybook-fixed.log": {
+      "sha256": "3dbc4d495990073c8dda5ded9549322ce62af642be817c2b16c06a2f2c4403f0"
+    },
+    "/tmp/kh-gm583-followup/frontend-validation/linux/README.md": {
+      "sha256": "6ffb4aa0f9019aa0eed23bae7a4ce9563bbbe5cf3743916b58aa58c56fe6e8c7"
+    },
+    "/tmp/kh-gm583-followup/frontend-validation/linux/stories-fixed/storybook/results.json": {
+      "sha256": "dd43f81be354556c69805f30734902c8d982907208b314a3309c9fd0ec278b15"
+    },
+    "/tmp/kh-gm583-followup/frontend-validation/linux/stories-fixed/playwright-results.json": {
+      "sha256": "84654466ec7729c39e2948a73b5a4a191209e5d9335ba5b5821d188247849c6a"
+    },
+    "/tmp/kh-gm583-followup/frontend-validation/linux/visual/playwright-results.json": {
+      "sha256": "d897f49184fcc3cb5163c87646841b7325c41b47cb14bcf3102c5e9f18d62a5f"
+    },
+    "/tmp/kh-gm583-followup/frontend-validation/linux/e2e/playwright-results.json": {
+      "sha256": "66f89098394e98f467fc8a4a65e456d11edf75ac54947ccea15c3155a53a35b7"
+    },
+    "/tmp/kh-gm583-followup/frontend-validation/linux/e2e-repeat/playwright-results.json": {
+      "sha256": "2db2ebd9671cbb5fb34f41d5f8181d7cd42b8807f8dbefde20ac45c2fb6057a1"
+    }
+  },
+  "publication_boundary": "These are local candidate checks. GM is not merged/released; KH still pins published 0.87.5. No hosted KH green for a new GM release is claimed. Raw 1000-booking performance gap remains independently documented."
+}
