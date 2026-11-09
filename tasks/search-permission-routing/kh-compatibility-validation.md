@@ -64,6 +64,15 @@ The full final rerun is recorded separately above. Earlier macOS KH diagnostics
 were not release evidence; Linux with complete Git history resolves their
 platform/archive failures.
 
+A subsequent hosted run exposed four SQLite-specific expectations in two new
+calculation tests on PostgreSQL and MariaDB. The test-only portability correction
+compares both result identities and count with the active database's native ORM
+exclusion, and uses an exact-case operand for the separate global-owner isolation
+check. Production source and all KH/performance evidence remain unchanged.
+The entire affected module passes on SQLite, PostgreSQL 18 and MariaDB 11.8:
+24 tests and 9 subtests per backend. The isolated MariaDB check used PyMySQL;
+the hosted matrix separately exercises mysqlclient.
+
 KH uses published PR #10933 HEAD `3dd8149665c4d8413713260e6c1f18a33135a44b` plus
 its existing local consumer changes: 97 tracked changed paths and 8 additional
 source/test files, with no content differences in the isolated candidate.

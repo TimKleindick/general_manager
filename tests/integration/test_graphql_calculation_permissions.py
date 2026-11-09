@@ -622,20 +622,28 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                 assert scoped["pageInfo"]["total_count"] == 0
 
     def test_scoped_permission_excludes_retain_orm_text_lookup_semantics(self) -> None:
-        """Constructor snapshots use the same SQLite collation as native filters."""
+        """Constructor snapshots preserve the active database's lookup semantics."""
         resolver = create_list_resolver(
             lambda *_: self.Calculation.all(),
             self.Calculation,
         )
         info = SimpleNamespace(context=SimpleNamespace(user=self.user))
-        for lookup, expected, total_count in (
-            ("subject__name__contains", "subject", 0),
-            ("subject__name__startswith", "subject", 1),
-            ("subject__name__endswith", "subject", 0),
+        native_source = self.Subject.Interface._model.objects.filter(
+            pk__in=[self.subject.id, self.other_subject.id]
+        )
+        for lookup in (
+            "subject__name__contains",
+            "subject__name__startswith",
+            "subject__name__endswith",
         ):
             with self.subTest(lookup=lookup):
+                expected_ids = set(
+                    native_source.exclude(
+                        **{lookup.removeprefix("subject__"): "subject"}
+                    ).values_list("pk", flat=True)
+                )
                 permission_plan = ReadPermissionPlan(
-                    filters=[{"filter": {}, "exclude": {lookup: expected}}],
+                    filters=[{"filter": {}, "exclude": {lookup: "subject"}}],
                     requires_instance_check=False,
                 )
                 with patch(
@@ -648,7 +656,8 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
                         filter={"period": date(2026, 2, 28)},
                     )
 
-                assert result["pageInfo"]["total_count"] == total_count
+                assert result["pageInfo"]["total_count"] == len(expected_ids)
+                assert {row.subject.id for row in result["items"]} == expected_ids
 
     def test_scoped_permission_exclude_rejects_unknown_orm_lookup(self) -> None:
         """An invalid native permission predicate fails rather than retaining rows."""
@@ -696,7 +705,7 @@ class TestGraphQLCalculationPermissions(GeneralManagerTransactionTestCase):
             self.Calculation,
         )
         permission_plan = ReadPermissionPlan(
-            filters=[{"filter": {}, "exclude": {"subject__name__contains": "subject"}}],
+            filters=[{"filter": {}, "exclude": {"subject__name__contains": "Subject"}}],
             requires_instance_check=False,
         )
         with (
