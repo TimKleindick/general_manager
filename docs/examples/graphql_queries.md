@@ -194,14 +194,22 @@ permissions, arguments, and compatibility details.
 
 ## Nested buckets
 
+This query assumes `Project.derivative_list` is a bucket of `Derivative`
+managers with a `maturity_date: date` field and a `volume: Measurement` field.
+Generated relation lists use the same `items` envelope as root lists. With
+Graphene's default naming, the date comparison field is `maturityDate_Gte`:
+
 ```graphql
 query ProjectWithDerivatives($id: ID!) {
   project(id: $id) {
     name
-    derivativeList(filter: { maturity_date__gte: "2024-01-01" }) {
-      id
-      maturityDate
-      volume
+    derivativeList(filter: { maturityDate_Gte: "2024-01-01" }) {
+      items {
+        id
+        maturityDate
+        volume { value unit }
+      }
+      pageInfo { totalCount }
     }
   }
 }
@@ -281,6 +289,11 @@ the version and client compatibility details.
 
 ## Update only the fields you supply
 
+Generated CRUD payloads use the manager class name as their result field:
+`Project` for this manager. The alias `project: Project` below gives the JSON
+response a lower-case `project` key. Custom `@graph_ql_mutation` functions instead
+derive a lower-case result field from their return type.
+
 Generated ORM update and delete mutations require a stable `id: ID!` target.
 Primary keys are excluded from update payload fields; other editable fields
 are optional. Omit a field when the stored value should stay unchanged, even if
@@ -290,7 +303,7 @@ the model declares a default for that field:
 mutation RenameProject($id: ID!) {
   updateProject(id: $id, name: "Renamed") {
     success
-    project { id name score }
+    project: Project { id name score }
   }
 }
 ```
@@ -302,7 +315,7 @@ the variables object:
 mutation UpdateOptionalScore($id: ID!, $score: Int) {
   updateProject(id: $id, score: $score) {
     success
-    project { id score }
+    project: Project { id score }
   }
 }
 ```
@@ -345,7 +358,7 @@ The authenticated GraphQL user is always the manager actor. Use the separate
 mutation ReviewedUpdate($id: ID!) {
   updateProject(id: $id, name: "Approved", historyComment: "Reviewed") {
     success
-    project { id name }
+    project: Project { id name }
   }
 }
 ```
@@ -575,23 +588,51 @@ and [task guide](../howto/expose_via_graphql.md#filter-calculation-managers-by-m
 
 ## Custom mutation with Measurement input
 
-Custom scalar arguments keep their declared Python annotation. For a resolver
-whose argument is annotated `id: int`, use `Int`; the argument name alone does
-not make it an ID. Annotate a manager reference to generate an ID or structured
-composite input instead.
+Use the `InventoryItem` manager from the
+[measurement tutorial](../howto/add_model_with_measurement.md). Define this custom
+mutation after that manager in `projects/managers.py`, or import the manager
+before defining the mutation in another startup-loaded module:
+
+```python
+from general_manager.api import graph_ql_mutation
+from general_manager.measurement import Measurement
+from general_manager.permission import MutationPermission
+
+
+class CanSetInventoryPrice(MutationPermission):
+    __mutate__ = ["isAuthenticated"]
+
+
+@graph_ql_mutation(permission=CanSetInventoryPrice)
+def set_inventory_price(info, id: int, price: Measurement) -> InventoryItem:
+    return InventoryItem(id=id).update(
+        creator_id=info.context.user.pk,
+        price=price,
+    )
+```
+
+Custom scalar arguments keep their declared Python annotation: this `id: int`
+argument is an `Int`, not an `ID`. The custom function returns
+`InventoryItem`, so its result field is lower-case `inventoryItem`. This is
+separate from the generated `updateInventoryItem` mutation and its capitalized
+`InventoryItem` result field.
 
 ```graphql
-mutation UpdateInventory($id: Int!, $price: MeasurementScalar!) {
-  updateInventoryItem(id: $id, price: $price) {
+mutation SetInventoryPrice($id: Int!, $price: MeasurementScalar!) {
+  setInventoryPrice(id: $id, price: $price) {
     success
-    errors
     inventoryItem {
       id
-      price
+      price { value unit }
     }
   }
 }
 ```
+
+Pass variables such as `{"id": 1, "price": "210 EUR"}` using an authenticated
+client. The decorator and manager enforce their respective write policies.
+Failures use GraphQL's top-level `errors`; the mutation payload does not expose
+an `errors` field.
 
 ## Aggregation via GraphQL property
 

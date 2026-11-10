@@ -4,6 +4,12 @@
 
 ::: general_manager.permission.base_permission.BasePermission
 
+`BasePermission` is abstract. Its constructor and helper contracts below are
+implemented or inherited by concrete permission classes. In application code,
+use the manager's policy, for example `Project.Permission(...)` or
+`Project.Permission.check_create_permission(...)`, rather than calling checks
+on `BasePermission` itself. Normal manager writes already invoke those checks.
+
 `BasePermission(instance, request_user)` stores the permission context and
 resolves `request_user` through `get_user_with_id()`. The request user may be a
 Django user, `AnonymousUser`, `SimpleLazyObject`, or a primary-key value. Lazy

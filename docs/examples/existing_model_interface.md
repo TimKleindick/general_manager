@@ -39,14 +39,14 @@ Import the wrapper with `from myapp.managers import User`; keep `myapp.models.Us
 
 ## Adding validation to a legacy model
 
-Combine existing business rules with new ones by declaring `Meta.rules`. The interface merges them and rewires `full_clean()` so the complete rule set runs everywhere.
+Declare a predicate in `Meta.rules` to add validation to a wrapped model. This
+independent example assumes an installed `projects` application that owns the
+following legacy model and uses `Project` as its GeneralManager wrapper.
+
+Define the Django model in `projects/models.py`:
 
 ```python
 from django.db import models
-
-from general_manager.interface import ExistingModelInterface
-from general_manager.manager import GeneralManager
-from general_manager.rule import Rule
 
 
 class LegacyProject(models.Model):
@@ -57,14 +57,15 @@ class LegacyProject(models.Model):
         app_label = "projects"
 
 
-class UniqueNameRule(Rule):
-    """Reject placeholder project names."""
+```
 
-    def evaluate(self, obj: models.Model) -> bool:
-        return obj.name != "TBD"
+Define the wrapper in `projects/managers.py` so GeneralManager discovers it:
 
-    def get_error_message(self) -> dict[str, list[str]]:
-        return {"name": ["tbd_not_allowed"]}
+```python
+from general_manager import GeneralManager
+from general_manager.interface import ExistingModelInterface
+from general_manager.rule import Rule
+from projects.models import LegacyProject
 
 
 class Project(GeneralManager):
@@ -75,13 +76,44 @@ class Project(GeneralManager):
         model = LegacyProject
 
         class Meta:
-            rules = [UniqueNameRule()]
+            rules = [
+                Rule["Project"](
+                    lambda project: project.name != "TBD",
+                    custom_error_message="Choose a descriptive project name.",
+                ),
+            ]
 ```
 
-`Project.create(name="TBD")` now raises a validation error, while historical
-tracking and activation semantics continue to flow through to `LegacyProject`.
-If Django's field validation also reports `name`, GeneralManager keeps both the
-Django message and the rule message in the final `ValidationError`.
+Create and apply migrations after registering the wrapper, including its
+history model:
+
+```bash
+python manage.py makemigrations projects
+python manage.py migrate
+```
+
+Then open `python manage.py shell` and try an authenticated write. Choose a fresh
+username if you repeat the example:
+
+```python
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
+from projects.managers import Project
+
+author = get_user_model().objects.create_user(username="legacy-rule-author")
+try:
+    Project.create(creator_id=author.pk, name="TBD")
+except ValidationError as error:
+    print(error.message_dict["name"])
+else:
+    raise AssertionError("The placeholder name must fail validation")
+```
+
+The `name` errors include `Choose a descriptive project name.`; no project row
+is created. Historical tracking and activation semantics continue to flow
+through to `LegacyProject`. If Django's field validation also reports `name`,
+GeneralManager keeps both the Django message and the rule message in the final
+`ValidationError`.
 
 ## Route atomic writes and history to another database
 

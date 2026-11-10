@@ -2,6 +2,45 @@
 
 GeneralManager keeps cached data in sync by recording read dependencies and invalidating matching cache entries when data changes. The dependency model is conservative enough to avoid stale results, but narrow enough to avoid evicting unrelated caches.
 
+## Choose a cache scope
+
+First decide how long a result may be reused. Caching is optional: establish
+the calculation and its inputs before adding it.
+
+| Scope | Use it when | Result lifetime |
+| --- | --- | --- |
+| `run` (default) | The same work repeats inside one request or calculation run | Ends with the active run |
+| `dependency` | A result should survive across runs and is derived from tracked manager reads | Invalidated when tracked data changes |
+| `timeout` | A fixed period of staleness is acceptable, including external values without tracked dependencies | Expires after the required `timeout` |
+| `none` | Recomputing is cheap or reuse is inappropriate | No cached result |
+
+Run reuse requires a shared active `CalculationRunContext`. Built-in execution
+paths establish their run boundary. In a custom view or background job, wrap
+the related work in one context; without an outer context, each independent
+decorated call creates and closes its own run. See [run context storage](#run-context-storage).
+
+For example, a total derived from related manager rows can use dependency
+caching so changes to those rows invalidate it. An external exchange-rate fetch
+needs an explicit freshness policy; dependency tracking cannot observe an
+upstream service changing by itself.
+
+Use the [calculation caching tutorial](../howto/cache_dependent_calculation.md)
+for a worked example and [Caching helper](#caching-helper) for decorator forms.
+Dependency caching uses Django's configured default cache. Multiple workers
+need a shared backend to share cached values and invalidation state.
+
+## Understand invalidation
+
+A dependency-cached calculation records the manager data it reads. A supported
+write identifies affected dependencies and removes matching cached results.
+The next read computes a fresh value. This is why the read path and write path
+both matter: arbitrary external writes are not automatically visible to the
+tracker.
+
+The sections below describe tracking, transactions, and backend-specific
+behavior. Use them when diagnosing invalidation or implementing an integration;
+they are not prerequisites for choosing a cache scope.
+
 ## Dependency Tracker
 
 When a manager, bucket, or cached function resolves data, it records dependencies

@@ -7,9 +7,9 @@ the [quickstart](quickstart.md).
 ## Requirements
 
 - Python 3.12 or newer
-- Django 5.2.15 or newer
-- A Django-supported database appropriate for your deployment; this repository's
-  CI exercises SQLite, while the maintained production example uses PostgreSQL
+- Django 5.2.17 or newer
+- A database backend and driver configured through Django; CI covers SQLite,
+  PostgreSQL 18, and MariaDB 11.8 LTS
 
 GeneralManager is pre-1.0, and the `main` branch and latest PyPI package can
 differ. Use the [release history](https://github.com/TimKleindick/general_manager/releases)
@@ -71,11 +71,17 @@ manager, migration, and GraphQL setup.
 
 GeneralManager uses Django's database layer. Choose a backend that meets the
 application's own deployment requirements, and validate the application's
-manager definitions and migrations against it. This repository's automated
-test suite exercises SQLite; the maintained
+manager definitions and migrations against it. The
+[Quality workflow](https://github.com/TimKleindick/general_manager/blob/main/.github/workflows/quality.yml)
+runs SQLite tests on Python 3.12, 3.13, and 3.14. Pull requests also run the
+backend suite against PostgreSQL 18 and MariaDB 11.8 LTS on Python 3.14; release
+runs extend those two backends to Python 3.12–3.14. This coverage does not
+establish support for every Django backend or database version.
+
+Install the driver required by your chosen Django backend separately; CI uses
+`psycopg[binary]` for PostgreSQL and `mysqlclient` for MariaDB. The maintained
 [Outer Rim Logistics example](https://github.com/TimKleindick/general_manager/tree/main/example_project/outer_rim_logistics)
-uses PostgreSQL. That evidence should not be read as a claim that every Django
-backend is tested here.
+also uses PostgreSQL.
 
 Django's local-memory cache is sufficient for one-process development. Use a
 shared cache backend when multiple web or worker processes need coordinated
