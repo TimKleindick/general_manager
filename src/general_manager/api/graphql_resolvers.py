@@ -1140,6 +1140,8 @@ def check_read_permission_for_user(
     instance: GeneralManager,
     user: object,
     field_name: str,
+    *,
+    before_check: Callable[[BasePermission], None] | None = None,
 ) -> bool:
     """
     Return ``True`` if *user* may read *field_name* on *instance*.
@@ -1147,10 +1149,15 @@ def check_read_permission_for_user(
     When the manager defines a Permission class, this calls
     ``Permission(instance, user).check_permission("read", field_name)``.
     Managers without a Permission class default to allowing the field read.
+    The internal ``before_check`` hook may account for the resolved policy,
+    without constructing it twice or replacing its authorization decision.
     """
     PermissionClass: type[BasePermission] | None = getattr(instance, "Permission", None)
     if PermissionClass:
-        return PermissionClass(instance, user).check_permission("read", field_name)
+        permission = PermissionClass(instance, user)
+        if before_check is not None:
+            before_check(permission)
+        return permission.check_permission("read", field_name)
     return True
 
 
@@ -1158,6 +1165,8 @@ def check_read_permission(
     instance: GeneralManager,
     info: GraphQLResolveInfo,
     field_name: str,
+    *,
+    before_check: Callable[[BasePermission], None] | None = None,
 ) -> bool:
     """
     Return ``True`` if the request user may read *field_name* on *instance*.
@@ -1165,7 +1174,13 @@ def check_read_permission(
     When the manager defines a Permission class, this calls
     ``Permission(instance, user).check_permission("read", field_name)``.
     Managers without a Permission class default to allowing the field read.
+    The internal ``before_check`` hook may account for the resolved policy,
+    without constructing it twice or replacing its authorization decision.
     """
+    if before_check is not None:
+        return check_read_permission_for_user(
+            instance, info.context.user, field_name, before_check=before_check
+        )
     return check_read_permission_for_user(instance, info.context.user, field_name)
 
 

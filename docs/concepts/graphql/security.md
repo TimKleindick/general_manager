@@ -193,9 +193,17 @@ field. Relation-ID aliases also check the canonical relation permission.
 
 This adds work proportional to candidates × distinct operand paths, plus related
 rows visited. Duplicate lookup paths are consolidated. Native list resolvers
-budget at most 1,000 field/path visits with additional, unknown, custom or
-delegated read policies. A field whose current local policy demonstrably adds no
-restriction beyond its object's read rule does not consume that budget. **Every
+budget at most 1,000 field/path visits with additional, unknown or custom read
+policies. A field whose current policy demonstrably adds no restriction beyond
+its object's read rule does not consume that budget. This also applies to
+standard `__based_on__` delegation when every resolved policy in the chain adds
+no field restriction. The concrete target policies and nullable fallback are
+inspected on the same permission instance used for the runtime check; declared
+relation types alone are not sufficient proof. Restrictive delegated fields and
+custom target policies still consume the budget. To avoid invoking potentially
+stateful alias metadata twice, this proof checks all captured field declarations
+on each delegated policy; an unrelated restrictive field may therefore be
+conservatively budgeted too. **Every
 runtime field check still runs**, including checks on nonmatching and off-page
 rows. Related-row checks also remain in place. Policy inspection uses the actual
 instance's Permission class at each visit; it does not reuse user/object results

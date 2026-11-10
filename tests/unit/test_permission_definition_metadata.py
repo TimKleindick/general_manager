@@ -170,3 +170,114 @@ class TestPermissionDefinitionMetadata(SimpleTestCase):
                 Permission(instance, actor).check_permission("read", "secret")
                 is allowed
             )
+
+    def test_resolved_accounting_uses_effective_row_rules(self) -> None:
+        """Use the constructed policy row rules rather than the class declaration."""
+
+        class Permission(policies.OverrideManagerPermission):
+            __read__: ClassVar[list[str]] = []
+            name: ClassVar[dict[str, list[str]]] = {"read": ["isAuthenticated"]}
+
+        permission = Permission(SimpleNamespace(), User())
+        assert policies.additional_resolved_read_permission(permission, "name") is True
+        permission._read_permissions = ["isAuthenticated"]
+        assert policies.additional_resolved_read_permission(permission, "name") is False
+        permission._read_permissions = ["public"]
+        assert policies.additional_resolved_read_permission(permission, "name") is True
+
+    def test_resolved_accounting_rejects_unknown_state_or_cycles(self) -> None:
+        """Fail conservatively for malformed or cyclic resolved permission chains."""
+
+        class Permission(policies.OverrideManagerPermission):
+            __read__: ClassVar[list[str]] = ["public"]
+            name: ClassVar[dict[str, list[str]]] = {"read": ["public"]}
+
+        for key, value in (
+            ("_read_permissions", None),
+            ("_read_permissions", [object()]),
+            ("_ConfiguredManagerPermission__attribute_permissions", {}),
+            ("_ConfiguredManagerPermission__based_on_permission", object()),
+        ):
+            with self.subTest(key=key, value=value):
+                permission = Permission(SimpleNamespace(), User())
+                vars(permission)[key] = value
+                assert (
+                    policies.additional_resolved_read_permission(permission, "name")
+                    is None
+                )
+        permission = Permission(SimpleNamespace(), User())
+        del vars(permission)["_ConfiguredManagerPermission__based_on_permission"]
+        assert policies.additional_resolved_read_permission(permission, "name") is None
+        vars(permission)["_ConfiguredManagerPermission__based_on_permission"] = (
+            permission
+        )
+        assert policies.additional_resolved_read_permission(permission, "name") is None
+
+    def test_resolved_accounting_budgets_possible_relation_counterparts(self) -> None:
+        """A counterpart declaration cannot be ignored in a resolved read proof."""
+
+        class Permission(policies.OverrideManagerPermission):
+            __read__: ClassVar[list[str]] = ["public"]
+            basis_id: ClassVar[dict[str, list[str]]] = {"read": ["isAdmin"]}
+
+        permission = Permission(SimpleNamespace(), User())
+        assert policies.additional_resolved_read_permission(permission, "basis") is True
+        assert (
+            policies.additional_resolved_read_permission(permission, "basis_id") is True
+        )
+
+    def test_resolved_accounting_budgets_nonstandard_alias_declarations(self) -> None:
+        """Custom metadata aliases remain bounded without reading metadata again."""
+
+        class Permission(policies.OverrideManagerPermission):
+            __read__: ClassVar[list[str]] = ["public"]
+            alternate_key: ClassVar[dict[str, list[str]]] = {"read": ["isAdmin"]}
+
+        permission = Permission(SimpleNamespace(), User())
+        assert policies.additional_resolved_read_permission(permission, "basis") is True
+
+    def test_resolved_accounting_depth_remains_bounded(self) -> None:
+        """Stop proving long delegated chains at the fixed traversal bound."""
+
+        class Permission(policies.OverrideManagerPermission):
+            __read__: ClassVar[list[str]] = ["public"]
+
+        current = Permission(SimpleNamespace(), User())
+        root = current
+        for _ in range(64):
+            delegate = Permission(SimpleNamespace(), User())
+            vars(current)["_ConfiguredManagerPermission__based_on_permission"] = (
+                delegate
+            )
+            current = delegate
+        assert policies.additional_resolved_read_permission(root, "name") is None
+
+    def test_resolved_accounting_rejects_unknown_captured_rule_containers(self) -> None:
+        """Reject executable captured containers without invoking their methods."""
+
+        class UnknownRules(list):
+            def __iter__(self):
+                """Fail if accounting attempts to iterate this unknown rule container."""
+                raise AssertionError
+
+        class UnknownDefinition(dict):
+            def __contains__(self, key):
+                """Fail if accounting probes this unknown definition container."""
+                raise AssertionError
+
+        class Permission(policies.OverrideManagerPermission):
+            __read__: ClassVar[list[str]] = ["public"]
+
+        for definition in (
+            UnknownDefinition(read=["public"]),
+            {"read": UnknownRules(["public"])},
+            {"read": [object()]},
+        ):
+            with self.subTest(definition=type(definition)):
+                Permission.name = definition
+                permission = Permission(SimpleNamespace(), User())
+                Permission.name = {"read": ["public"]}
+                assert (
+                    policies.additional_resolved_read_permission(permission, "name")
+                    is None
+                )
