@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.90.0 (2026-11-10)
+
+### Features
+
+- Configure global and per-manager GraphQL CRUD exposure
+  ([`a1bee23`](https://github.com/TimKleindick/general_manager/commit/a1bee23e598bccf3c1a60feb18bcf44641bb02b0))
+
+
 ## v0.89.3 (2026-11-10)
 
 ### Bug Fixes
