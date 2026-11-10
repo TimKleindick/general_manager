@@ -55,8 +55,8 @@ Install exactly one provider extra to start:
     python -m pip install "GeneralManager[chat-google]"
     ```
 
-Provider model names below are configuration examples; select a model you have
-validated and can access in your environment. The selected model must support tool
+Set `CHAT_MODEL` to a model you have validated and can access through the
+selected provider. The examples read this deployment choice from the environment. The selected model must support tool
 or function calling. A model that only
 generates text cannot reliably discover managers or query project data.
 
@@ -109,17 +109,21 @@ rejected even if the model guesses its name.
 ## 4. Configure the provider
 
 Read secrets from environment variables; do not commit them in Django
-settings. Add one of these configurations to the project settings module.
+settings. Add one of these configurations to the project settings module,
+merging its `CHAT` entry into any existing `GENERAL_MANAGER` configuration.
 
 === "Ollama"
 
     ```python
+    import os
+
+
     GENERAL_MANAGER = {
         "CHAT": {
             "enabled": True,
             "provider": "general_manager.chat.providers.OllamaProvider",
             "provider_config": {
-                "model": "qwen3.5:9b",
+                "model": os.environ["CHAT_MODEL"],
                 "base_url": "http://127.0.0.1:11434",
             },
         }
@@ -137,7 +141,7 @@ settings. Add one of these configurations to the project settings module.
             "enabled": True,
             "provider": "general_manager.chat.providers.OpenAIProvider",
             "provider_config": {
-                "model": "gpt-4.1-mini",
+                "model": os.environ["CHAT_MODEL"],
                 "api_key": os.environ["OPENAI_API_KEY"],
                 "timeout_seconds": 60,
             },
@@ -176,7 +180,7 @@ settings. Add one of these configurations to the project settings module.
             "enabled": True,
             "provider": "general_manager.chat.providers.AnthropicProvider",
             "provider_config": {
-                "model": "claude-3-5-haiku-latest",
+                "model": os.environ["CHAT_MODEL"],
                 "api_key": os.environ["ANTHROPIC_API_KEY"],
                 "max_tokens": 1024,
                 "timeout_seconds": 60,
@@ -196,7 +200,7 @@ settings. Add one of these configurations to the project settings module.
             "enabled": True,
             "provider": "general_manager.chat.providers.GeminiProvider",
             "provider_config": {
-                "model": "gemini-2.5-flash",
+                "model": os.environ["CHAT_MODEL"],
                 "api_key": os.environ["GOOGLE_API_KEY"],
             },
         }

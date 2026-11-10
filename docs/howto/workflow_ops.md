@@ -1,6 +1,15 @@
 # Workflow Operations
 
-This guide covers production operations for the workflow outbox and dead-letter flows.
+This guide covers production operations for the workflow outbox and dead-letter
+flows. Complete the [event tutorial](workflow_events.md) first: configure the
+database registry and Celery engine, apply migrations, and load application
+handler registrations in every routing process.
+
+Normal operation drains pending events; replay is for dead letters whose cause
+has been repaired. Follow [drain outbox](#drain-outbox), inspect the
+[recommended metrics](#recommended-metrics), then use [replay](#replay-dead-letters)
+when needed. The transaction example below explains when a new async execution
+becomes dispatchable.
 
 ## Start a durable async execution inside a transaction
 
@@ -69,6 +78,14 @@ Operator notes:
 - if Celery `.delay(...)`, claiming, telemetry, or inline routing fails, the task exception propagates to the caller or Celery worker.
 - `route_outbox_event()` returns `False` for missing/processed rows, stale or missing claim ownership, rows with no applicable handlers, duplicate in-progress delivery attempts, and route failures; unexpected registry exceptions propagate.
 - malformed claim entries in `route_outbox_claims_batch()` are logged and skipped; duplicate claim entries are attempted in list order and rely on registry ownership checks.
+
+Run workers that consume both framework queues: `workflow.events` for outbox
+routing and `workflow.executions` for workflow handlers. Include any additional
+application queues your deployment needs. For example:
+
+```bash
+celery -A <your_project> worker -Q workflow.events,workflow.executions -l info
+```
 
 In production, run a dedicated Celery Beat process to trigger periodic drain:
 

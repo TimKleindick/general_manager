@@ -73,6 +73,7 @@ nav:
       - quickstart.md
       - learning_paths.md
       - installation.md
+      - configuration.md
       - faq.md
   - Concepts:
       - GeneralManager (Core):
@@ -227,5 +228,6 @@ nav:
       - adr/0006-workflow-engine-architecture.md
       - adr/0007-graphql-capability-exposure.md
       - adr/0008-llm-chat-endpoint.md
+      - adr/0009-calculation-filter-authorization.md
       - adr/0010-planned-chat-evidence.md
       - adr/0011-chat-schema-contracts.md

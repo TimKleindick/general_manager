@@ -5,6 +5,11 @@ preserves create permissions, normalization, model validation and business rules
 model save hooks, history, and per-record lifecycle events. Each batch is atomic:
 a failed record rolls back the other records and history in that batch.
 
+The examples assume an existing writable `Product` manager with `sku` and
+`name` fields, plus a `user` account allowed to create those records. Run the
+import in an initialized Django application; replace the application imports
+with your own manager module.
+
 ## Consume the result iterator
 
 ```python

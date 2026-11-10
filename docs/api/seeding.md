@@ -1,5 +1,11 @@
 # Seeding API
 
+These helpers plan and execute minimum row-count targets through manager
+factories. Start with [seeding concepts](../concepts/seeding.md) or
+[bulk factory generation](../howto/factory_bulk_generate.md) for the command workflow.
+Factory seeding creates fixture/demo data; application imports with an actor
+and create-permission checks use [`create_many()`](../howto/create_many.md).
+
 ::: general_manager.seeding.manager_landscape.InvalidSeedTargetError
 
 ::: general_manager.seeding.manager_landscape.ManagerSelectionError

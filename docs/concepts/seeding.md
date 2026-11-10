@@ -1,5 +1,10 @@
 # Seeding
 
+For the command path, start with [bulk factory generation](../howto/factory_bulk_generate.md).
+This page explains target counts, dependency ordering and partial failure.
+Seeding uses factories for fixture/demo data; it is not the actor-authorized
+[`create_many()` import path](../howto/create_many.md).
+
 GeneralManager seeding builds local, demo, and test data from managers that expose factories. It is dependency-aware enough to order selected managers by interface relationships, but explicit enough that it does not silently create unrelated data.
 
 ## Seedable managers

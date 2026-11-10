@@ -16,7 +16,17 @@ class PrintAuditLogger(AuditLogger):
         print(self.prefix, event.action, event.granted, event.attributes)
 ```
 
-Register the logger during Django startup:
+Put `PrintAuditLogger` in an importable application module such as
+`myproject.audit`. Select it through settings, preserving the other entries:
+
+```python
+GENERAL_MANAGER = {
+    "AUDIT_LOGGER": "myproject.audit.PrintAuditLogger",
+}
+```
+
+A manual startup override is also possible, but its app config must run after
+`general_manager` in `INSTALLED_APPS` so it is not replaced by settings setup:
 
 ```python
 from general_manager.permission.audit import configure_audit_logger
@@ -65,13 +75,17 @@ class KafkaAuditLogger(_BufferedAuditLogger):
 
 ## Wiring the Kafka producer
 
-Instantiate the Kafka producer in your Django settings or app config and pass it to the logger. The example below uses `kafka-python`, but the same pattern applies to `confluent-kafka` or `aiokafka` producers.
+This optional example requires an application-owned Kafka deployment and the
+`kafka-python` package. Create the synchronous producer in an application
+startup function and pass it to the logger. Other clients need an adapter for
+their own methods and lifecycle; an async producer cannot be substituted for
+this synchronous `_handle_batch()` implementation.
 
 ```python
-# settings.py
+# myproject/audit_setup.py
 from kafka import KafkaProducer
 from general_manager.permission.audit import configure_audit_logger
-from .logging import KafkaAuditLogger
+from .audit import KafkaAuditLogger
 
 
 def configure_permission_audit_logger() -> None:
@@ -88,7 +102,7 @@ def configure_permission_audit_logger() -> None:
     )
 ```
 
-Call `configure_permission_audit_logger()` from your Django `AppConfig.ready()` hook so the logger attaches as soon as the app loads. Producers created with `confluent_kafka.Producer` follow the same pattern—pass the `Producer` instance and encode each event before calling `.produce(topic, value=payload)`.
+Call `configure_permission_audit_logger()` from an application `AppConfig.ready()` that runs after `general_manager`. Producers created with `confluent_kafka.Producer` follow the same pattern—pass the `Producer` instance and encode each event before calling `.produce(topic, value=payload)`.
 
 ## Settings-based configuration
 
@@ -122,5 +136,5 @@ def test_audit_logger_batches(db):
     assert producer.sent_messages  # captured payloads
 ```
 
-- Use the existing `_serialize_event()` helper when you need a stable JSON shape.
-- For async infrastructure, configure `batch_size=1` or `use_worker=False` to simplify deterministic tests.
+- Define an application-owned serialized event shape. `_serialize_event()` is an internal helper, not a stable public integration contract.
+- For deterministic tests, provide a synchronous fake producer and explicitly flush accepted events. The shown `KafkaAuditLogger` exposes `batch_size` but no `use_worker` option.

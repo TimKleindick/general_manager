@@ -157,8 +157,8 @@ authorize a conversion. The named numeric attribute must exist on the
 interface, and the executable schema must be rebuilt after changing the
 declaration.
 
-Rebuild the executable schema after changing declarations. This metadata states
-dimensions; it does not supply values, identities or a conversion query.
+This metadata states dimensions; it does not supply values, identities or a
+conversion query.
 Complete conversion still needs current task-linked schema witnesses, selected
 quantity/unit/factor/identity paths and the supported complete population. See
 [evidence and calculations](../concepts/chat_evidence.md).
@@ -168,7 +168,12 @@ quantity/unit/factor/identity paths and the supported complete population. See
 With a valid Django session and CSRF token:
 
 ```bash
-curl -N -X POST http://localhost:8000/chat/stream/   -H 'Content-Type: application/json'   -H 'Accept: text/event-stream'   -H 'Cookie: sessionid=<session-cookie>; csrftoken=<csrf-token>'   -H 'X-CSRFToken: <csrf-token>'   --data '{"text":"List the available materials"}'
+curl -N -X POST http://localhost:8000/chat/stream/ \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -H 'Cookie: sessionid=<session-cookie>; csrftoken=<csrf-token>' \
+  -H 'X-CSRFToken: <csrf-token>' \
+  --data '{"text":"List the available materials"}'
 ```
 
 Use the actual configured chat base URL. The placeholders must come from the

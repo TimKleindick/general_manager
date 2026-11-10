@@ -1,5 +1,12 @@
 # Factory API
 
+Factories create fixture and demo data from ORM-backed managers. Follow
+[factory concepts](../concepts/factories/index.md) and
+[related-object generation](../howto/factory_related_objects.md) before using
+the detailed generation contract below. Factories construct and save backing
+models; application writes that need the manager's permission gate should use
+`Manager.create(creator_id=...)` or [`create_many()`](../howto/create_many.md).
+
 ::: general_manager.factory.auto_factory.AutoFactory
 
 `AutoFactory` is the generated factory base attached to ORM-backed managers as

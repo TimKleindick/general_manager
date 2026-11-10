@@ -1,5 +1,23 @@
 # GraphQL API
 
+GeneralManager builds GraphQL types, queries and mutations from registered
+managers and their interfaces. Start with [exposing a manager](../howto/expose_via_graphql.md)
+for a complete query and update; use this page for exact schema contracts.
+
+| Task | Reference section |
+| --- | --- |
+| Create, update or delete a record | [Generated CRUD mutations](#generated-crud-mutation-contract) |
+| Pass native record identities | [Identifier scalars](#identifier-scalar-contract) |
+| Supply calculation inputs | [Typed lists](#typed-calculation-list-arguments) and [manager inputs](#manager-typed-calculation-input-filters) |
+| Sort or aggregate collections | [Sorting](#compound-list-sorting) and [grouped sums](#explicit-grouped-result-sums) |
+| Read an earlier snapshot | [Historical queries](#historical-queries-with-asof) |
+| Receive change notifications | [Commit-bound delivery](#commit-bound-websocket-delivery) and [subscription authorization](#detail-subscription-authorization) |
+| Upload files | [File uploads](#file-uploads) |
+
+Generated resolvers apply manager and field permissions in the request context.
+See [where permissions run](../concepts/permission/index.md#where-permissions-run)
+before using a custom resolver or invoking Python managers directly.
+
 ## Typed calculation list arguments
 
 `Input(list[T])` generates a required list with non-null elements;

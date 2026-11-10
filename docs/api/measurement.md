@@ -1,5 +1,11 @@
 # Measurement API
 
+`Measurement` represents a value with a unit; `MeasurementField` stores such
+values on Django models. Begin with [measurement concepts](../concepts/measurement/index.md)
+or the [model tutorial](../howto/add_model_with_measurement.md), then use the
+contracts below for conversion, assignment and defaults. The
+[dataframes API](dataframes.md) covers value/unit column exchange.
+
 ::: general_manager.measurement.measurement.Measurement
 
 ::: general_manager.measurement.measurement_field.MeasurementField

@@ -4,6 +4,14 @@ GeneralManager can emit lightweight GraphQL metrics for Prometheus/Grafana
 dashboards. The instrumentation is opt-in and avoids high-cardinality labels by
 default.
 
+The generated `GeneralManagerGraphQLView` records request-level metrics.
+Optional `GraphQLResolverTimingMiddleware` records resolver timing; installing
+that middleware alone does not add the view's request metrics to a custom
+integration. To collect Prometheus metrics, install `prometheus-client`
+and expose the default registry through the host application's metrics endpoint
+or exporter. These settings choose instrumentation; they do not configure a
+Prometheus scrape job or Grafana dashboard.
+
 ## Enable metrics
 
 Add the following to `settings.py`:

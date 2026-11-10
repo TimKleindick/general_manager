@@ -6,8 +6,9 @@ affected resource instead of one row-level event per write.
 
 ## Wrap the outermost transaction
 
-Import the context from the stable API module and place it outside the true
-outermost database transaction:
+Use an existing `Project` manager with a `status` field and a `user_id` for an
+account allowed to update the selected rows. Import the context from the stable
+API module and place it outside the true outermost database transaction:
 
 ```python
 from django.db import transaction
@@ -19,7 +20,7 @@ from myapp.managers import Project
 with bulk_data_change_notifications():
     with transaction.atomic():
         for project in Project.filter(status="active"):
-            project.update(status="archived")
+            project.update(creator_id=user_id, status="archived")
 ```
 
 GraphQL and RemoteAPI receive `post_data_change` immediately, but their
@@ -40,7 +41,7 @@ The reverse order is still commit-safe but does not guarantee aggregation:
 with transaction.atomic():
     with bulk_data_change_notifications():
         for project in Project.filter(status="active"):
-            project.update(status="archived")
+            project.update(creator_id=user_id, status="archived")
 ```
 
 Here the batch closes before the outer transaction runs its commit callbacks,
@@ -77,6 +78,8 @@ delivery remains commit-bound and rollback-safe.
 
 ## Observe the data-change lifecycle
 
+The following `begin_coordination()` and `finish_coordination(...)` callbacks
+are application-owned integration points, not framework helpers.
 Use the lifecycle signals when an integration needs to coordinate work around
 the outermost ORM mutation, rather than around every nested `pre_data_change`
 or `post_data_change` callback:
