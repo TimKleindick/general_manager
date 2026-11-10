@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.89.2 (2026-11-10)
+
+### Bug Fixes
+
+- Index numeric components of Meilisearch text
+  ([`9535d50`](https://github.com/TimKleindick/general_manager/commit/9535d50f839e98ca64fad3c0479b376fe36cb03c))
+
+
 ## v0.89.1 (2026-11-10)
 
 ### Bug Fixes
