@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.89.1 (2026-11-10)
+
+### Bug Fixes
+
+- **search**: Enable fast path for relation ID aliases
+  ([`6e5ef64`](https://github.com/TimKleindick/general_manager/commit/6e5ef6473ac1868230bb6ccb70fa3cdd6404178c))
+
+### Testing
+
+- **search**: Cover unproven relation ID alias targets
+  ([`a3d8f3e`](https://github.com/TimKleindick/general_manager/commit/a3d8f3ec89174467cf49b7e916d70abed1d24af6))
+
+
 ## v0.89.0 (2026-11-10)
 
 ### Features
