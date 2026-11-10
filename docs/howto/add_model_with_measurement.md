@@ -2,10 +2,15 @@
 
 Learn how to add a manager that stores measurement values with automatic unit conversion.
 
+Start with the [quickstart](../quickstart.md) project and keep its `projects`
+application installed. Add the manager below to `projects/managers.py`; the
+examples use Django's default user model and the default authenticated-write
+policy. Generated GraphQL must be enabled as in the quickstart.
+
 ## Step 1: Declare the manager
 
 ```python
-# core/managers.py
+# projects/managers.py
 from django.db.models import CharField
 
 from general_manager.interface import DatabaseInterface
@@ -63,9 +68,18 @@ python manage.py migrate
 
 ## Step 3: Create data
 
+Open `python manage.py shell` after migrating. Create an ordinary demo user
+(use a fresh username when repeating this example), then supply its ID for the
+write permission check:
+
 ```python
+from django.contrib.auth import get_user_model
+from general_manager.measurement import Measurement
+from projects.managers import InventoryItem
+
+author = get_user_model().objects.create_user(username="measurement-author")
 item = InventoryItem.create(
-    creator_id=1,  # replace with your user ID
+    creator_id=author.pk,
     name="Battery pack",
     weight="2.6 kg",
     price="199.00 EUR",
@@ -134,17 +148,23 @@ The GraphQL schema exposes measurements as objects. Clients can request measurem
 ```graphql
 query {
   inventoryItemList {
-    name
-    weight(targetUnit: "gram") {
-      value
-      unit
-    }
-    price {
-      value
-      unit
+    items {
+      name
+      weight(targetUnit: "gram") {
+        value
+        unit
+      }
+      price {
+        value
+        unit
+      }
     }
   }
 }
 ```
+
+The list result wraps records in `items`. The seeded item has a weight of
+`2600` grams and a price of `199` EUR; measurement fields return objects with
+`value` and `unit`, even when only one item is returned.
 
 You now have a measurement-aware manager ready for reporting and analytics.

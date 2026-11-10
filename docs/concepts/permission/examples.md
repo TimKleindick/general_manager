@@ -2,6 +2,12 @@
 
 This page collects small, decision-oriented examples for the permission system. Use it when you already understand the permission primitives and want to see which pattern fits a real policy.
 
+These are policy fragments for application-defined managers. Names such as
+`isProjectMember`, `isFinanceTeam`, and `isLegalTeam` represent your own registered
+permission functions, not built-in rules or methods discovered on a manager.
+See [Define permission rules](../../howto/add_permission_rule.md) for a complete
+registration and execution example.
+
 ## Example 1: broad default with one tighter field
 
 Use `AdditiveManagerPermission` when most fields share a broad rule and one field needs an extra gate.

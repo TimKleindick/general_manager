@@ -1,5 +1,23 @@
 # Core API
 
+Use this reference for exact parameters, results, and exceptions. For the model
+behind them, start with [architecture](../concepts/architecture.md) and
+[managers and buckets](../concepts/models_entities.md).
+
+| Responsibility | Reference section |
+| --- | --- |
+| Identify, read, and write one domain object | [Managers](#managers) |
+| Read earlier versions | [ORM manager history](#orm-manager-history) |
+| Configure discovery and registration | [Application startup](#application-startup) |
+| Describe calculation inputs | [Inputs and domains](#inputs-and-domains) |
+| Filter, sort, group, and project collections | [Buckets](#buckets) and [projected reads](#projected-reads) |
+| Validate domain conditions | [Rules](#rules) |
+
+See the separate [interface](interface.md), [permission](permission.md),
+[GraphQL](graphql.md), and [cache](cache.md) references for those layers.
+
+## Managers
+
 ::: general_manager.manager.general_manager.GeneralManager
 
 `GeneralManager(*args, **kwargs)` constructs the configured `Interface`, stores
@@ -217,6 +235,8 @@ application output, and does not wrap import or Django app-registry errors.
 Detailed field and model behavior is documented in the Search and Workflow API
 pages.
 
+## Application startup
+
 ::: general_manager.apps.GeneralmanagerConfig
 
 `GeneralmanagerConfig.ready()` is the Django startup entry point for the
@@ -243,6 +263,8 @@ call. `register_system_checks()` is process-idempotent by module-qualified
 interface class identity, so repeated app setup skips already-registered hooks
 without suppressing different interface classes that share the same bare class
 name.
+
+## Manager class construction
 
 ::: general_manager.manager.meta.GeneralManagerMeta
 
@@ -384,6 +406,8 @@ to install. That still counts as initialized for bulk startup work because the
 class no longer needs pending descriptor processing; targeted initialization for
 a named field still returns `False` when the name is absent.
 
+## Grouped managers
+
 ::: general_manager.manager.group_manager.GroupManager
 
 `GroupManager` is the per-group object yielded by `GroupBucket`. Attribute
@@ -425,6 +449,8 @@ in-process group state, not as a persistent cross-process identifier. Missing
 metadata or unsupported return annotations raise `MissingGroupAttributeError`;
 errors from bucket iteration, attribute access, unioning, summing, merging, or
 comparison propagate unchanged.
+
+## Inputs and domains
 
 ::: general_manager.manager.input.Input
 
@@ -594,6 +620,8 @@ after the supplied start date and unaligned ends act as upper bounds. Examples:
 `month_start` normalizes `2024-02-15` to `2024-02-01`; `month_end` normalizes it
 to `2024-02-29`; `quarter_end` normalizes it to `2024-03-31`; `year_start`
 normalizes it to `2024-01-01`; `year_end` normalizes it to `2024-12-31`.
+
+## Buckets
 
 ::: general_manager.bucket.base_bucket.Bucket
 
@@ -939,6 +967,8 @@ Slices, unions, and `none()` are concrete buckets whose count is their concrete
 item count; `all()` always returns a new bucket rather than `self`.
 `__contains__` checks complete materialized manager identity, including concrete
 manager class and snapshot context.
+
+## Rules
 
 ::: general_manager.rule.rule.Rule
 

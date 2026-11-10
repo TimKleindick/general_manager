@@ -16,6 +16,27 @@ All interfaces inherit from `general_manager.interface.base_interface.InterfaceB
 
 Understanding the capabilities of each interface helps you pick the right tool for each domain object.
 
+## Choose by source and ownership
+
+| Situation | Start with |
+| --- | --- |
+| You are defining new database tables | `DatabaseInterface` |
+| Your Django model already exists | `ExistingModelInterface` |
+| You own a fixed reference dataset | A read-only database interface |
+| Values are derived from explicit inputs | `CalculationInterface` |
+| A service owns the records | `RequestInterface`, or the remote manager integration for a GeneralManager service |
+| A workbook owns the rows | `ExcelInterface` |
+
+Declaring an interface does not make every operation available. For example,
+a calculation has inputs and computed values rather than persistent rows to
+update. A request interface can expose only the operations configured for its
+remote service. Use the relevant guide to check supported reads, writes,
+filtering, history, and permissions.
+
+The implementation details below are useful when extending interfaces. Normal
+application code can use the public classes exported by
+`general_manager.interface` without importing manifests or capability internals.
+
 ## Module layout
 
 The interface layer is now organised by responsibility:

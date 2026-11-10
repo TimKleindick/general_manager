@@ -2,9 +2,63 @@
 
 This tutorial shows how to configure the workflow engine in `settings.py`, trigger workflow events from manager updates, and route events using human-readable names and predicates.
 
+## Understand event routing first
+
+An event describes something that happened. A registry chooses handlers by
+event type or readable name, then applies any predicates. A handler may start a
+workflow, but routing an event does not itself require a Celery worker.
+
+In `python manage.py shell` in an installed GeneralManager project, try one
+isolated in-memory route:
+
+```python
+from general_manager.workflow.event_registry import InMemoryEventRegistry
+from general_manager.workflow.events import manager_updated_event
+
+registry = InMemoryEventRegistry()
+
+def report_project_update(event):
+    print(event.payload["manager"], event.payload["changes"]["status"]["new"])
+
+registry.register("manager_updated", handler=report_project_update)
+event = manager_updated_event(
+    manager="Project",
+    identification={"id": 42},
+    changes={"status": "active"},
+    old_values={"status": "draft"},
+    event_name="manager_updated",
+)
+handled = registry.publish(event)
+print(handled)
+```
+
+This prints `Project active`, then `True`. It routes a constructed event; it
+does not update a database row or attach this private registry to the
+application. The next steps connect the configured registry to real manager
+changes and explain durable delivery.
+
 ## 1. Configure the workflow engine
 
-Add workflow settings in `settings.py`:
+For a local application, start with synchronous execution and the default
+in-memory engine and registry:
+
+```python
+GENERAL_MANAGER = {
+    "WORKFLOW_MODE": "local",
+    "WORKFLOW_SIGNAL_BRIDGE": True,
+    "WORKFLOW_ASYNC": False,
+}
+```
+
+Merge these keys into your existing `GENERAL_MANAGER` settings. Local state
+lives in the process and is lost on restart. Use the production configuration
+below when you need durable database routing and Celery workers; apply the
+GeneralManager migrations and configure Celery before enabling it. See
+[workflow operations](workflow_ops.md) for deployment and outbox processing.
+
+### Production configuration
+
+Replace the local choices with the required production settings in `settings.py`:
 
 ```python
 GENERAL_MANAGER = {
@@ -176,15 +230,26 @@ without `.` match `event_name`. There is no wildcard, prefix, whitespace, or
 case normalization. Keep readable event names dot-free to avoid routing them as
 event types.
 
-Use a `when` filter to route only relevant updates:
+Define or import your application's `start_project_status_workflow` handler
+in a registration module. Import that module from your application's
+`AppConfig.ready()`, with `general_manager` before your app in `INSTALLED_APPS`,
+so GeneralManager has already configured the registry. Do not perform this
+registration while `managers.py` is being discovered: registry configuration
+happens afterwards and can replace that earlier registry.
+
+Register on `get_event_registry()` so the signal bridge and your handler use
+the same configured registry. Load the registration in each process that must
+route events, including workers.
+Use a stable registration ID and a `when` filter for relevant updates:
 
 ```python
-from general_manager.workflow.event_registry import InMemoryEventRegistry
+from general_manager.workflow.event_registry import get_event_registry
 
-event_registry = InMemoryEventRegistry()
+event_registry = get_event_registry()
 event_registry.register(
     "manager_updated",
     handler=start_project_status_workflow,
+    registration_id="project-status-workflow-v1",
     when=lambda event: (
         event.payload.get("manager") == "Project"
         and event.payload.get("changes", {}).get("status", {}).get("new") == "active"
@@ -208,9 +273,13 @@ event = manager_updated_event(
     identification={"id": 42},
     changes={"status": "active"},
     old_values={"status": "draft"},
-    event_name="project_status_changed",
+    event_name="manager_updated",
 )
 ```
+
+The event name matches the `manager_updated` route registered in Step 2. If you
+choose a domain name such as `project_status_changed`, register that exact name
+as a separate route as well.
 
 The resulting update payload stores per-field diffs:
 
@@ -297,7 +366,11 @@ def start_project_status_workflow(event):
     )
 ```
 
-Correlation behavior:
+The following correlation and payload contracts describe
+`CeleryWorkflowEngine`. The local engine's behavior is described in Step 1;
+in particular, local correlation also reuses failed executions.
+
+Correlation behavior (`CeleryWorkflowEngine`):
 - `correlation_id` is a durable deduplication key scoped to
   `WorkflowDefinition.workflow_id`, which is the durable workflow identity.
 - starting the same workflow with the same `correlation_id` reuses the existing execution record instead of creating a second one while the original execution is still active or already completed.
@@ -309,7 +382,7 @@ Correlation behavior:
   active/completed execution when available; otherwise the database
   `IntegrityError` propagates.
 
-Payload and metadata behavior:
+Payload and metadata behavior (`CeleryWorkflowEngine`):
 - `input_data` and `metadata` are top-level `Mapping[str, object]` values and
   are copied with `dict(...)` before persistence.
 - nested values are accepted or rejected by the configured Django `JSONField`;
@@ -336,7 +409,11 @@ Action registry behavior:
 
 ## 5. Trigger without signals (explicit publish)
 
-If you do not want signal-based triggering, publish events directly from your service layer, mutation, or view:
+If you do not want signal-based triggering, publish events directly from your
+service layer, mutation, or view. This continues the constructed example with
+ID `42`; it does not update a database record. In application code, obtain
+identification from the actual affected manager and publish the event only when
+the corresponding change should be delivered.
 
 ```python
 from general_manager.workflow.event_registry import get_event_registry
@@ -344,10 +421,10 @@ from general_manager.workflow.events import manager_updated_event
 
 event = manager_updated_event(
     manager="Project",
-    identification=project.identification,
+    identification={"id": 42},
     changes={"status": "active"},
     old_values={"status": "draft"},
-    event_name="project_status_changed",
+    event_name="manager_updated",
 )
 get_event_registry().publish(event)
 ```

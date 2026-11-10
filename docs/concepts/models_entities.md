@@ -129,7 +129,7 @@ checks in application code if multiple matching groups would be ambiguous.
 
 Indexing a `GroupBucket` with an integer returns one group. Slicing returns a new
 `GroupBucket` backed by the union of the selected groups' source buckets; slicing
-to no groups raises `EmptyGroupBucketSliceError`. `sort()` orders groups in
+to no groups returns an empty `GroupBucket`. `sort()` orders groups in
 memory by group attributes and can propagate normal `AttributeError` or
 `TypeError` from missing or incomparable values. Combining grouped buckets with
 `|` requires the same bucket type, manager class, and group-by key tuple; the
@@ -163,6 +163,6 @@ raise `InvalidManagerStateError`.
 ## Pattern recommendations
 
 - Use descriptive attribute names that align with your GraphQL schema.
-- Expose related managers via buckets instead of raw Django querysets so that permission checks remain consistent.
+- Expose related managers via buckets instead of raw Django querysets to preserve manager and bucket behavior. A bucket does not authorize its own reads; generated GraphQL applies its read policy, while custom Python endpoints must enforce theirs.
 
 With these guidelines you can design manager hierarchies that remain understandable as your project grows.
