@@ -246,6 +246,23 @@ def _contains_measurement(annotation: object) -> bool:
     return any(_contains_measurement(argument) for argument in get_args(annotation))
 
 
+class InvalidGraphQLMutationDefaultError(TypeError):
+    """Raised when the global generated CRUD default is not boolean."""
+
+    def __init__(self) -> None:
+        super().__init__("GRAPHQL_MUTATIONS_ENABLED must be a bool.")
+
+
+class InvalidGraphQLMutationConfigurationError(TypeError):
+    """Raised when a manager's generated CRUD allowlist is invalid."""
+
+    def __init__(self, manager_name: str) -> None:
+        super().__init__(
+            f"{manager_name}.__graphql_mutations__ must be a set or frozenset "
+            "containing only 'create', 'update', and 'delete'."
+        )
+
+
 class GraphQLOutputTypeError(ValueError):
     """Raised when an output declaration cannot be registered safely."""
 
@@ -724,7 +741,14 @@ class GraphQL:
         registering anything. Otherwise, it generates create/update/delete
         mutation classes when the manager's Interface advertises support for the
         corresponding operation: either by overriding the `InterfaceBase` method
-        or by listing the operation in `Interface.get_capabilities()`. Each
+        or by listing the operation in `Interface.get_capabilities()`. The
+        manager's `__graphql_mutations__` set or frozenset must also include that
+        operation. When omitted, the global GRAPHQL_MUTATIONS_ENABLED setting
+        defaults to True (all three operations); False hides all. Explicit
+        inherited allowlists override that default. An empty set
+        disables generated CRUD without changing Python writes, permissions,
+        queries, or separately registered custom mutations. Invalid allowlists
+        raise `TypeError` before mutation registration changes. Each
         successfully generated mutation is stored on the class-level registry
         (`_mutations`) under the names `create<ManagerName>`,
         `update<ManagerName>`, and `delete<ManagerName>`. If a mutation factory
@@ -740,6 +764,20 @@ class GraphQL:
         )
         if not interface_cls:
             return None
+
+        supported_mutations = {"create", "update", "delete"}
+        global_default = get_setting("GRAPHQL_MUTATIONS_ENABLED", True)
+        if not isinstance(global_default, bool):
+            raise InvalidGraphQLMutationDefaultError()
+        graphql_mutations = getattr(
+            generalManagerClass,
+            "__graphql_mutations__",
+            supported_mutations if global_default else frozenset(),
+        )
+        if not isinstance(graphql_mutations, (set, frozenset)) or not (
+            graphql_mutations <= supported_mutations
+        ):
+            raise InvalidGraphQLMutationConfigurationError(generalManagerClass.__name__)
 
         default_return_values = {
             "success": graphene.Boolean(),
@@ -765,7 +803,7 @@ class GraphQL:
             method_overridden = base_method.__code__ != method.__code__
             return method_overridden or op_name in capabilities
 
-        if _supports("create", "create"):
+        if "create" in graphql_mutations and _supports("create", "create"):
             create_name = f"create{generalManagerClass.__name__}"
             create_mutation = cls.generate_create_mutation_class(
                 generalManagerClass, default_return_values
@@ -780,7 +818,7 @@ class GraphQL:
                     },
                 )
 
-        if _supports("update", "update"):
+        if "update" in graphql_mutations and _supports("update", "update"):
             update_name = f"update{generalManagerClass.__name__}"
             update_mutation = cls.generate_update_mutation_class(
                 generalManagerClass, default_return_values
@@ -795,7 +833,7 @@ class GraphQL:
                     },
                 )
 
-        if _supports("delete", "delete"):
+        if "delete" in graphql_mutations and _supports("delete", "delete"):
             delete_name = f"delete{generalManagerClass.__name__}"
             delete_mutation = cls.generate_delete_mutation_class(
                 generalManagerClass, default_return_values

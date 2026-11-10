@@ -178,6 +178,7 @@ def _reconstruct_general_manager(
 
 class GeneralManager(metaclass=GeneralManagerMeta):
     chat_exposed: bool = False
+    __graphql_mutations__: ClassVar[set[str] | frozenset[str]]
     _gm_uses_default_identification_dependency_active: ClassVar[bool] = True
     Permission: Type[BasePermission]
     _attributes: dict[str, object]

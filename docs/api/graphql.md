@@ -223,6 +223,27 @@ variables object always supplies a value.
 
 ## Generated CRUD mutation contract
 
+`GeneralManager.__graphql_mutations__: ClassVar[set[str] | frozenset[str]]` controls
+which generated CRUD mutation fields may be registered for that manager.
+When no allowlist is declared, `GENERAL_MANAGER["GRAPHQL_MUTATIONS_ENABLED"]`
+controls the default (`True` exposes all three, `False` exposes none). Assign a set or
+frozenset containing any subset of these lower-case operation names; an empty
+set disables all generated CRUD. For example, `__graphql_mutations__ = {"create",
+"delete"}` omits generated updates only. The configured set is inherited;
+assigning it on a subclass replaces the complete allowlist.
+
+`GraphQL.create_graphql_mutation()` validates this configuration before changing
+that manager's mutation registry entries. Unsupported containers, including
+`None`, strings, lists, tuples and dictionaries, or unknown operation names
+raise `TypeError`. An allowlisted operation is registered only if the interface
+already supports it. Configure the attribute before schema assembly; it does
+not change a schema that has already been built.
+
+The option affects only registration of generated mutations. Direct Python
+writes, their permission checks, interface capabilities, generated read queries
+and separately registered custom mutations retain their existing behavior.
+See the [selective-exposure recipe](../howto/expose_via_graphql.md#disable-selected-generated-mutations).
+
 `GraphQL.create_graphql_mutation(generalManagerClass: type[GeneralManager]) -> None`
 registers the supported generated fields `create<ManagerName>`,
 `update<ManagerName>`, and `delete<ManagerName>`. Its parameter is the
