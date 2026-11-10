@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
 
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.db import models
 from graphql import GraphQLError
@@ -302,12 +303,25 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         with self.assertRaisesMessage(GraphQLError, "query field 'name'"):
             self.authorize([self.record, subtype], ["name"])
 
-    def test_delegation_still_uses_strict_additional_budget(self):
+    def test_restrictive_delegation_still_uses_additional_budget(self):
+        """Budget a real delegated field restriction even when this actor passes it."""
+
         class DelegatedPermission(OverrideManagerPermission):
             __based_on__: ClassVar[str] = "target"
 
         self.record.Permission = DelegatedPermission
+        # The actor passes an authenticated-only field gate, but that gate
+        # remains stricter than the target's public row rule and must be budgeted.
+        self.info.context.user = get_user_model().objects.create_user(
+            username="delegated-budget-user"
+        )
         with (
+            patch.object(
+                self.Target.Permission,
+                "name",
+                {"read": ["isAuthenticated"]},
+                create=True,
+            ),
             patch(
                 "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
                 1,

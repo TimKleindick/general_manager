@@ -1057,6 +1057,61 @@ def _can_prepare_local_read_definitions(permission_class: object) -> bool:
     return additional_local_read_permission(permission_class, "") is not None
 
 
+def additional_resolved_read_permission(
+    permission: BasePermission, attribute: str
+) -> bool | None:
+    """Inspect the already-resolved delegation chain without reading relations again.
+
+    This is accounting only, never an authorization result. The caller still
+    executes the original field check on this exact permission instance. Use
+    effective row rules so a null delegation's configured fallback is respected.
+    Unknown executable policies or malformed/cyclic chains remain budgeted.
+    """
+    seen: set[int] = set()
+    current: BasePermission | None = permission
+    while current is not None:
+        if id(current) in seen or len(seen) >= 64:
+            return None
+        seen.add(id(current))
+        policy = type(current)
+        if not _can_prepare_local_read_definitions(policy):
+            return None
+        state = vars(current)
+        base = state.get("_read_permissions")
+        definitions = state.get("_ConfiguredManagerPermission__attribute_permissions")
+        if type(definitions) is not _AttributePermissionDefinitions:
+            return None
+        # Runtime alias groups can come from custom manager metadata. Prove
+        # every captured read declaration redundant instead of invoking that
+        # metadata a second time or assuming aliases always use an _id suffix.
+        # An unrelated restrictive declaration may overestimate work, but no
+        # potentially relevant field gate can become unbudgeted.
+        names = {attribute, *definitions}
+        for name in sorted(names):
+            rules = definitions.get(name)
+            if rules is not None and type(rules) is not dict:
+                return None
+            if rules is not None and "read" in rules:
+                field_rules: object = rules["read"]
+                if (
+                    type(field_rules) is not list and type(field_rules) is not tuple
+                ) or not all(type(rule) is str for rule in field_rules):
+                    return None
+                if type(base) is not list or not all(
+                    type(rule) is str for rule in base
+                ):
+                    return None
+                if field_rules and (not base or not set(base).issubset(field_rules)):
+                    return True
+        if "_ConfiguredManagerPermission__based_on_permission" not in state:
+            return None
+        delegate = state["_ConfiguredManagerPermission__based_on_permission"]
+        if delegate is not None and not isinstance(delegate, BasePermission):
+            return None
+        current = delegate
+    return False
+
+
 def additional_local_read_permission(
     permission_class: object,
     attribute: str,

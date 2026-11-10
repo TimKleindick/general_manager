@@ -491,8 +491,37 @@ def authorize_query_fields(
         aliases, names, native_relations = _operand_field_names(
             type(instance), field, attributes, native_paths=native_paths
         )
-        if budget_additional_permissions_only and needs_additional_budget(
-            instance, names
+        # A standard delegated policy already resolves its concrete target
+        # during the normal field check. Inspect that same permission object,
+        # not a second relation read or a static declared target type.
+        from general_manager.permission.manager_based_permission import (
+            _can_prepare_local_read_definitions,
+            additional_resolved_read_permission,
+        )
+        from general_manager.permission.base_permission import BasePermission
+
+        permission = getattr_static(instance, "Permission", None)
+        resolved_budget = (
+            budget_additional_permissions_only
+            and getattr_static(permission, "__based_on__", None) is not None
+            and _can_prepare_local_read_definitions(permission)
+        )
+        charged = False
+
+        def charge_resolved(resolved: BasePermission, name: str) -> None:
+            """Charge this operand once when its resolved policy adds or may add restrictions."""
+            nonlocal charged
+            if (
+                not charged
+                and additional_resolved_read_permission(resolved, name) is not False
+            ):
+                budget.charge()
+                charged = True
+
+        if (
+            budget_additional_permissions_only
+            and not resolved_budget
+            and needs_additional_budget(instance, names)
         ):
             budget.charge()
         known_fields = set(attributes) | set(instance.identification)
@@ -501,8 +530,25 @@ def authorize_query_fields(
         known_fields.update(instance.Interface.input_fields)
         if not names.intersection(known_fields):
             raise QueryFieldPermissionError(field)
-        if any(not check_read_permission(instance, info, name) for name in names):
-            raise QueryFieldPermissionError(field)
+        for name in names:
+            if resolved_budget:
+
+                def before_check(
+                    resolved: BasePermission, field_name: str = name
+                ) -> None:
+                    """Account for the exact resolved permission before its normal field check."""
+                    charge_resolved(resolved, field_name)
+
+                allowed = check_read_permission(
+                    instance,
+                    info,
+                    name,
+                    before_check=before_check,
+                )
+            else:
+                allowed = check_read_permission(instance, info, name)
+            if not allowed:
+                raise QueryFieldPermissionError(field)
         for relation in sorted(native_relations):
             # An ORM attname is a scalar spelling of a related field. Give it
             # the same target row/leaf gates as an explicit relation path.

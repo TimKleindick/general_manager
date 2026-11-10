@@ -14,7 +14,7 @@ from general_manager.api.graphql_query_permissions import authorize_query_fields
 from general_manager.api.graphql_resolvers import create_list_resolver
 from general_manager.interface import DatabaseInterface
 from general_manager.manager import GeneralManager
-from general_manager.permission import OverrideManagerPermission
+from general_manager.permission import ManagerBasedPermission, OverrideManagerPermission
 from general_manager.permission.permission_checks import permission_functions
 from general_manager.utils.testing import GeneralManagerTransactionTestCase
 
@@ -22,6 +22,8 @@ from general_manager.utils.testing import GeneralManagerTransactionTestCase
 class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        """Register native and delegated managers used by field-budget regressions."""
+
         class BudgetRecord(GeneralManager):
             class Interface(DatabaseInterface):
                 name = models.CharField(max_length=100)
@@ -74,6 +76,29 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
                     "general_manager.BudgetTarget", on_delete=models.CASCADE
                 )
 
+            class Permission(ManagerBasedPermission):
+                __based_on__: ClassVar[str] = "target"
+
+        class NestedDelegatedBudgetRecord(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=100)
+                parent = models.ForeignKey(
+                    "general_manager.DelegatedBudgetRecord", on_delete=models.CASCADE
+                )
+
+            class Permission(OverrideManagerPermission):
+                __based_on__: ClassVar[str] = "parent"
+
+        class NullableDelegatedBudgetRecord(GeneralManager):
+            class Interface(DatabaseInterface):
+                name = models.CharField(max_length=100)
+                target = models.ForeignKey(
+                    "general_manager.BudgetTarget",
+                    on_delete=models.CASCADE,
+                    null=True,
+                    blank=True,
+                )
+
             class Permission(OverrideManagerPermission):
                 __based_on__: ClassVar[str] = "target"
 
@@ -83,6 +108,8 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
         cls.Target = BudgetTarget
         cls.Link = BudgetLink
         cls.Delegated = DelegatedBudgetRecord
+        cls.Nested = NestedDelegatedBudgetRecord
+        cls.Nullable = NullableDelegatedBudgetRecord
         cls.general_manager_classes = [
             BudgetRecord,
             AdditionalBudgetRecord,
@@ -90,6 +117,8 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
             BudgetTarget,
             BudgetLink,
             DelegatedBudgetRecord,
+            NestedDelegatedBudgetRecord,
+            NullableDelegatedBudgetRecord,
         ]
 
     def setUp(self) -> None:
@@ -184,20 +213,290 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
         ):
             self.resolver_for(self.Custom)(None, self.info, filter={"name": "first"})
 
-    def test_delegated_permission_remains_budgeted_on_opted_in_list(self) -> None:
-        """Delegation can tighten a field at runtime and therefore stays bounded."""
+    def test_object_only_delegation_allows_large_filtered_paginated_list(self) -> None:
+        """Two operands over 811 rows must not exhaust the extra-field budget."""
+        target = self.Target.Factory.create(name="target")
+        other = self.Target.Factory.create(name="other")
+        model = self.Delegated.Interface._model
+        model.objects.bulk_create(
+            [
+                model(
+                    name=f"record-{index:04d}",
+                    target_id=target.id if index == 810 else other.id,
+                )
+                for index in range(811)
+            ]
+        )
+        result = self.resolver_for(self.Delegated)(
+            None,
+            self.info,
+            filter={"target_id": target.id},
+            order_by=[{"field": "id", "direction": "ASC"}],
+            page=1,
+            page_size=1,
+        )
+        assert result["pageInfo"]["total_count"] == 1
+        assert [item.name for item in result["items"]] == ["record-0810"]
+
+    def test_nested_object_only_delegation_does_not_consume_budget(self) -> None:
+        """Keep nested row-only delegation outside the additional-field budget."""
+        target = self.Target.Factory.create(name="target")
+        parent = self.Delegated.Factory.create(name="parent", target=target)
+        record = self.Nested.Factory.create(name="record", parent=parent)
+        with patch(
+            "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+            0,
+        ):
+            authorize_query_fields(
+                [record], self.info, ["name"], budget_additional_permissions_only=True
+            )
+
+    def test_nullable_object_only_delegation_keeps_runtime_default_fallback(
+        self,
+    ) -> None:
+        """Apply the nullable delegation fallback without an extra field-budget charge."""
+        record = self.Nullable.Factory.create(name="record", target=None)
+        with patch(
+            "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+            0,
+        ):
+            authorize_query_fields(
+                [record], self.info, ["name"], budget_additional_permissions_only=True
+            )
+
+    def test_nullable_effective_default_and_matching_field_rules_share_budget(
+        self,
+    ) -> None:
+        """Compare field rules against the effective nullable fallback row rules."""
+        record = self.Nullable.Factory.create(name="record", target=None)
+        with (
+            self.settings(
+                GENERAL_MANAGER={"DEFAULT_PERMISSIONS": {"read": ["isAuthenticated"]}}
+            ),
+            patch.object(
+                self.Nullable.Permission,
+                "name",
+                {"read": ["isAuthenticated"]},
+                create=True,
+            ),
+            patch(
+                "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+                0,
+            ),
+        ):
+            authorize_query_fields(
+                [record], self.info, ["name"], budget_additional_permissions_only=True
+            )
+
+    def test_nullable_delegation_preserves_denied_default_read(self) -> None:
+        """Keep a denied nullable fallback denied at runtime."""
+        record = self.Nullable.Factory.create(name="record", target=None)
+        with (
+            self.settings(
+                GENERAL_MANAGER={"DEFAULT_PERMISSIONS": {"read": ["isAdmin"]}}
+            ),
+            self.assertRaisesMessage(GraphQLError, "query field 'name'"),
+        ):
+            authorize_query_fields(
+                [record], self.info, ["name"], budget_additional_permissions_only=True
+            )
+
+    def test_nested_delegation_preserves_restrictive_target_field(self) -> None:
+        """Retain budgeting for a nested target with a stricter field rule."""
+        target = self.Target.Factory.create(name="target")
+        parent = self.Delegated.Factory.create(name="parent", target=target)
+        record = self.Nested.Factory.create(name="record", parent=parent)
+        admin = get_user_model().objects.create_superuser(username="nested-admin")
+        info = SimpleNamespace(context=SimpleNamespace(user=admin))
+        with (
+            patch.object(
+                self.Target.Permission, "name", {"read": ["isAdmin"]}, create=True
+            ),
+            patch(
+                "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+                0,
+            ),
+            self.assertRaisesMessage(GraphQLError, "candidate limit"),
+        ):
+            authorize_query_fields(
+                [record], info, ["name"], budget_additional_permissions_only=True
+            )
+
+    def test_delegated_aliases_share_one_budget_charge_per_operand(self) -> None:
+        """Charge aliases of one delegated operand at most once."""
+        from general_manager.api.graphql_query_permissions import (
+            QueryFieldAuthorizationBudget,
+        )
+
+        target = self.Target.Factory.create(name="target")
+        record = self.Delegated.Factory.create(name="record", target=target)
+        admin = get_user_model().objects.create_superuser(username="alias-admin")
+        info = SimpleNamespace(context=SimpleNamespace(user=admin))
+        budget = QueryFieldAuthorizationBudget()
+        with (
+            patch.object(
+                self.Delegated.Permission, "target", {"read": ["isAdmin"]}, create=True
+            ),
+            patch.object(
+                self.Delegated.Permission,
+                "target_id",
+                {"read": ["isAdmin"]},
+                create=True,
+            ),
+        ):
+            authorize_query_fields(
+                [record],
+                info,
+                ["target_id"],
+                budget_additional_permissions_only=True,
+                budget=budget,
+            )
+        assert budget.decisions == 1
+
+    def test_delegated_relation_alias_rules_remain_bounded_and_enforced(self) -> None:
+        """Both relation spellings keep all declared gates and the candidate bound."""
+        target = self.Target.Factory.create(name="target")
+        record = self.Delegated.Factory.create(name="record", target=target)
+        staff = get_user_model().objects.create_user(
+            username="alias-staff", is_staff=True
+        )
+        staff_info = SimpleNamespace(context=SimpleNamespace(user=staff))
+        for declared, operand in (("target", "target_id"), ("target_id", "target")):
+            with (
+                self.subTest(declared=declared, operand=operand),
+                patch.object(
+                    self.Delegated.Permission,
+                    declared,
+                    {"read": ["isAdmin"]},
+                    create=True,
+                ),
+            ):
+                with self.assertRaisesMessage(GraphQLError, "Permission denied"):
+                    authorize_query_fields(
+                        [record],
+                        self.info,
+                        [operand],
+                        budget_additional_permissions_only=True,
+                    )
+                with (
+                    patch(
+                        "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+                        1,
+                    ),
+                    self.assertRaisesMessage(GraphQLError, "candidate limit"),
+                ):
+                    authorize_query_fields(
+                        [record, record],
+                        staff_info,
+                        [operand],
+                        budget_additional_permissions_only=True,
+                    )
+
+    def test_delegated_target_read_denial_still_excludes_rows(self) -> None:
+        """Exclude rows denied by the delegated target read gate."""
+        target = self.Target.Factory.create(name="target")
+        self.Delegated.Factory.create(name="record", target=target)
+        with patch.object(self.Target.Permission, "__read__", ["isAdmin"]):
+            result = self.resolver_for(self.Delegated)(
+                None, self.info, filter={"name": "record"}, page=1, page_size=1
+            )
+        assert result["items"] == []
+        assert result["pageInfo"]["total_count"] == 0
+
+    def test_delegated_target_custom_runtime_policy_remains_budgeted(self) -> None:
+        """Treat custom executable target policies as unknown and bounded."""
+
+        class CustomTargetPermission(OverrideManagerPermission):
+            __read__: ClassVar[list[str]] = ["public"]
+
+            def check_permission(self, action: str, attribute: str) -> bool:
+                return super().check_permission(action, attribute)  # type: ignore[arg-type]
+
+        target = self.Target.Factory.create(name="target")
+        record = self.Delegated.Factory.create(name="record", target=target)
+        target.Permission = CustomTargetPermission
+        record.target = target
+        with (
+            patch(
+                "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+                0,
+            ),
+            self.assertRaisesMessage(GraphQLError, "candidate limit"),
+        ):
+            authorize_query_fields(
+                [record], self.info, ["name"], budget_additional_permissions_only=True
+            )
+
+    def test_delegated_field_denial_is_not_skipped(self) -> None:
+        """Execute restrictive delegated field checks even when inspecting budgets."""
+        target = self.Target.Factory.create(name="target")
+        record = self.Delegated.Factory.create(name="record", target=target)
+        with (
+            patch.object(
+                self.Target.Permission, "name", {"read": ["isAdmin"]}, create=True
+            ),
+            self.assertRaisesMessage(GraphQLError, "query field 'name'"),
+        ):
+            authorize_query_fields(
+                [record], self.info, ["name"], budget_additional_permissions_only=True
+            )
+
+    def test_delegation_is_resolved_once_per_field_check(self) -> None:
+        """Reuse the normal resolved permission without a second relation lookup."""
+        target = self.Target.Factory.create(name="target")
+        record = self.Delegated.Factory.create(name="record", target=target)
+        visits = []
+
+        def target_getter(instance):
+            """Record each relation resolution before returning the captured target."""
+            visits.append(instance)
+            return target
+
+        with patch.object(
+            self.Delegated, "target", property(target_getter), create=True
+        ):
+            authorize_query_fields(
+                [record, record],
+                self.info,
+                ["name"],
+                budget_additional_permissions_only=True,
+            )
+        assert visits == [record, record]
+
+    def test_strict_mode_still_budgets_object_only_delegation(self) -> None:
+        """Preserve strict candidate accounting outside the list-only optimization."""
+        target = self.Target.Factory.create(name="target")
+        record = self.Delegated.Factory.create(name="record", target=target)
+        with (
+            patch(
+                "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+                0,
+            ),
+            self.assertRaisesMessage(GraphQLError, "candidate limit"),
+        ):
+            authorize_query_fields([record], self.info, ["name"])
+
+    def test_restrictive_delegated_permission_remains_budgeted_on_opted_in_list(
+        self,
+    ) -> None:
+        """A delegated field restriction still consumes the visit bound."""
         target = self.Target.Factory.create(name="target")
         for name in ("first", "second"):
             self.Delegated.Factory.create(name=name, target=target)
 
+        admin = get_user_model().objects.create_superuser(username="delegated-admin")
+        info = SimpleNamespace(context=SimpleNamespace(user=admin))
         with (
+            patch.object(
+                self.Target.Permission, "name", {"read": ["isAdmin"]}, create=True
+            ),
             patch(
                 "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
                 1,
             ),
             self.assertRaisesMessage(GraphQLError, "candidate limit"),
         ):
-            self.resolver_for(self.Delegated)(None, self.info, filter={"name": "first"})
+            self.resolver_for(self.Delegated)(None, info, filter={"name": "first"})
 
     def test_denied_nonmatching_row_is_checked_before_filtering_and_paging(
         self,
