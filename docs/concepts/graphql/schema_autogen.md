@@ -214,9 +214,28 @@ records the compatibility note for 0.64.1 and 0.64.2.
 
 ## Mutations
 
-Create, update, and delete mutations are added automatically when the interface
-overrides the base method or advertises the matching capability from
-`Interface.get_capabilities()`. If a mutation factory returns no class for a
+Create, update, and delete mutations are added automatically when the operation
+is included in the manager's `__graphql_mutations__` allowlist and the interface
+either overrides the base method or advertises the matching capability from
+`Interface.get_capabilities()`. When no allowlist is declared, the boolean
+`GENERAL_MANAGER["GRAPHQL_MUTATIONS_ENABLED"]` controls the default. It defaults
+to `True` (all three), preserving automatic exposure; `False` makes it opt-in.
+Override the complete set per manager, for example
+`__graphql_mutations__ = {"create", "delete"}` to omit only generated updates, or
+`__graphql_mutations__ = set()` to omit all generated CRUD. Sets and frozensets are
+accepted; other containers and unknown operation names raise `TypeError` during
+schema registration, before that manager's mutation registry entries change.
+The allowlist is inherited normally and a subclass assignment replaces it.
+Explicit allowlists override the global default, including under `False`.
+
+This configuration controls generated GraphQL entry points only. It does not
+enable unsupported interface operations, disable direct Python writes, change
+manager permissions, hide read queries, or remove separately registered custom
+mutations. Declare it before schema construction; it is not a runtime permission
+switch. See the [configuration how-to](../../howto/expose_via_graphql.md#disable-selected-generated-mutations)
+for a custom-update example.
+
+If a mutation factory returns no class for a
 supported operation, that operation is skipped and later supported operations are
 still considered. Each mutation returns:
 

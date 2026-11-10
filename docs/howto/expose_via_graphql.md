@@ -681,11 +681,70 @@ calls them. Omitting `id` when creating `UuidRecord` lets the ORM apply `uuid4`
 at write time. Requiredness, model validation, and validation of explicit
 `null` remain enforced.
 
+## Disable selected generated mutations
+
+Use a manager-level `__graphql_mutations__` set or frozenset to expose only the
+generated CRUD operations your application needs. For example, keep generated
+create and delete but replace the broad generated update with a narrower custom
+mutation:
+
+```python
+from decimal import Decimal
+from typing import ClassVar
+
+from django.db import models
+from graphql import GraphQLResolveInfo
+
+from general_manager import GeneralManager
+from general_manager.api.mutation import graph_ql_mutation
+from general_manager.interface import DatabaseInterface
+from general_manager.permission.mutation_permission import MutationPermission
+
+
+class QuotedPrice(GeneralManager):
+    __graphql_mutations__: ClassVar[set[str]] = {"create", "delete"}
+
+    class Interface(DatabaseInterface):
+        customer = models.CharField(max_length=100)
+        price = models.DecimalField(max_digits=12, decimal_places=2)
+
+
+class CanChangePrice(MutationPermission):
+    __mutate__: ClassVar[list[str]] = ["isAuthenticated"]
+
+
+@graph_ql_mutation(CanChangePrice)
+def change_quoted_price(
+    info: GraphQLResolveInfo, quote: QuotedPrice, price: Decimal
+) -> QuotedPrice:
+    return quote.update(price=price, creator_id=info.context.user.pk)
+```
+
+Import this module during startup as you would other manager and custom mutation
+declarations. The schema contains `createQuotedPrice`, `deleteQuotedPrice`, and
+`changeQuotedPrice`, but no generated `updateQuotedPrice`. The custom mutation
+accepts only the quote identifier and new price, so it cannot change `customer`.
+The `Decimal` annotation gives the new price an exact decimal input contract.
+
+Omit `__graphql_mutations__` to use the global generated CRUD default (all
+three supported operations unless configured otherwise).
+Use `set()` or `frozenset()` to hide all generated CRUD; do not use `{}`, which
+is a dictionary. Only the lower-case names `"create"`, `"update"`, and `"delete"`
+are valid. Subclasses inherit the allowlist and can replace the entire set;
+prefer assignment to mutating an inherited set in place.
+
+The option is read during schema construction, not on each request. It does not
+remove already registered custom mutations or change generated read queries,
+interface write capabilities, Python `create()` / `update()` / `delete()`, or
+manager permissions. The custom mutation above still uses the manager's normal
+update-permission check. An allowlisted operation must also be supported by the
+interface to be generated.
+
 ## Partially update a generated manager
 
-When an ORM interface supports `update`, GeneralManager generates an
-`update<ManagerName>` mutation. The target argument remains `id: ID!`; writable
-fields cannot overwrite it, and primary keys are excluded from update payload
+When an ORM interface supports `update` and the manager allows the generated
+operation, GeneralManager generates an `update<ManagerName>` mutation. The target
+argument remains `id: ID!`; writable fields cannot overwrite it, and primary keys are excluded from update payload
 fields. Each other editable field is optional. This makes it safe to change one
 field without re-sending the rest of the object:
 
@@ -1140,3 +1199,35 @@ mutation {
 ```
 
 For variables, declare `$changes: [PlanningAllocationChangeInput!]!` and `$deletions: [ID!]`.
+
+
+### Global generated CRUD default
+
+To make generated mutations opt-in across the application, configure Django settings:
+
+```python
+# Add this entry to your existing GENERAL_MANAGER dictionary.
+GENERAL_MANAGER = {
+    # ... existing settings ...
+    "GRAPHQL_MUTATIONS_ENABLED": False,
+}
+```
+
+The setting defaults to `True`, preserving existing create, update and delete
+exposure when no manager allowlist is declared. It must be a boolean, not a
+string or integer. The shared settings resolver also supports the legacy
+`GENERAL_MANAGER_GRAPHQL_MUTATIONS_ENABLED` and `GRAPHQL_MUTATIONS_ENABLED`
+settings, with the dictionary entry taking precedence.
+
+An explicit `__graphql_mutations__` set or frozenset, including one inherited
+from a parent manager, replaces the global default. For example,
+`__graphql_mutations__ = {"create", "update", "delete"}` opts a manager into all
+three supported operations even when the global default is `False`; `set()`
+opts it out even when the default is `True`. A subclass can replace the entire
+inherited allowlist. Explicit `None` is invalid, not a reset to the default.
+
+Configuration is read when the schema is built. Changing settings does not
+remove already registered fields: rebuild/restart the schema to apply changes.
+This option affects only generated CRUD exposure, not read queries, custom
+mutations, Python writes, or permission enforcement. Interface capabilities still
+limit which opted-in operations can be generated.
