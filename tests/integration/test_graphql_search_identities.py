@@ -21,6 +21,7 @@ from general_manager.api.graphql_query_permissions import (
     QueryFieldPermissionError,
     authorize_query_fields,
 )
+from general_manager.api.graphql_resolvers import relation_id_alias_target_fields
 from general_manager.api.property import graph_ql_property
 from general_manager.interface import CalculationInterface, DatabaseInterface
 from general_manager.manager import GeneralManager, Input
@@ -378,6 +379,55 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
                         authorize_query_fields(
                             [row], info, plan.paths, native_paths=True
                         )
+
+    def test_foreign_key_alias_requires_a_native_relation_getter(self) -> None:
+        """A custom getter cannot prove which related row backs the alias."""
+
+        def custom_reference(_instance):
+            raise AssertionError
+
+        index = IndexConfig("global", fields=("code_reference_id",))
+        config = SearchConfigSpec(indexes=(index,))
+        with patch.object(self.Integer, "code_reference", property(custom_reference)):
+            plan = analyze_search_projection(
+                self.Integer, config, index, GraphQL.manager_registry
+            )
+        assert not plan.fast
+        assert plan.has_relations
+        assert plan.error is None
+        assert plan.reasons == ("unknown relation identity target",)
+
+    def test_foreign_key_alias_requires_declared_target_fields(self) -> None:
+        """A target with incomplete field metadata keeps thorough authorization."""
+        interface = self.Code.Interface
+        attribute_types = dict(interface.get_attribute_types())
+        accessors = dict(interface.get_attributes())
+        del attribute_types["code"]
+        del accessors["code"]
+        index = IndexConfig("global", fields=("code_reference_id",))
+        config = SearchConfigSpec(indexes=(index,))
+        with patch.multiple(
+            interface,
+            get_attribute_types=classmethod(lambda _cls: attribute_types),
+            get_attributes=classmethod(lambda _cls: accessors),
+        ):
+            plan = analyze_search_projection(
+                self.Integer, config, index, GraphQL.manager_registry
+            )
+        assert not plan.fast
+        assert plan.has_relations
+        assert plan.error is None
+        assert plan.reasons == ("unknown relation identity target",)
+
+    def test_alias_target_fields_require_a_real_orm_relation(self) -> None:
+        """Unresolvable ORM fields and non-ORM inputs cannot prove alias targets."""
+        for interface, field in (
+            (self.Composite.Interface, "account"),
+            (self.Integer.Interface, "missing"),
+            (self.Integer.Interface, "business_number"),
+        ):
+            with self.subTest(interface=interface, field=field):
+                assert relation_id_alias_target_fields(interface, field) == ()
 
     def test_custom_projection_relation_fallback_requires_identity_leaves(self) -> None:
         """Covered native relation fallback uses the actual serialized identity."""
