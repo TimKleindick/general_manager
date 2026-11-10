@@ -985,3 +985,92 @@ class CustomConstructorRelationPermissionContextTests(
         self.assertFalse(
             self.Source.Interface._model.objects.using("secondary").exists()
         )
+
+
+class LazyRelationPermissionContextTests(GeneralManagerTransactionTestCase):
+    """Keep Django's early cached string separate from its resolved relation owner."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Read a real forward reference before its target model is registered."""
+
+        class PermissionLazySource(models.Model):
+            name = models.CharField(max_length=40)
+            basis = models.ForeignKey(
+                "general_manager.PermissionLazyTarget", on_delete=models.CASCADE
+            )
+
+            class Meta:
+                app_label = "general_manager"
+
+        field = PermissionLazySource._meta.get_field("basis")
+        cls.early_related_model = field.related_model
+
+        class PermissionLazyTarget(models.Model):
+            allowed = models.BooleanField()
+
+            class Meta:
+                app_label = "general_manager"
+
+        class LazyTarget(GeneralManager):
+            class Interface(ExistingModelInterface):
+                model = PermissionLazyTarget
+
+        class LazySource(GeneralManager):
+            class Interface(ExistingModelInterface):
+                model = PermissionLazySource
+
+            Permission = _AllowedTargetPermission
+
+        cls.Target = PermissionLazyTarget
+        cls.WrappedTarget = LazyTarget
+        cls.Source = LazySource
+        cls.field = field
+        cls.general_manager_classes = [LazyTarget, LazySource]
+        super().setUpClass()
+
+    def test_lazy_relation_create_update_and_id_precedence(self) -> None:
+        """Authorize current targets without clearing the stale Django property."""
+        self.assertEqual(
+            self.early_related_model, "general_manager.PermissionLazyTarget"
+        )
+        self.assertEqual(self.field.related_model, self.early_related_model)
+        self.assertIs(self.field.remote_field.model, self.Target)
+        allowed = self.Target.objects.create(allowed=True)
+        denied = self.Target.objects.create(allowed=False)
+        _AllowedTargetPermission.candidates.clear()
+        created = self.Source.create(name="Before", basis_id=allowed.pk)
+        self.assertTrue(_AllowedTargetPermission.candidates)
+        for target, identifier in _AllowedTargetPermission.candidates:
+            self.assertIsInstance(target, self.WrappedTarget)
+            self.assertEqual(target.id, allowed.pk)
+            self.assertEqual(identifier, allowed.pk)
+        created.update(name="After")
+        for operation in (self.Source.create, created.update):
+            for reverse in (False, True):
+                with self.subTest(operation=operation.__name__, reverse=reverse):
+                    pairs = [("basis", allowed), ("basis_id", denied.pk)]
+                    if reverse:
+                        pairs.reverse()
+                    with self.assertRaises(PermissionCheckError):
+                        operation(name="Denied", **dict(pairs))
+                    pairs = [("basis", denied), ("basis_id", allowed.pk)]
+                    if reverse:
+                        pairs.reverse()
+                    result = operation(name="Allowed", **dict(pairs))
+                    self.assertEqual(result.basis_id, allowed.pk)
+        self.assertFalse(
+            self.Source.Interface._model.objects.filter(basis_id=denied.pk).exists()
+        )
+        self.assertEqual(self.field.related_model, self.early_related_model)
+
+    def test_unresolved_relation_fails_closed_without_loading_a_target(self) -> None:
+        """Reject unresolved metadata rather than guessing a model or granting access."""
+        allowed = self.Target.objects.create(allowed=True)
+        candidate = PermissionDataManager({"basis_id": allowed.pk}, self.Source)
+        with patch.object(self.field.remote_field, "model", self.early_related_model):
+            with (
+                self.assertNumQueries(0),
+                self.assertRaises(PermissionRelationResolutionError),
+            ):
+                _ = candidate.basis

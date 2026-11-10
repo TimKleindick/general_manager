@@ -45,6 +45,20 @@ class PermissionRelationResolutionError(PermissionError):
         )
 
 
+def _resolved_relation_model(
+    field: models.ForeignKey[models.Model],
+) -> type[models.Model]:
+    """Use Django's resolved relation owner, not an early cached string reference."""
+    # RelatedField.related_model is cached; inspecting it during model assembly
+    # can retain a string even after Django resolves remote_field.model.
+    related_model = getattr(field.remote_field, "model", None)
+    if not isinstance(related_model, type) or not issubclass(
+        related_model, models.Model
+    ):
+        raise PermissionRelationResolutionError(field.name)
+    return related_model
+
+
 GeneralManagerData = TypeVar("GeneralManagerData", bound=GeneralManager)
 
 
@@ -299,7 +313,7 @@ class PermissionDataManager(Generic[GeneralManagerData]):
         if identifier is None or name == field.attname:
             return identifier
 
-        related_type = field.related_model
+        related_type = _resolved_relation_model(field)
         manager_type = getattr(related_type, "_general_manager_class", None)
         # A write check needs the target on the write database even if a read
         # router would select a replica. Standalone checks retain Django hints.
@@ -342,7 +356,7 @@ class PermissionDataManager(Generic[GeneralManagerData]):
         backing = getattr(getattr(manager, "_interface", None), "_instance", None)
         if (
             manager.identification.get("id") != related.pk
-            or not isinstance(backing, field.related_model)
+            or not isinstance(backing, _resolved_relation_model(field))
             or backing.pk != related.pk
             or backing._state.db != related._state.db
             or getattr(backing, field.target_field.attname)

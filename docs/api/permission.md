@@ -413,3 +413,9 @@ before the AND expression continues.
 `PermissionNotFoundError.permission` stores the full unresolved fragment,
 including any colon-separated config, and the exception message remains
 `Permission <fragment> not found.`
+
+Lazy Django relation references are resolved using the final ORM relation model
+when constructing create/update permission candidates. An early cached string
+reference does not prevent an otherwise authorized operation. Unresolved model
+metadata fails closed; raw-ID precedence, database routing, and verification of
+the hydrated manager's identity remain unchanged.
