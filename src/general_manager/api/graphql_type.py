@@ -1,4 +1,4 @@
-"""Frozen value declarations for GraphQL output objects."""
+"""Frozen value declarations for GraphQL objects."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import ClassVar, cast, dataclass_transform
 
 @dataclass_transform(field_specifiers=(Field, field), frozen_default=True)
 class GraphQLTypeMeta(type):
-    """Create and register frozen dataclass-based GraphQL output declarations."""
+    """Create and register frozen dataclass-based GraphQL value declarations."""
 
     _registered_types: ClassVar[list[type[GraphQLType]]] = []
 
@@ -29,18 +29,22 @@ class GraphQLTypeMeta(type):
 
 
 class GraphQLType(metaclass=GraphQLTypeMeta):
-    """Frozen annotated value exposed only as a GraphQL output object.
+    """Frozen annotated value for GraphQL outputs and custom mutation inputs.
+
+    A custom mutation parameter annotated with a concrete subclass uses the
+    generated input object named ``<ClassName>Input``. Its constructor fields
+    are populated before the mutation's permission check and resolver run.
 
     Use ``dataclasses.field(metadata={"is_identifier": True})`` to declare
     native int, str, or UUID identity fields and their supported homogeneous
     collections. Schema generation preserves annotation nullability and native
-    values while exposing ID scalars. Missing or false metadata keeps existing
-    output types; other flag values fail schema generation with TypeError.
+    values while exposing ID scalars. Missing or false metadata keeps ordinary
+    scalar types; other flag values fail schema generation with TypeError.
     """
 
 
 def get_registered_graphql_types() -> tuple[type[GraphQLType], ...]:
-    """Return the declared GraphQL output types in creation order."""
+    """Return the declared GraphQL value types in creation order."""
     return tuple(GraphQLTypeMeta._registered_types)
 
 

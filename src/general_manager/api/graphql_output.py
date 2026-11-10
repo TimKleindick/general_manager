@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import Field, dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 import sys
@@ -49,6 +49,14 @@ class GraphQLOutputIdentityMetadataError(TypeError):
             f"Invalid is_identifier metadata for {owner_name}.{field_name}: "
             f"expected bool, got {flag!r}"
         )
+
+
+def _value_field_is_identifier(owner_name: str, field: Field[object]) -> bool:
+    """Read the shared identity metadata on a GraphQL value field."""
+    flag = field.metadata.get("is_identifier", False)
+    if not isinstance(flag, bool):
+        raise GraphQLOutputIdentityMetadataError(owner_name, field.name, flag)
+    return flag
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,19 +152,14 @@ def _lazy_registry_type(
     return lambda: registry[name]
 
 
-def _map_collection_annotation(
+def _collection_element_annotation(
     annotation: object,
     *,
     owner_name: str,
     field_name: str,
-    manager_registry: Mapping[str, type[GeneralManager]],
-    manager_type_registry: Mapping[str, type[graphene.ObjectType]],
-    output_class_registry: Mapping[str, type[GraphQLType]],
-    output_type_registry: Mapping[str, type[graphene.ObjectType]],
-    measurement_type: type[graphene.ObjectType],
-    scalar_mapper: Callable[[type], type],
-    is_identifier: bool = False,
-) -> _MappedAnnotation:
+    is_identifier: bool,
+) -> object:
+    """Validate a homogeneous collection and return its element annotation."""
     origin = get_origin(annotation)
     if origin not in (list, tuple, set):
         raise _annotation_error(owner_name, field_name, annotation)
@@ -178,6 +181,28 @@ def _map_collection_annotation(
         if identity_type not in (int, str, UUID):
             raise _annotation_error(owner_name, field_name, annotation)
 
+    return element_annotation
+
+
+def _map_collection_annotation(
+    annotation: object,
+    *,
+    owner_name: str,
+    field_name: str,
+    manager_registry: Mapping[str, type[GeneralManager]],
+    manager_type_registry: Mapping[str, type[graphene.ObjectType]],
+    output_class_registry: Mapping[str, type[GraphQLType]],
+    output_type_registry: Mapping[str, type[graphene.ObjectType]],
+    measurement_type: type[graphene.ObjectType],
+    scalar_mapper: Callable[[type], type],
+    is_identifier: bool = False,
+) -> _MappedAnnotation:
+    element_annotation = _collection_element_annotation(
+        annotation,
+        owner_name=owner_name,
+        field_name=field_name,
+        is_identifier=is_identifier,
+    )
     element = _map_annotation(
         element_annotation,
         owner_name=owner_name,
@@ -199,6 +224,23 @@ def _map_collection_annotation(
         nullable=False,
         contains_measurement=element.contains_measurement,
     )
+
+
+def _map_value_scalar_annotation(
+    annotation: object,
+    *,
+    owner_name: str,
+    field_name: str,
+    scalar_mapper: Callable[[type], type],
+    is_identifier: bool,
+) -> object:
+    """Map value scalars without the legacy mapper's fallback to String."""
+    if is_identifier:
+        if annotation in (int, str, UUID):
+            return graphene.ID
+    elif safe_issubclass(annotation, (str, bool, int, float, Decimal, datetime, date)):
+        return scalar_mapper(annotation)
+    raise _annotation_error(owner_name, field_name, annotation)
 
 
 def _map_non_optional_value(
@@ -245,10 +287,14 @@ def _map_non_optional_value(
         )
 
     if is_identifier:
-        if annotation not in (int, str, UUID):
-            raise _annotation_error(owner_name, field_name, annotation)
         return _MappedAnnotation(
-            graphene.ID,
+            _map_value_scalar_annotation(
+                annotation,
+                owner_name=owner_name,
+                field_name=field_name,
+                scalar_mapper=scalar_mapper,
+                is_identifier=True,
+            ),
             annotation,
             nullable=False,
             contains_measurement=False,
@@ -284,25 +330,13 @@ def _map_non_optional_value(
             contains_measurement=True,
         )
 
-    if not isinstance(annotation, type):
-        raise _annotation_error(owner_name, field_name, annotation)
-
-    # Keep this allowlist explicit.  The legacy mapper intentionally falls back
-    # to String for unknown classes, which is unsafe for output declarations.
-    if safe_issubclass(annotation, bool):
-        scalar_type = scalar_mapper(annotation)
-    elif safe_issubclass(annotation, str):
-        scalar_type = scalar_mapper(annotation)
-    elif safe_issubclass(annotation, int):
-        scalar_type = scalar_mapper(annotation)
-    elif safe_issubclass(annotation, (float, Decimal)):
-        scalar_type = scalar_mapper(annotation)
-    elif safe_issubclass(annotation, datetime):
-        scalar_type = scalar_mapper(annotation)
-    elif safe_issubclass(annotation, date):
-        scalar_type = scalar_mapper(annotation)
-    else:
-        raise _annotation_error(owner_name, field_name, annotation)
+    scalar_type = _map_value_scalar_annotation(
+        annotation,
+        owner_name=owner_name,
+        field_name=field_name,
+        scalar_mapper=scalar_mapper,
+        is_identifier=False,
+    )
     return _MappedAnnotation(
         scalar_type,
         annotation,

@@ -73,7 +73,7 @@ cache keys instead of converting them to numbers. See the [identifier
 guide](../../howto/expose_via_graphql.md#filter-by-identifier) for configuration
 and migration steps.
 
-## Output-only value types
+## GraphQL value types {#output-only-value-types}
 
 Use the package-root `GraphQLType` when a response needs a nested object shape
 but does not represent a manager with identity, lifecycle, or independent
@@ -138,8 +138,8 @@ GraphQL boundary. Python annotations and frozen values remain native.
 Required/optional annotations determine both nullability levels exactly as
 before. Missing/false metadata keeps ordinary scalars, including fields named
 `id` or `external_id`; names never imply identity. Other flag values raise
-a field-specific `TypeError`. Output field metadata does not provide manager
-identity, root operations, input objects, or search normalization.
+a field-specific `TypeError`. This metadata describes the field's scalar
+representation.
 
 For scalar fields, the strict allowlist is `str`, `bool`, `int`, `float`,
 `Decimal`, `datetime`, `date`, and subclasses of those types. Unknown
@@ -170,18 +170,17 @@ class ProjectHoursSummary(GeneralManager):
         ]
 ```
 
-`GraphQLType` declarations add only schema object types. They do not create
-root queries, list queries, mutations, subscriptions, filters, capabilities,
-or manager lifecycle behavior. The owning manager controls access to the
-property. Nested manager fields retain that manager's normal read resolvers
-and permissions; plain scalar and nested output fields have no independent
-permission check.
+`GraphQLType` declarations describe values referenced by schema fields. A
+custom mutation parameter can reuse a declaration as a separate
+`<ClassName>Input` type. The owning manager controls access to a property
+returning the value. Nested manager fields retain their manager's normal
+read resolvers and permissions. Plain scalar and nested output fields share
+the owning property's permission boundary.
 
 Output declarations and generated output `ObjectType` classes use registries
 separate from manager declarations and generated manager types. Manager-only
 roots, filters, subscriptions, search, capabilities, and lifecycle tooling
-continue to consume the manager registries; an output declaration is never
-added to those manager operation paths.
+continue to consume the manager registries.
 
 For a complete declaration, property, startup, and query example, see the
 [typed output-object recipe](../../examples/graphql_output_types.md).
