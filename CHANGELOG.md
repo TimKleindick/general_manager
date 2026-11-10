@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.88.0 (2026-11-10)
+
+### Features
+
+- Support GraphQLType mutation inputs
+  ([`fab8645`](https://github.com/TimKleindick/general_manager/commit/fab864580b7fb834097900a7ed39c7d9e1689eef))
+
+
 ## v0.87.6 (2026-11-09)
 
 ### Bug Fixes
