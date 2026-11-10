@@ -35,6 +35,18 @@ def test_field_config_rejects_invalid_boost() -> None:
         FieldConfig(name="name", boost=0)
 
 
+@pytest.mark.parametrize("setting", ["fields", "filters", "sorts"])
+def test_index_config_rejects_numeric_token_envelope(setting: str) -> None:
+    """Application fields must not overwrite the adapter's derived token envelope."""
+    with pytest.raises(ValueError, match="reserved"):
+        IndexConfig(name="global", **{"fields": [], setting: ["gm_numeric_tokens"]})
+
+
+def test_field_config_rejects_numeric_token_envelope() -> None:
+    with pytest.raises(ValueError, match="reserved"):
+        FieldConfig(name="gm_numeric_tokens")
+
+
 def test_index_config_rejects_invalid_boost() -> None:
     """
     Verifies that creating an IndexConfig with a boost of 0 raises InvalidIndexBoostError.

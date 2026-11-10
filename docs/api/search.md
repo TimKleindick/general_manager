@@ -24,9 +24,9 @@ submodules shown below, but they are not re-exported from `general_manager.searc
 
 `FieldConfig` and `IndexConfig` validate numeric boost/min-score bounds and
 reject the reserved document-envelope names `id`, `gm_document_id`, `type`,
-`identification`, `data`, and `gm_identity` at construction time. `FieldConfig.boost` and
-`IndexConfig.boost` must be positive when provided; `IndexConfig.min_score` must
-be non-negative when provided.
+`identification`, `data`, `gm_identity`, and `gm_numeric_tokens` at construction
+time. `FieldConfig.boost` and `IndexConfig.boost` must be positive when provided;
+`IndexConfig.min_score` must be non-negative when provided.
 `IndexConfig.iter_fields()` converts plain string field entries to
 `FieldConfig(name=...)` while preserving field order, and `field_boosts()` keeps
 only explicit field boosts.
@@ -389,6 +389,9 @@ index with primary key `id` when needed, then reads effective settings before
 submitting changes. Ranking rules and searchable fields compare in order;
 plain filterable and sortable fields compare by membership. Identity contracts
 add `gm_identity.*` shadow fields only for declared filterable identities.
+For each explicit searchable field, numeric aliases under `gm_numeric_tokens.*`
+are appended after the original searchable attributes, preserving their priority.
+An empty searchable list remains empty; `['*']` still searches all attributes.
 Omitted searchable, filterable, and sortable setting keys remain unmanaged,
 while explicit empty lists clear their setting; ranking rules are always
 normalized with `sort` first. Each submitted task is awaited before the next
@@ -401,6 +404,20 @@ accepts the documented
 timeouts in the fallback `get_task()` polling loop raise
 `MeilisearchTaskFailedError`. Exceptions from the client's `wait_for_task()`
 method, including its timeout errors, propagate unchanged.
+
+`upsert()` derives complete ASCII digit runs from serialized string values,
+including collection and mapping values, and adds both the original and
+zero-stripped forms. For example, `Porsche_P0375_Strangpressprofile` gains
+`0375` and `375`. Mapping keys and non-string scalars are not expanded. At most
+two aliases are produced per run, without integer conversion or substring
+enumeration. Shadow field names encode their source field, so filter-/sort-only
+fields do not become searchable. Source data, filter/sort values, identification
+and GraphQL read authorization are unchanged. This is Meilisearch-specific;
+the development backend and custom adapters retain their existing tokenization.
+
+After upgrading, run `python manage.py search_index --index global --reindex`
+(repeat for other persistent indexes). Updating settings alone cannot add tokens
+to existing documents; reindexing is required for consistent numeric matching.
 
 `MeilisearchBackend.search()` reads settings once per backend call, sharing the
 read between ordering validation and completeness checks. Its optional

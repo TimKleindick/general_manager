@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -241,6 +242,16 @@ class MeilisearchBackend:
         """
         index = self._get_or_create_index(index_name)
         searchable_fields = self._string_sequence_setting(settings, "searchable_fields")
+        if searchable_fields is not None and "*" not in searchable_fields:
+            # Keep original field priority and expose only each searchable
+            # field's own aliases, never filter-/sort-only numeric values.
+            searchable_fields = [
+                *searchable_fields,
+                *(
+                    "gm_numeric_tokens." + _numeric_field_key(name)
+                    for name in searchable_fields
+                ),
+            ]
         filterable_fields = self._string_sequence_setting(settings, "filterable_fields")
         contracts = settings.get("identity_fields", {})
         if not isinstance(contracts, Mapping):
@@ -807,10 +818,13 @@ class MeilisearchBackend:
                 - `data`: the original data mapping,
                 - additional top-level keys copied from `document.data` except
                   reserved keys (`id`, `gm_document_id`, `type`,
-                  `identification`, `data`, `gm_identity`).
+                  `identification`, `data`, `gm_identity`, `gm_numeric_tokens`).
                 - `gm_identity`: bounded equality tokens for declared present
                   identity fields. UUID/set JSON conversion affects only the
                   payload copy, never the source document.
+                - `gm_numeric_tokens`: complete ASCII digit runs from each
+                  serialized string field, plus their zero-stripped forms.
+                  Source values, filtering, and sorting remain unchanged.
         """
         reserved_keys = {
             "id",
@@ -819,6 +833,7 @@ class MeilisearchBackend:
             "identification",
             "data",
             "gm_identity",
+            "gm_numeric_tokens",
         }
         extra_data = {
             key: value
@@ -846,6 +861,12 @@ class MeilisearchBackend:
                     "data": document.data,
                     **extra_data,
                     "gm_identity": identities,
+                    "gm_numeric_tokens": {
+                        _numeric_field_key(name): list(
+                            dict.fromkeys(_numeric_tokens(value))
+                        )
+                        for name, value in extra_data.items()
+                    },
                 }
             ),
         )
@@ -1205,6 +1226,30 @@ def _is_meilisearch_already_exists(error: Exception) -> bool:
     code = _meilisearch_error_code(error)
     status = _meilisearch_status_code(error)
     return status == 409 or "already_exists" in code
+
+
+def _numeric_field_key(name: str) -> str:
+    """Keep literal source names distinct without provider path punctuation."""
+    return "f" + name.encode("utf-8").hex()
+
+
+def _numeric_tokens(value: object) -> Iterable[str]:
+    """Yield at most two aliases per digit run, never arbitrary substrings.
+
+    Inspect only existing string values, including collection/mapping values.
+    Do not read managers, mapping keys, or object representations. String
+    stripping handles arbitrarily long numbers without integer conversion.
+    """
+    if isinstance(value, str):
+        for digits in re.findall(r"[0-9]+", value):
+            yield digits
+            yield digits.lstrip("0") or "0"
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _numeric_tokens(item)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _numeric_tokens(item)
 
 
 def _json_search_value(value: object) -> object:

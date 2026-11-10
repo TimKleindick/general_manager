@@ -945,11 +945,23 @@ Adapter behavior:
   setting. Ranking rules are always normalized with `sort` first. Each changed
   setting is awaited before the next update or return, and settings-read or
   task failures propagate so a later call can retry the remaining differences.
+- Numeric components of searchable string values are also indexed as separate
+  tokens. `Porsche_P0375_Strangpressprofile` can be found with `0375` or `375`,
+  while its stored name remains unchanged. Only complete ASCII digit runs and
+  their zero-stripped form are added (`000` also yields `0`), not arbitrary
+  substrings such as `75`. Normal Meilisearch prefix and typo rules still apply.
+  These field-scoped tokens live under the reserved `gm_numeric_tokens`
+  envelope; filter-/sort-only fields do not become searchable and existing
+  source-field permissions still apply. This behavior is specific to the
+  Meilisearch adapter. Rebuild existing persistent indexes after upgrading, for
+  example `python manage.py search_index --index global --reindex`; applying
+  settings alone does not generate tokens for existing documents.
 - `upsert(index, [])` still ensures the index exists but does not submit an
   `add_documents` task. Non-empty documents are stored with `id`,
   `gm_document_id`, `type`, `identification`, nested `data`, and non-reserved
   `document.data` keys copied to the top level. Reserved top-level keys are
-  `id`, `gm_document_id`, `type`, `identification`, and `data`.
+  `id`, `gm_document_id`, `type`, `identification`, `data`, `gm_identity`, and
+  `gm_numeric_tokens`.
   `delete(index, [])` is a no-op and does not access Meilisearch;
   `delete(index, [""])` treats the empty string as a real document id and
   deletes its normalized value.

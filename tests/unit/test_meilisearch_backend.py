@@ -1398,6 +1398,146 @@ def test_meilisearch_backend_document_payload_reserved_keys() -> None:
     assert payload["name"] == "Alpha"
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Porsche_P0375_Strangpressprofile", ["0375", "375"]),
+        ("P0375 P0375 P000 P0 P00421", ["0375", "375", "000", "0", "00421", "421"]),
+        ("P1375", ["1375"]),
+        ("No project number", []),
+        ("P\uff11\uff12\uff13", []),
+        (None, []),
+        (375, []),
+        (["P0375", ("Q00421", None)], ["0375", "375", "00421", "421"]),
+        ({"P9999": "P0375", "nested": ["Q00421"]}, ["0375", "375", "00421", "421"]),
+        ("P" + "0" * 5000 + "375", ["0" * 5000 + "375", "375"]),
+    ],
+    ids=[
+        "project",
+        "deduplicated",
+        "no_suffix",
+        "absent",
+        "ascii_only",
+        "none",
+        "number",
+        "collection",
+        "mapping_values",
+        "long_run",
+    ],
+)
+def test_meilisearch_backend_derives_bounded_numeric_name_tokens(
+    value: object, expected: list[str]
+) -> None:
+    """Index whole digit runs and their zero-stripped form, never substrings/repr."""
+    document = SearchDocument(
+        id="Project:1",
+        type="Project",
+        identification={"id": 1},
+        index="index",
+        data={"name": value},
+        field_boosts={},
+    )
+
+    payload = MeilisearchBackend._document_payload(document)
+
+    assert payload["gm_numeric_tokens"] == {"f6e616d65": expected}
+    assert document.data == {"name": value}
+
+
+def test_meilisearch_backend_numeric_shadows_preserve_original_values() -> None:
+    """Do not replace source names, filters, identities, or nested hit data."""
+    source = {
+        "name": "Porsche_P0375_Strangpressprofile",
+        "customer_id": "000375",
+        "gm_numeric_tokens": {"injected": "P9999"},
+    }
+    document = SearchDocument(
+        id="Project:1",
+        type="Project",
+        identification={"id": 1},
+        index="index",
+        data=source,
+        field_boosts={},
+        identity_fields={"customer_id": str},
+    )
+
+    payload = MeilisearchBackend._document_payload(document)
+
+    assert payload["name"] == source["name"]
+    assert payload["customer_id"] == "000375"
+    assert payload["identification"] == {"id": 1}
+    assert payload["data"] == source
+    assert payload["gm_numeric_tokens"] == {
+        "f6e616d65": ["0375", "375"],
+        "f637573746f6d65725f6964": ["000375", "375"],
+    }
+    assert payload["gm_identity"]
+
+
+def test_meilisearch_backend_numeric_search_settings_keep_field_scope() -> None:
+    """Expose numeric aliases only for searchable fields, after original priority."""
+    index = _FakeIndex()
+    backend = MeilisearchBackend(client=_FakeClient(index))
+
+    settings = {
+        "searchable_fields": ["name", "title"],
+        "filterable_fields": ["status"],
+        "sortable_fields": ["name", "code"],
+    }
+    backend.ensure_index("index", settings)
+
+    assert index.attributes["searchableAttributes"] == [
+        "name",
+        "title",
+        "gm_numeric_tokens.f6e616d65",
+        "gm_numeric_tokens.f7469746c65",
+    ]
+    assert index.attributes["filterableAttributes"] == ["status"]
+    assert index.attributes["sortableAttributes"] == ["name", "code"]
+    index.settings.clear()
+    backend.ensure_index("index", settings)
+    assert index.settings == []
+
+
+@pytest.mark.parametrize("fields", [[], ["*"]])
+def test_meilisearch_backend_numeric_settings_preserve_empty_and_wildcard(
+    fields,
+) -> None:
+    index = _FakeIndex()
+    backend = MeilisearchBackend(client=_FakeClient(index))
+
+    backend.ensure_index("index", {"searchable_fields": fields})
+
+    assert index.attributes["searchableAttributes"] == fields
+
+
+def test_meilisearch_backend_numeric_shadows_encode_dotted_field_names() -> None:
+    """Distinct literal field names must not collide with nested shadow paths."""
+    index = _FakeIndex()
+    backend = MeilisearchBackend(client=_FakeClient(index))
+    backend.ensure_index("index", {"searchable_fields": ["a.b", "a__b"]})
+    document = SearchDocument(
+        id="Project:1",
+        type="Project",
+        identification={"id": 1},
+        index="index",
+        data={"a.b": "P0375", "a__b": "P00421"},
+        field_boosts={},
+    )
+    payload = MeilisearchBackend._document_payload(document)
+
+    assert index.attributes["searchableAttributes"] == [
+        "a.b",
+        "a__b",
+        "gm_numeric_tokens.f612e62",
+        "gm_numeric_tokens.f615f5f62",
+    ]
+    assert payload["gm_numeric_tokens"] == {
+        "f612e62": ["0375", "375"],
+        "f615f5f62": ["00421", "421"],
+    }
+
+
 def test_meilisearch_backend_build_filter_expression_escapes() -> None:
     """Escape quotes and backslashes in filter expression values."""
     expr = MeilisearchBackend._build_filter_expression(
@@ -1601,6 +1741,13 @@ def test_meilisearch_backend_compares_settings_by_semantics(
     expected = ["exactness", "words"]
     if setting == "ranking_rules":
         expected.insert(0, "sort")
+    elif setting == "searchable_fields":
+        expected.extend(
+            [
+                "gm_numeric_tokens.f65786163746e657373",
+                "gm_numeric_tokens.f776f726473",
+            ]
+        )
     assert index.settings == ([{api_key: expected}] if ordered else [])
     assert client.waited == ([1] if ordered else [])
 

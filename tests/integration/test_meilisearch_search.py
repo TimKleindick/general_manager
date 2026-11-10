@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from contextlib import suppress
 from typing import ClassVar
+from unittest.mock import patch
 from uuid import uuid4
 
 from django.db.models import CharField
@@ -50,20 +51,29 @@ class TestGraphQLSearchMeilisearchIntegration(GeneralManagerTransactionTestCase)
             class Interface(DatabaseInterface):
                 name = CharField(max_length=200)
                 status = CharField(max_length=50)
+                reference = CharField(max_length=50, default="")
+                restricted_name = CharField(max_length=200, default="")
 
             class Permission(ManagerBasedPermission):
-                __read__: ClassVar[list[str]] = ["public"]
+                __read__: ClassVar[list[str]] = ["matches:status:public"]
                 __create__: ClassVar[list[str]] = ["public"]
                 __update__: ClassVar[list[str]] = ["public"]
                 __delete__: ClassVar[list[str]] = ["public"]
+                restricted_name: ClassVar[dict] = {"read": ["isAdmin"]}
 
             class SearchConfig:
                 indexes: ClassVar[list[IndexConfig]] = [
                     IndexConfig(
                         name=cls.index_name,
                         fields=["name", "status"],
+                        filters=["status", "reference"],
+                        sorts=["name", "reference"],
+                    ),
+                    IndexConfig(
+                        name=cls.index_name + "_restricted",
+                        fields=["restricted_name"],
                         filters=["status"],
-                    )
+                    ),
                 ]
 
         cls.general_manager_classes = [Project]
@@ -109,8 +119,9 @@ class TestGraphQLSearchMeilisearchIntegration(GeneralManagerTransactionTestCase)
         """
         backend = getattr(self, "backend", None)
         if backend is not None:
-            with suppress(Exception):
-                backend._client.delete_index(self.index_name)
+            for index_name in (self.index_name, self.index_name + "_restricted"):
+                with suppress(Exception):
+                    backend._client.delete_index(index_name)
         configure_search_backend(None)
         super().tearDown()
 
@@ -133,3 +144,99 @@ class TestGraphQLSearchMeilisearchIntegration(GeneralManagerTransactionTestCase)
         payload = response.json()["data"]["search"]
         self.assertEqual(payload["total"], 1)
         self.assertEqual(payload["results"][0]["name"], "Alpha Project")
+
+    def test_numeric_project_name_components_are_searchable(self):
+        """A numeric name component matches without changing source/filter values."""
+        name = "Porsche_P0375_Strangpressprofile"
+        project = self.Project.Factory.create(name=name, status="public")
+        self.Project.Factory.create(name="Porsche_P1375_Other", status="public")
+        SearchIndexer(self.backend).reindex_manager(self.Project)
+
+        self.assertIn(
+            project.identification,
+            [
+                hit.identification
+                for hit in self.backend.search(self.index_name, "P0375").hits
+            ],
+        )
+        for query in ("0375", "375"):
+            with self.subTest(query=query):
+                result = self.backend.search(
+                    self.index_name,
+                    query,
+                    filters={"status": "public"},
+                    sort=["name"],
+                )
+                self.assertEqual(result.total, 1)
+                self.assertEqual(result.hits[0].identification, project.identification)
+                self.assertEqual(result.hits[0].data["name"], name)
+                self.assertEqual(result.hits[0].data["status"], "public")
+
+        self.assertEqual(self.backend.search(self.index_name, "75").total, 0)
+        self.Project.Interface._model.objects.filter(pk=project.id).update(
+            name="No number"
+        )
+        SearchIndexer(self.backend).reindex_manager(self.Project)
+        self.assertEqual(self.backend.search(self.index_name, "375").total, 0)
+
+    def test_numeric_shadows_do_not_make_filter_only_values_searchable(self):
+        """Deriving aliases must not expand the configured full-text field scope."""
+        self.Project.Factory.create(
+            name="Ordinary project", status="public", reference="P009876"
+        )
+        SearchIndexer(self.backend).reindex_manager(self.Project)
+
+        self.assertEqual(self.backend.search(self.index_name, "9876").total, 0)
+        filtered = self.backend.search(
+            self.index_name, "", filters={"reference": "P009876"}, sort=["reference"]
+        )
+        self.assertEqual(filtered.total, 1)
+        self.assertEqual(filtered.hits[0].data["reference"], "P009876")
+
+    def test_graphql_numeric_search_keeps_row_and_source_field_permissions(self):
+        """The extra match channel still passes existing row and source-name gates."""
+        name = "Porsche_P0375_Strangpressprofile"
+        self.Project.Factory.create(name=name, status="public", restricted_name=name)
+        self.Project.Factory.create(name=name, status="private")
+        SearchIndexer(self.backend).reindex_manager(self.Project)
+        query = f'''{{ search(index: "{self.index_name}", query: "375") {{
+            total results {{ __typename ... on ProjectType {{ name status }} }}
+        }} }}'''
+
+        response = self.query(query)
+        self.assertResponseNoErrors(response)
+        payload = response.json()["data"]["search"]
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(
+            payload["results"],
+            [{"__typename": "ProjectType", "name": name, "status": "public"}],
+        )
+
+        denied = self.query(
+            f'''{{ search(index: "{self.index_name}_restricted", query: "375") {{ total }} }}'''
+        )
+        self.assertIn("Permission denied", str(denied.json().get("errors")))
+
+    def test_numeric_tokens_follow_custom_serialized_values(self):
+        """Use the configured projection rather than reading extra manager fields."""
+        self.Project.Factory.create(name="P0375", status="public")
+        with patch.object(
+            self.Project.SearchConfig,
+            "to_document",
+            staticmethod(
+                lambda instance: {
+                    "name": "Projected_P00421",
+                    "status": instance.status,
+                    "reference": "",
+                }
+            ),
+            create=True,
+        ):
+            SearchIndexer(self.backend).reindex_manager(self.Project)
+
+        result = self.backend.search(self.index_name, "421")
+        self.assertEqual(result.total, 2)
+        self.assertTrue(
+            all(hit.data["name"] == "Projected_P00421" for hit in result.hits)
+        )
+        self.assertEqual(self.backend.search(self.index_name, "375").total, 0)
