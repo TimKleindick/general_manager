@@ -4,6 +4,14 @@
 
 Accepted
 
+This records the original accepted optimization. Its authorization order was
+subsequently changed by
+[commit e4c4e185](https://github.com/TimKleindick/general_manager/commit/e4c4e1857217e6e8ab102c8dfcdb99ffd73cc370)
+and refined by the current contract below. The decision is retained as
+historical context; use the
+[current GraphQL security guide](../concepts/graphql/security.md#query-operands-and-search-projections)
+for the active contract.
+
 ## Current contract
 
 The original design below is narrowed by the current
