@@ -76,18 +76,17 @@ reference pages or type-checker-visible implementation annotations when they are
 part of generated GraphQL plumbing; that visibility does not make them public
 import targets.
 
-`GraphQLType` is the stable package-root export for output-only response values:
+Import `GraphQLType` from the package root to declare a structured GraphQL value.
 
 ```python
 from general_manager import GraphQLType
 ```
 
 Its concrete subclasses are frozen dataclass-style values whose annotated
-fields become GraphQL output fields. Python required/optional annotations and
-the supported `list`, `tuple[T, ...]`, and `set` shapes determine GraphQL
-nullability. They may be used as direct, optional, or collection return values
-from `@graph_ql_property`, but they never generate queries, mutations,
-subscriptions, filters, capabilities, or input objects. Import declarations
+fields become GraphQL output fields. Python required and optional annotations
+and the supported `list`, `tuple[T, ...]`, and `set` shapes determine GraphQL
+nullability. Use them as direct, optional, or collection return values from
+`@graph_ql_property` and as arguments to custom mutations. Import declarations
 during startup so they are registered before schema construction.
 
 The manager owning the `@graph_ql_property` controls access to the returned
@@ -138,8 +137,8 @@ unsupported by the ordinary output scalar allowlist.
 
 This field metadata contract is independent of the owning property's
 `is_identifier` option. Keep an object-returning property unmarked and declare
-the identity fields inside its `GraphQLType`. Output values still have no
-manager inputs or search filters. Opting in changes `Int`/`String` fields to
+the identity fields inside its `GraphQLType`. Opting in changes
+`Int`/`String` fields to
 `ID` and integer JSON values to strings; regenerate client types and treat
 IDs as opaque strings, preserving significant leading zeros.
 
@@ -918,15 +917,33 @@ objects keyed by manager module and qualified name. Runtime manager
 normalization preserves existing instances, leaves `None` unchanged, constructs
 mapping inputs with `Manager(**value)`, and constructs non-mapping inputs with
 `Manager(value)`. For `list[Manager]` and `List[Manager]` arguments, each list
-item follows that same normalization. Return annotations create output fields
+item follows that same normalization.
+
+A `GraphQLType` argument uses the generated `<ClassName>Input` object.
+The framework reserves `ChecksumInput` for the file upload contract.
+`list[GraphQLTypeSubclass]` arguments use lists of those input objects and
+support optional list and element annotations. Input fields come from
+dataclass fields with `init=True`. Nested value objects are converted
+recursively. Manager fields use the same ID or composite input mapping as
+direct manager arguments. Measurement fields take `MeasurementScalar`
+strings such as `"12.5 h"`. Explicitly marked ID fields are converted to
+their declared native types.
+
+Fields with a dataclass default or `default_factory` may be omitted. Explicit
+`null` is valid for nullable annotations. Omitted nullable fields without
+a dataclass default receive `None`. The mutation permission class and resolver
+receive the constructed dataclass instances. See the
+[structured mutation how-to](../howto/expose_via_graphql.md#accept-structured-mutation-inputs).
+
+Return annotations create output fields
 plus required `success`; tuple annotations create multiple output fields and
 duplicate field names are rejected. Type aliases expose the alias name while
 mapping through the target type. Runtime tuple results must contain exactly one
 value per annotated tuple output and are assigned to fields in annotation order.
 A count mismatch is sanitized as `INTERNAL_SERVER_ERROR` under the shared
 mutation boundary; internal mismatch details are not exposed. Resolver execution
-normalizes manager arguments before permission checks and before calling the
-original function.
+normalizes arguments before permission checks and before calling the original
+function.
 
 At that boundary, explicit `GraphQLError` instances are preserved;
 `ValidationError` and `PublicGraphQLError` retain their intended public

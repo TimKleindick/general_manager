@@ -109,7 +109,7 @@ from general_manager.api.graphql_mutations import (
     generate_delete_mutation_class as _generate_delete_mutation_class_fn,
 )
 from general_manager.api.graphql_output import (
-    GraphQLOutputIdentityMetadataError,
+    _value_field_is_identifier,
     create_output_field_resolver,
     map_graphql_output_annotation,
     resolve_output_type_hints,
@@ -390,6 +390,9 @@ class GraphQL:
     _subscription_payload_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     graphql_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
     graphql_output_type_registry: ClassVar[dict[str, type[graphene.ObjectType]]] = {}
+    _value_input_type_cache: ClassVar[
+        dict[type[GraphQLType], type[graphene.InputObjectType]]
+    ] = {}
     graphql_filter_type_registry: ClassVar[
         dict[str, type[graphene.InputObjectType]]
     ] = {}
@@ -440,6 +443,7 @@ class GraphQL:
         cls._subscription_payload_registry = {}
         cls.graphql_type_registry = {}
         cls.graphql_output_type_registry = {}
+        cls._value_input_type_cache = {}
         cls.graphql_filter_type_registry = {}
         cls.graphql_capability_type_registry = {}
         cls.manager_registry = {}
@@ -532,11 +536,7 @@ class GraphQL:
         )
         fields: dict[str, graphene.Field] = {}
         for declared_field in dataclasses.fields(output_class):
-            is_identifier = declared_field.metadata.get("is_identifier", False)
-            if not isinstance(is_identifier, bool):
-                raise GraphQLOutputIdentityMetadataError(
-                    output_name, declared_field.name, is_identifier
-                )
+            is_identifier = _value_field_is_identifier(output_name, declared_field)
             mapped = map_graphql_output_annotation(
                 hints[declared_field.name],
                 owner_name=output_name,

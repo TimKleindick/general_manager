@@ -28,10 +28,8 @@ class ProjectHour(GraphQLType):
 
 The generated GraphQL object is `ProjectHourType`. Required annotations become
 non-null fields, `T | None` becomes nullable, and collection element
-nullability follows the element annotation. `GraphQLType` declarations do not
-create root queries, mutations, subscriptions, filters, or input objects.
-The explicit field marker makes `taskId: ID!`; `hours` remains `Float!` and
-tags remain strings. The native Python task key stays an integer. Field names
+nullability follows the element annotation. The explicit field marker makes
+`taskId: ID!`. The `hours` field uses `Float!` and tags use strings. The native Python task key stays an integer. Field names
 do not imply identity, and absent/false metadata keeps ordinary scalar types.
 
 Import the declaration module during application startup, before GeneralManager

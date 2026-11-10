@@ -2,6 +2,9 @@
 
 import inspect
 from collections.abc import Sequence
+from dataclasses import MISSING, dataclass, fields
+from decimal import Decimal
+from functools import partial
 from typing import (
     Callable,
     TypeVar,
@@ -16,15 +19,28 @@ from typing import (
     Protocol,
     cast,
 )
+from uuid import UUID
+
 import graphene
+from django.core.exceptions import ValidationError
 from graphql import GraphQLError, GraphQLResolveInfo
 
 from general_manager.api.graphql import GraphQL
 from general_manager.api.graphql_identifiers import map_identification_scalar
-from general_manager.api.graphql_output import create_output_field_resolver
+from general_manager.api.graphql_output import (
+    _collection_element_annotation,
+    _map_value_scalar_annotation,
+    _unwrap_optional_annotation as _unwrap_value_optional,
+    _value_field_is_identifier,
+    create_output_field_resolver,
+    resolve_output_type_hints,
+)
+from general_manager.api.graphql_type import GraphQLType, get_registered_graphql_types
 from general_manager.manager.general_manager import GeneralManager
+from general_manager.measurement.measurement import Measurement
 
 from general_manager.utils.format_string import snake_to_camel
+from general_manager.utils.type_checks import safe_issubclass
 from general_manager.permission.mutation_permission import MutationPermission
 from types import UnionType
 
@@ -232,7 +248,7 @@ def _normalize_mutation_arguments(
     annotations: MutationAnnotations,
     kwargs: MutationKwargs,
 ) -> MutationKwargs:
-    """Normalize manager-typed arguments and lists using resolver annotations."""
+    """Normalize mutation values using the resolver annotations."""
     normalized = dict(kwargs)
     for name, annotation in annotations.items():
         if name not in normalized:
@@ -255,7 +271,7 @@ def _unwrap_optional_annotation(annotation: object) -> tuple[bool, object]:
 
 
 def _normalize_mutation_value(annotation: object, value: object) -> object:
-    """Recursively normalize manager values while preserving explicit ``None``."""
+    """Normalize annotated value objects, managers, and lists."""
     if value is None:
         return None
     _, concrete = _unwrap_optional_annotation(annotation)
@@ -267,12 +283,20 @@ def _normalize_mutation_value(annotation: object, value: object) -> object:
         ]
     if _is_general_manager_type(concrete):
         return _normalize_manager_argument(concrete, value)
+    if safe_issubclass(concrete, GraphQLType) and not isinstance(value, concrete):
+        if (
+            not isinstance(value, _GraphQLTypeInput)
+            or value.declaration is not concrete
+        ):
+            message = f"Expected coerced GraphQL input for {concrete.__name__}."
+            raise TypeError(message)
+        return value.construct()
     return value
 
 
 def _mutation_input_type(annotation: object) -> object:
     """Map nested mutation input annotations to unmounted Graphene types."""
-    nullable, concrete = _unwrap_optional_annotation(annotation)
+    _, concrete = _unwrap_optional_annotation(annotation)
     origin = get_origin(concrete)
     if origin is list or origin is List:
         inner_annotation = get_args(concrete)[0]
@@ -285,7 +309,9 @@ def _mutation_input_type(annotation: object) -> object:
         if _uses_single_id_input(concrete):
             return graphene.ID
         return _get_or_create_manager_input_type(concrete)
-    del nullable
+    if safe_issubclass(concrete, GraphQLType):
+        declaration = cast(type[GraphQLType], concrete)
+        return lambda: _get_or_create_value_input_type(declaration)
     return GraphQL._map_field_to_graphene_base_type(cast(type, concrete))
 
 
@@ -300,6 +326,8 @@ def _build_mutation_argument_field(
     input_type = _mutation_input_type(annotation)
     if isinstance(input_type, graphene.List):
         return graphene.List(input_type.of_type, **kwargs)
+    if inspect.isfunction(input_type):
+        return graphene.Argument(input_type, **kwargs)
     return cast(Callable[..., object], input_type)(**kwargs)
 
 
@@ -349,6 +377,173 @@ def _sequence_argument(value: object) -> Sequence[object]:
     return (value,)
 
 
+@dataclass(frozen=True, slots=True)
+class _GraphQLTypeInput:
+    """A coerced input object awaiting construction at the mutation boundary."""
+
+    declaration: type[GraphQLType]
+    construct: Callable[[], GraphQLType]
+
+
+@dataclass(frozen=True, slots=True)
+class _ValueInputField:
+    type: object
+    nullable: bool
+    normalize: Callable[[object], object]
+
+
+def _normalize_value_identifier(
+    identity_type: type, field_path: str, value: object
+) -> object:
+    try:
+        return identity_type(str(value))
+    except ValueError as error:
+        message = f"{field_path} must be a valid {identity_type.__name__} ID."
+        raise ValidationError(message) from error
+
+
+def _map_value_input_field(
+    annotation: object,
+    *,
+    owner_name: str,
+    field_name: str,
+    is_identifier: bool,
+) -> _ValueInputField:
+    """Map a declared field and prepare its GraphQL-to-Python conversion."""
+    nullable, concrete = _unwrap_value_optional(
+        annotation, owner_name=owner_name, field_name=field_name
+    )
+    origin = get_origin(concrete)
+    field_path = f"{owner_name}.{field_name}"
+    convert: Callable[[object], object] | None = None
+
+    if origin is not None:
+        element = _collection_element_annotation(
+            concrete,
+            owner_name=owner_name,
+            field_name=field_name,
+            is_identifier=is_identifier,
+        )
+        item = _map_value_input_field(
+            element,
+            owner_name=owner_name,
+            field_name=field_name,
+            is_identifier=is_identifier,
+        )
+        item_type = item.type if item.nullable else graphene.NonNull(item.type)
+        input_type = graphene.List(item_type)
+
+        def convert_collection(value: object) -> object:
+            return origin(
+                item.normalize(element) for element in _sequence_argument(value)
+            )
+
+        convert = convert_collection
+    elif not is_identifier and safe_issubclass(concrete, (GraphQLType, GeneralManager)):
+        input_type = _mutation_input_type(concrete)
+        convert = partial(_normalize_mutation_value, concrete)
+    elif not is_identifier and safe_issubclass(concrete, Measurement):
+        input_type = GraphQL._map_field_to_graphene_base_type(concrete)
+    else:
+        input_type = _map_value_scalar_annotation(
+            concrete,
+            owner_name=owner_name,
+            field_name=field_name,
+            scalar_mapper=GraphQL._map_field_to_graphene_base_type,
+            is_identifier=is_identifier,
+        )
+        if is_identifier and (concrete is int or concrete is UUID):
+            convert = partial(_normalize_value_identifier, concrete, field_path)
+
+    def normalize(value: object) -> object:
+        if value is None and not nullable:
+            # Defaults let clients omit a field, while the Python field
+            # annotation still determines whether it accepts explicit null.
+            message = f"{field_path} cannot be null."
+            raise ValidationError(message)
+        if value is None:
+            return None
+        if convert is not None:
+            return convert(value)
+        return Decimal(str(value)) if concrete is Decimal else value
+
+    return _ValueInputField(input_type, nullable, normalize)
+
+
+def _get_or_create_value_input_type(
+    declaration: type[GraphQLType],
+) -> type[graphene.InputObjectType]:
+    """Build an input object only when the schema references the declaration."""
+    cache = GraphQL._value_input_type_cache
+    cached = cache.get(declaration)
+    if cached is not None:
+        return cached
+
+    input_name = f"{declaration.__name__}Input"
+    if input_name == "ChecksumInput":
+        message = f"GraphQL input type '{input_name}' is reserved for file uploads."
+        raise ValueError(message)
+    declarations = {
+        value_type.__name__: value_type for value_type in get_registered_graphql_types()
+    }
+    declarations[declaration.__name__] = declaration
+    hints = resolve_output_type_hints(
+        declaration,
+        manager_registry=GraphQL.manager_registry,
+        output_class_registry=declarations,
+    )
+    input_fields: dict[str, graphene.InputField] = {}
+    conversions: dict[str, _ValueInputField] = {}
+    omitted_as_none: dict[str, object] = {}
+    for declared_field in fields(declaration):
+        if not declared_field.init:
+            continue
+        name = declared_field.name
+        mapped = _map_value_input_field(
+            hints[name],
+            owner_name=declaration.__name__,
+            field_name=name,
+            is_identifier=_value_field_is_identifier(
+                declaration.__name__, declared_field
+            ),
+        )
+        has_default = (
+            declared_field.default is not MISSING
+            or declared_field.default_factory is not MISSING
+        )
+        input_fields[name] = graphene.InputField(
+            mapped.type, required=not (mapped.nullable or has_default)
+        )
+        conversions[name] = mapped
+        if mapped.nullable and not has_default:
+            omitted_as_none[name] = None
+
+    if not input_fields:
+        message = f"{declaration.__name__} must declare an initializer field for GraphQL input."
+        raise TypeError(message)
+
+    def construct(values: dict[str, object]) -> GraphQLType:
+        kwargs = {
+            name: conversions[name].normalize(value) for name, value in values.items()
+        }
+        return declaration(**(omitted_as_none | kwargs))
+
+    def wrap_input(values: dict[str, object]) -> _GraphQLTypeInput:
+        # Delay constructors, manager lookups, and validation until the
+        # mutation's existing error and permission boundary is active.
+        return _GraphQLTypeInput(declaration, partial(construct, values))
+
+    generated = type(
+        input_name,
+        (graphene.InputObjectType,),
+        {"Meta": type("Meta", (), {"container": wrap_input})},
+    )
+    # Keep field names separate from Graphene's reserved class attributes.
+    generated._meta.fields.update(input_fields)  # type: ignore[attr-defined]
+    cache[declaration] = generated
+    return generated
+
+
 def graph_ql_mutation(
     _func: FuncT | type[MutationPermission] | None = None,
     permission: type[MutationPermission] | None = None,
@@ -381,7 +576,12 @@ def graph_ql_mutation(
     ``None`` unchanged, constructs mapping inputs with ``manager_class(**value)``,
     and constructs non-mapping inputs with ``manager_class(value)``. For
     ``list[Manager]`` and ``List[Manager]`` arguments, each list item follows
-    that same manager normalization before permission checks and resolver calls.
+    that same manager normalization. Concrete ``GraphQLType`` subclasses
+    generate ``<ClassName>Input`` objects, including when used as list elements
+    or nullable arguments. Their fields are recursively converted to native
+    Python values and passed to the dataclass constructor. Manager references
+    inside the input use the same normalization as direct manager arguments.
+    Conversion completes before permission checks and resolver calls.
     Other supported Python annotations are mapped through
     ``GraphQL._map_field_to_graphene_base_type``.
 

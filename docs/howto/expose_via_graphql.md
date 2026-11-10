@@ -228,7 +228,7 @@ Sorting and pagination follow filtering. Keep that authorization order when desi
 custom resolvers; see [permission-aware calculation
 filtering](../concepts/graphql/filters_pagination.md#query-arguments).
 
-## Return output-only GraphQL types
+## Return structured GraphQL values {#return-output-only-graphql-types}
 
 Use `GraphQLType` for a response value that needs a GraphQL object shape but
 does not need a manager identity, lifecycle, or root operation. Import the
@@ -290,8 +290,7 @@ elements follow the same rule. Bare collections, every fixed-length tuple such
 as `tuple[int, int]`, `Any`, `Annotated[...]`, unresolved references, and
 multi-target unions are invalid output annotations and fail schema generation
 with a field-specific error. Only homogeneous variadic tuples written as
-`tuple[T, ...]` are supported. Output declarations themselves are output-only:
-input objects and automatic root operations are not generated.
+`tuple[T, ...]` are supported.
 
 The `@graph_ql_property` on the owning manager remains the authorization
 boundary. A nested manager field still uses that manager's normal GraphQL
@@ -1069,7 +1068,7 @@ Annotate every argument except the parameter named `info`, and add a return anno
 
 Return one type for a single output field, or a tuple of types for multiple output fields. Output field names are derived from the Python type name or type-alias name with a lower-case first letter, and every generated mutation also exposes `success`. Tuple return values are assigned to output fields in annotation order and must contain exactly one value per annotated output. A count mismatch is sanitized as `INTERNAL_SERVER_ERROR`; internal mismatch details are not exposed.
 
-At execution time the wrapper normalizes GeneralManager arguments before permission checks and before calling the original function. A configured permission class receives `permission.check(normalized_kwargs, info.context.user)`. Registration is first-writer-wins for duplicate generated mutation class names. Generated names use `snake_to_camel`: the first underscore-delimited segment stays unchanged and later segments are title-cased. Missing parameter annotations raise `MissingParameterTypeHintError`, missing return annotations raise `MissingMutationReturnAnnotationError`, invalid return annotations raise `InvalidMutationReturnTypeError`, and duplicate output field names raise `DuplicateMutationOutputNameError`.
+At execution time the wrapper normalizes arguments before permission checks and before calling the original function. A configured permission class receives `permission.check(normalized_kwargs, info.context.user)`. Registration is first-writer-wins for duplicate generated mutation class names. Generated names use `snake_to_camel`: the first underscore-delimited segment stays unchanged and later segments are title-cased. Missing parameter annotations raise `MissingParameterTypeHintError`, missing return annotations raise `MissingMutationReturnAnnotationError`, invalid return annotations raise `InvalidMutationReturnTypeError`, and duplicate output field names raise `DuplicateMutationOutputNameError`.
 
 At the decorator boundary, explicit `GraphQLError` instances are preserved, while `ValidationError` and `PublicGraphQLError` retain their intended public behavior. `PermissionError` returns only `Permission denied.` with code `PERMISSION_DENIED`. Every other ordinary `Exception`, including `ValueError`, returns `An internal server error occurred.` with code `INTERNAL_SERVER_ERROR` and an opaque `errorId`; server logs retain the original details and matching `error_id` for correlation. Migrate client-facing `ValueError` uses to `PublicGraphQLError`, or to `ValidationError` for validation.
 
@@ -1077,3 +1076,67 @@ Use the [safe GraphQL mutation error recipe](../examples/graphql_error_handling.
 for a copy-ready resolver and client handler. The
 [GraphQL API reference](../api/graphql.md) documents the exact error signatures,
 extensions, and compatibility behavior.
+
+### Accept structured mutation inputs
+
+Annotate a custom mutation parameter with a `GraphQLType` subclass to accept
+an input object. The same declaration can be returned from a
+`@graph_ql_property`. This example uses application-specific managers and a
+service function to save a month's planning changes.
+
+```python
+from datetime import date
+
+from graphql import GraphQLResolveInfo
+
+from general_manager import GraphQLType
+from general_manager.api.mutation import graph_ql_mutation
+from general_manager.measurement import Measurement
+from general_manager.permission.mutation_permission import MutationPermission
+from your_app.managers import EmployeeProjectPlan, Project, User
+from your_app.services import save_planning
+
+
+class PlanningAllocationChange(GraphQLType):
+    user: User
+    project: Project
+    planned_weekly_hours: Measurement
+
+
+class CanSavePlanning(MutationPermission):
+    __mutate__ = ["isAuthenticated"]
+
+
+@graph_ql_mutation(CanSavePlanning)
+def save_employee_planning(
+    info: GraphQLResolveInfo,
+    month: date,
+    changes: list[PlanningAllocationChange],
+    deletions: list[EmployeeProjectPlan] | None = None,
+) -> bool:
+    save_planning(
+        actor=info.context.user,
+        month=month,
+        changes=changes,
+        deletions=deletions,
+    )
+    return True
+```
+
+For managers identified by a single ID, the client supplies `user` and
+`project` as IDs and can omit the `deletions` list. GraphQL accepts the
+measurement as a string. The permission check and resolver receive
+`PlanningAllocationChange` instances with manager and `Measurement` values.
+
+```graphql
+mutation {
+  saveEmployeePlanning(
+    month: "2026-11-01"
+    changes: [{user: "42", project: "17", plannedWeeklyHours: "12.5 h"}]
+  ) {
+    success
+  }
+}
+```
+
+For variables, declare `$changes: [PlanningAllocationChangeInput!]!` and `$deletions: [ID!]`.
