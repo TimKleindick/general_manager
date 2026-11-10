@@ -7,6 +7,13 @@ details are replaced with a correlated internal error.
 
 ## Define a mutation with explicit client failures
 
+This recipe assumes an existing registered `Project` manager with writable
+`status` and `archive_reason` fields, plus the application's authenticated
+GraphQL context. These fields extend the quickstart model. Import the mutation
+module before schema creation. The status read is application logic: authorize
+access to the target before returning a status-dependent public error when
+that state is private; manager write authorization happens at `update()`.
+
 ```python
 from django.core.exceptions import ValidationError
 

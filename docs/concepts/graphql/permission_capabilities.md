@@ -87,6 +87,12 @@ Entries on `Permission.graphql_capabilities` that are not
 
 ## Object capabilities
 
+The following sections show alternative permission fragments for existing
+managers. Keep the manager's real `Interface` and fields when applying them;
+a `GeneralManager` subclass containing only `Permission` does not register a
+working data interface. The owner-based example additionally assumes an
+`owner` relation, and the mutation example assumes a `status` field.
+
 Use `object_capability(...)` when the rule is domain-specific and cannot be
 expressed by an existing manager operation or custom mutation permission.
 

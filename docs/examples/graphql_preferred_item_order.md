@@ -244,9 +244,9 @@ representative response is:
 }
 ```
 
-The `ownsRequestedUser` rule is evaluated when GraphQL resolves the calculation
-fields. If the authenticated caller's ID differs from `userId`, `items` is not
-resolved and its nullable GraphQL value is `null`. Applications that prefer a
+The generated detail resolver checks `ownsRequestedUser` before returning the
+calculation object. If the authenticated caller's ID differs from `userId`,
+`orderedItems` itself is `null`; its `items` property is not evaluated. Applications that prefer a
 top-level GraphQL error can add that policy at their GraphQL transport boundary,
 but must keep the same server-side ownership check.
 
@@ -417,7 +417,7 @@ def test_caller_cannot_read_another_users_order(
     )
 
     payload = response.json()
-    assert payload["data"]["orderedItems"]["items"] is None
+    assert payload["data"]["orderedItems"] is None
 ```
 
 These tests keep separate assertions for preferred ordering, fallback ordering,

@@ -1,11 +1,14 @@
 # Validation and Clean Hooks
 
-Factories respect the same validation pipeline as your application code. Understanding how `clean()` and rules interact ensures your fixtures remain realistic.
+ORM factories validate the Django model they create, including its rules.
+They do not exercise the manager's user-permission gate or its complete write
+lifecycle. Understanding that distinction keeps fixtures useful without
+mistaking fixture creation for an application authorization check.
 
 ## Interface validation
 
 `InterfaceBase` calls `parse_input_fields_to_identification()` to convert raw
-inputs into validated types. During `create` and `update`, interfaces execute
+inputs into validated types. During ORM-backed `create` and `update`, interfaces execute
 `full_clean()` on the underlying Django model, including Django field,
 uniqueness, and constraint checks plus rules declared in `Meta.rules`. A rule
 adds errors only when it returns `False`; `True` and `None` are treated as
@@ -23,7 +26,8 @@ the same field.
 2. Wrap factory calls in helper functions that also create related managers, ensuring rules that reference relationships pass in tests.
 3. Test validation logic directly by asserting that factories raise `ValidationError` when provided with invalid data.
 
-Example:
+This fragment assumes an application fixture named `project_factory`, a
+`total_capex` measurement field, and a rule that rejects negative values:
 
 ```python
 import pytest

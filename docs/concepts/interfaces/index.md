@@ -5,7 +5,7 @@ Interfaces define how managers store or compute data. They encapsulate persisten
 GeneralManager ships with these interface flavours:
 
 - [Database interfaces](db_based_interface.md) persist records to relational databases.
-- [Existing model interfaces](existing_model_interface.md) wrap legacy Django models without generating new tables.
+- [Existing model interfaces](existing_model_interface.md) reuse legacy Django models without duplicating their base tables; enabling history may add history tables.
 - [Read-only interfaces](db_based_interface.md#read-only-data) synchronise static datasets from JSON.
 - [Calculation interfaces](computed_data_interfaces.md) compute values on the fly from inputs and related managers.
 - [Request interfaces](request_interface.md) connect managers to remote HTTP-style services through declarative request operations and filter mappings.

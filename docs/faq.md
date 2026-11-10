@@ -2,7 +2,8 @@
 
 ## How do managers relate to Django models?
 
-Managers declare fields using type hints. The nested interface class defines the Django model fields and handles ORM interactions. When a manager is instantiated, it wraps the interface and exposes typed attributes. The interface runs migrations and maintains the link to the database table.
+Managers declare fields using type hints. The nested interface class defines the Django model fields and handles ORM interactions. When a manager is instantiated, it wraps the interface and exposes typed attributes. Django's migration commands create and evolve the table; the interface maintains
+the runtime connection to it. See [migration guidance](howto/migrations_gotchas.md).
 
 ## How do I make the Django User model work with GeneralManager?
 
@@ -10,11 +11,16 @@ Wrap `settings.AUTH_USER_MODEL` with `ExistingModelInterface` from a manager-foc
 
 ## Where should I register managers so Django finds the models?
 
-Put managers in `<app>.managers` when possible. GeneralManager auto-imports that module during startup. If you use a different module layout, import the module containing your managers inside `AppConfig.ready()` so Django evaluates the interface definitions before dependent relations are introspected.
+Put managers in `<app>.managers` when possible. GeneralManager auto-imports that module during startup. If you split managers across several modules, import them from the installed
+app's `managers.py` or `managers/__init__.py`. This keeps discovery in the
+framework's normal startup phase.
 
 ## How can I override permissions for a one-time maintenance task?
 
-All CRUD methods accept `ignore_permission=True`. Use it sparingly, preferably inside Django management commands guarded by staff-only access.
+The write methods `create`, `update`, and `delete` accept
+`ignore_permission=True`. It bypasses their permission gate, not validation.
+Restrict such calls to trusted application maintenance code; a Django management
+command has no logged-in request user or automatic staff-only access check.
 
 ```python
 Project.create(ignore_permission=True, creator_id=system_user.id, name="Legacy")
@@ -22,12 +28,26 @@ Project.create(ignore_permission=True, creator_id=system_user.id, name="Legacy")
 
 ## Can I access the underlying Django model instance?
 
-Yes. Interfaces expose a `.model` attribute. You can also retrieve the model via `manager.Interface.model` or use the primary key stored in `manager.identification` to query the ORM directly. Keep direct ORM usage read-only so that the dependency tracker remains accurate.
+For ORM interfaces, `Project.Interface._model` is the generated or wrapped
+Django **model class**; it is not a model instance and is not named `.model`.
+Use normal manager reads for application logic. Advanced integrations can query
+that model class with the manager's identification, but direct ORM access does
+not provide the complete manager permission, dependency, history, and event
+lifecycle. Data migrations instead need Django's historical
+`apps.get_model()` registry. See [migration guidance](howto/migrations_gotchas.md#historical-data).
 
 ## How do I add custom validation beyond rules?
 
-Rules should cover most validation scenarios. For complex workflows, override `Interface.clean()` or hook into Django signals. When validation fails, raise `ValidationError` so the error propagates to GraphQL responses.
+Attach a predicate `Rule` through the ORM interface's `Meta.rules`; the normal
+write path runs it alongside Django model validation. `Interface.clean()` is
+not a general extension hook. When wrapping an existing Django model, its own
+`clean()` participates in `full_clean()`. Put orchestration involving several
+writes in an application service with an explicit transaction, and raise
+Django `ValidationError` for safe field or domain failures. See
+[validation rules](howto/write_validation_rules.md) and
+[atomic writes](howto/orm_atomic_writes.md).
 
 ## What is the recommended way to test managers?
 
-Use factory classes derived from `GeneralManager.Factory` or your own fixtures to create test data. Write tests around buckets and GraphQL resolvers, not only the Django model layer. See [Testing guides](howto/testing_guides.md) for detailed patterns.
+Use a manager's generated factory, such as `Project.Factory`, or your own
+fixtures to create test data. Write tests around buckets and GraphQL resolvers, not only the Django model layer. See [Testing guides](howto/testing_guides.md) for detailed patterns.

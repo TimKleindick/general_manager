@@ -6,6 +6,13 @@ Graphene mutation and registers it with the generated schema.
 
 ## Define a mutation
 
+This example extends an existing registered `Project` manager with writable
+`status` and nullable `publication_note` fields. Import that manager from your
+application before declaring the mutation. The later `PriceQuote` example
+assumes a separate calculation manager identified by `market` and `sku`.
+Examples that redefine `publish_project` are alternatives: choose one definition
+before schema startup, rather than registering all of them together.
+
 ```python
 from general_manager.api.mutation import graph_ql_mutation
 

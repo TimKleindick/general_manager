@@ -10,7 +10,8 @@ Use factories to populate development databases, seed GraphQL demos, or reproduc
 ## Choose what the test is proving
 
 Use `Project.Factory.create(name="Apollo")` when a test or demo needs a stored
-project with a known name. Override values that matter to an assertion; let
+project with a known name. Create strategy returns a manager wrapper around
+the saved model; build strategy returns an unsaved Django model. Override values that matter to an assertion; let
 generated defaults fill incidental fields. `create_batch(...)` builds multiple
 stored fixtures. `build(...)` leaves the main object unsaved, but related
 factory work can still have database side effects.
