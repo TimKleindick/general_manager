@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import json
+import os
 from collections.abc import Callable, Generator, Iterable, Mapping
 from datetime import date, datetime
 from decimal import Decimal
@@ -101,6 +102,7 @@ _BAD_USER_INPUT_CODE = "BAD_USER_INPUT"
 _PAGE_MUST_BE_POSITIVE = "page must be a positive integer."
 _PAGE_SIZE_MUST_BE_POSITIVE = "pageSize must be a positive integer."
 DEFAULT_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT = 1000
+_SEARCH_TOTAL_SCAN_LIMIT_UNSET = object()
 SEARCH_SOURCE_AUTHORIZATION_LIMIT_ERROR = (
     "Search source authorization candidate limit exceeded."
 )
@@ -203,11 +205,20 @@ def normalize_search_total_mode(total_mode: str | None = None) -> SearchTotalMod
 
 
 def get_graphql_search_total_scan_limit() -> int:
-    """Return the server-owned candidate budget shared by all searched types."""
+    """Resolve the shared candidate budget from Django settings, then the env."""
     raw_limit = get_setting(
         "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT",
-        DEFAULT_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT,
+        _SEARCH_TOTAL_SCAN_LIMIT_UNSET,
     )
+    if raw_limit is _SEARCH_TOTAL_SCAN_LIMIT_UNSET:
+        env_limit = os.environ.get("GENERAL_MANAGER_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT")
+        if env_limit is None:
+            raw_limit = DEFAULT_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT
+        else:
+            try:
+                raw_limit = int(env_limit)
+            except ValueError:
+                raise _bad_user_input_error(SEARCH_TOTAL_SCAN_LIMIT_ERROR) from None
     if not isinstance(raw_limit, int) or isinstance(raw_limit, bool) or raw_limit <= 0:
         raise _bad_user_input_error(SEARCH_TOTAL_SCAN_LIMIT_ERROR)
     return raw_limit

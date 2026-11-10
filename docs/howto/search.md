@@ -292,6 +292,15 @@ GENERAL_MANAGER = {
 }
 ```
 
+For environment-only configuration, omit the explicit Django scan-limit setting
+and set `GENERAL_MANAGER_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT=10000` in your deployment.
+Restart application workers to pick up the changed environment. Explicit nested,
+prefixed and top-level Django settings take precedence, in that order; without
+any setting or environment variable, the default remains `1000`. The environment
+value must be a positive integer. With Meilisearch, also raise the separate
+per-index `pagination.maxTotalHits` provider setting as needed; changing this
+GraphQL budget does not change that cap.
+
 The limit is shared across selected manager types per resolver call and counts
 backend candidates before permission checks, including denied and stale hits.
 Large `page` or `pageSize` values do not enlarge it. Both modes raise

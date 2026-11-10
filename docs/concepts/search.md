@@ -366,6 +366,23 @@ GENERAL_MANAGER = {
 }
 ```
 
+To configure the budget without changing Django settings, set the environment
+variable before starting the application, for example:
+
+```bash
+export GENERAL_MANAGER_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT=10000
+```
+
+Explicit Django settings retain precedence: `GENERAL_MANAGER["GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT"]`,
+then `GENERAL_MANAGER_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT`, then the legacy top-level
+`GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT`, then the environment variable, then the default
+`1000`. Remove an explicit Django value if you want the environment to control
+the limit. Environment values must parse as positive integers; empty, malformed,
+zero or negative values raise `BAD_USER_INPUT` rather than silently falling back.
+Restart application workers after changing the deployment environment. This does
+not configure Meilisearch's separate per-index `pagination.maxTotalHits` cap;
+increase that provider setting separately when searching beyond its cap.
+
 `GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT` is a positive, server-owned candidate budget
 (default `1000`) shared across all manager types in one search resolver call.
 Both total modes obey it. Client-selected `page`, `pageSize`, `types`, and
