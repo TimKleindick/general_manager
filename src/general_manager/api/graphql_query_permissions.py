@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from inspect import getattr_static
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from graphql import GraphQLError
 
@@ -412,6 +412,7 @@ def authorize_query_fields(
     from general_manager.api.graphql_resolvers import (
         can_read_instance,
         check_read_permission,
+        relation_id_alias_target_fields,
     )
 
     normalized = set()
@@ -518,20 +519,10 @@ def authorize_query_fields(
                 raise GraphQLError(_RELATION_ERROR)
             if not can_read_instance(value, info):
                 raise QueryRelationPermissionError()
-            from django.db import models
-            from general_manager.interface.orm_interface import OrmInterfaceBase
-
-            orm_interface = cast(
-                type[OrmInterfaceBase[models.Model]], instance.Interface
-            )
-            foreign_key = orm_interface._model._meta.get_field(relation)
-            target_field = getattr(foreign_key, "target_field", None)
-            if not isinstance(target_field, models.Field):
+            target_names = relation_id_alias_target_fields(instance.Interface, relation)
+            if not target_names:
                 raise GraphQLError(_RELATION_ERROR)
-            target_names = {target_field.name}
-            if target_field.primary_key:
-                target_names.add("id")
-            for target_name in sorted(target_names):
+            for target_name in target_names:
                 check(value, (target_name,))
         if not rest and not (native_node and native_node.children):
             return

@@ -75,9 +75,30 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
                     IndexConfig(
                         "relations", ["name", "related__text"], sorts=["related__text"]
                     ),
-                    IndexConfig("relation_identity", ["related_id"]),
+                    IndexConfig(
+                        "relation_identity",
+                        ["name", "related_id"],
+                        filters=["related_id"],
+                    ),
                     IndexConfig("relation_value", ["related"]),
+                    IndexConfig("team_roles", ["name", "team_members_list__role_id"]),
                 ]
+
+        class RouteTeamMember(GeneralManager):
+            class Interface(DatabaseInterface):
+                owner = models.ForeignKey(
+                    "general_manager.RouteOwner",
+                    on_delete=models.CASCADE,
+                    related_name="team_members",
+                )
+                role = models.ForeignKey(
+                    "general_manager.RouteRelated",
+                    on_delete=models.CASCADE,
+                    related_name="+",
+                )
+
+            class Permission(AdditiveManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
 
         class RouteDerived(GeneralManager):
             class Interface(DatabaseInterface):
@@ -100,11 +121,13 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         cls.Record = RouteRecord
         cls.Related = RouteRelated
         cls.Owner = RouteOwner
+        cls.TeamMember = RouteTeamMember
         cls.Derived = RouteDerived
         cls.general_manager_classes = [
             RouteRecord,
             RouteRelated,
             RouteOwner,
+            RouteTeamMember,
             RouteDerived,
         ]
 
@@ -317,8 +340,10 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
         """Rows with a null relation remain searchable through the native source."""
         owner = self.Owner.Factory.create(name="needle", related=None)
         SearchIndexer(self.backend).index_instance(owner)
-        result = self.search(index="relations", types=["RouteOwner"], query="needle")
-        assert [item.id for item in result["results"]] == [owner.id]
+        for index in ("relations", "relation_identity"):
+            with self.subTest(index=index):
+                result = self.search(index=index, types=["RouteOwner"], query="needle")
+                assert [item.id for item in result["results"]] == [owner.id]
 
     @override_settings(GENERAL_MANAGER={"GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT": 2})
     def test_bounded_scan_never_exposes_a_hidden_dependent_prefix(self):
@@ -378,14 +403,53 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
             == 1
         )
 
-    def test_native_relation_id_checks_target_on_thorough_path(self):
+    def test_native_relation_ids_only_authorize_hits_and_recheck_target_visibility(
+        self,
+    ):
+        """A sparse match can use either a direct or a nested relation ID."""
+        role = self.Related.Factory.create(text="role", visibility="public")
+        match = self.Owner.Factory.create(name="needle", related=role)
+        self.TeamMember.Factory.create(owner=match, role=role)
+        for _ in range(5):
+            self.Owner.Factory.create(name="ordinary", related=role)
+        SearchIndexer(self.backend).reindex_manager(self.Owner)
+
+        for visibility, expected_ids in (("public", [match.id]), ("private", [])):
+            self.Related.Interface._model.objects.filter(pk=role.id).update(
+                visibility=visibility
+            )
+            for index, filters in (
+                ("relation_identity", {"related_id": str(role.id)}),
+                ("team_roles", None),
+            ):
+                with (
+                    self.subTest(visibility=visibility, index=index),
+                    patch(
+                        "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
+                        4,
+                    ),
+                ):
+                    result = self.search(
+                        index=index,
+                        types=["RouteOwner"],
+                        query="needle",
+                        filters=filters,
+                    )
+                    assert [item.id for item in result["results"]] == expected_ids
+                    assert result["total"] == len(expected_ids)
+
+    def test_unreadable_relation_id_cannot_affect_total_or_page(self):
+        visible = self.Related.Factory.create(text="public", visibility="public")
         hidden = self.Related.Factory.create(text="private", visibility="private")
-        owner = self.Owner.Factory.create(name="owner", related=hidden)
-        SearchIndexer(self.backend).index_instance(owner)
-        with patch.object(self.backend, "search", wraps=self.backend.search) as backend:
-            with self.assertRaisesRegex(GraphQLError, "traverse query relation"):
-                self.search(index="relation_identity", types=["RouteOwner"], query="")
-        backend.assert_not_called()
+        self.Owner.Factory.create(name="private-owner", related=hidden)
+        owner = self.Owner.Factory.create(name="public-owner", related=visible)
+        SearchIndexer(self.backend).reindex_manager(self.Owner)
+        result = self.search(
+            index="relation_identity", types=["RouteOwner"], query="", page_size=1
+        )
+        assert [item.id for item in result["results"]] == [owner.id]
+        assert result["total"] == 1
+        assert result["page_info"]["total_pages"] == 1
 
     def test_terminal_relation_value_checks_target_before_counting(self):
         hidden = self.Related.Factory.create(text="private", visibility="private")
