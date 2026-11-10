@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.89.3 (2026-11-10)
+
+### Bug Fixes
+
+- Bind relation permission aliases to routed write targets
+  ([`1b44cb3`](https://github.com/TimKleindick/general_manager/commit/1b44cb3589d66bb06447b77facfd1f5f90fd381a))
+
+- Preserve query budgets for object-only delegated read policies
+  ([`1871103`](https://github.com/TimKleindick/general_manager/commit/18711035c15a1aa9d4940643067a77ada48b6de7))
+
+
 ## v0.89.2 (2026-11-10)
 
 ### Bug Fixes
