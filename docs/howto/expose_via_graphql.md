@@ -276,11 +276,13 @@ model it through an appropriate database-backed interface. Automatically
 translating arbitrary calculation getters or input combinations into SQL is
 not provided by `query_annotation`.
 
-In generated GraphQL calculation lists, row authorization runs before
-declared-input predicates, and computed-property predicates run afterward.
-Sorting and pagination follow filtering. Keep that authorization order when designing
-custom resolvers; see [permission-aware calculation
-filtering](../concepts/graphql/filters_pagination.md#query-arguments).
+Generated GraphQL calculation lists first narrow proven native scalar or
+manager-identity constructor inputs and freeze that exact requested domain.
+Row authorization and operand checks then run before deferred related-value or
+computed-property predicates, sorting, and pagination. Custom getters are not
+safe constructor constraints, and exclusion groups stay atomic. Keep that
+boundary when designing custom resolvers; see
+[query-operand authorization](../concepts/graphql/security.md#query-operands-and-search-projections).
 
 ## Return structured GraphQL values {#return-output-only-graphql-types}
 
@@ -878,11 +880,15 @@ including `filter`, `exclude`, `orderBy`, `page`, and
 and decoded JSON values that are not objects are treated as empty filters.
 Relation `none` filters are supported under `filter`, but not under `exclude`.
 Top-level list queries and generated relation-list fields always include
-nullable `page` and `pageSize`. Omitting them returns page 1 with 10 items by
-default; explicit sizes above the default maximum of 100 are rejected. Configure
+nullable `page` and `pageSize`. Omitting both returns the complete authorized
+result with `pageInfo.pageSize: null`. Supplying either enables pagination and
+defaults the other to page 1 or size 10; explicit sizes above the default maximum
+of 100 are rejected. Configure
 `GENERAL_MANAGER["GRAPHQL_DEFAULT_PAGE_SIZE"]` and
 `GENERAL_MANAGER["GRAPHQL_MAX_PAGE_SIZE"]` with positive integers to change these
-server limits (default must not exceed maximum). The same contract applies to
+server limits (default must not exceed maximum). A partial request-backed source
+cannot satisfy an unpaged query; supply explicit pagination for such a source.
+The same contract applies to
 generated groups. They include nullable
 `filter` and `exclude` only when a filter input type can be generated for the
 manager, and nullable typed `orderBy` only when sortable fields exist.

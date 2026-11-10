@@ -49,10 +49,13 @@ This identifies a calculation; it does not create a database row. The declared
 domains also make enumeration finite: existing projects paired with two dates.
 For direct Python use, bind required inputs without a domain in the constructor
 or a Python bucket filter before enumeration; an unconstrained required input
-raises `InvalidPossibleValuesError`. Generated GraphQL lists authorize their
-base calculation domain before applying client input filters. A GraphQL filter
-therefore does not replace a domain needed to enumerate that base; declare a
-finite domain when exposing the calculation as a list. See
+raises `InvalidPossibleValuesError`. Generated GraphQL lists can first narrow
+proven native scalar or manager-identity constructor inputs, then freeze and
+authorize that exact requested domain. An exact native constructor constraint
+can bind a required input without a domain. Other related-value filters,
+computed properties, and custom getters are deferred until authorization and
+cannot supply that enumeration domain. Declare finite domains for unconstrained
+list queries. See
 [query authorization](../graphql/security.md#query-operands-and-search-projections).
 
 ## Computing values
@@ -319,9 +322,10 @@ year-start and year-end anchors.
 `quantity` uses scalar bounds for cheap checks; bounds do not supply an
 enumeration domain. Supply an exact `quantity` when constructing this calculation
 in Python or filtering a Python bucket, or add a finite `possible_values` domain
-before using `.all()`. For generated GraphQL lists, provide that enumerable
-domain even when the client sends a quantity filter: authorization runs first.
-The validator supplies the
+before using `.all()`. Generated GraphQL lists can also bind an exact native
+`quantity` constructor constraint before authorization; unconstrained lists
+still need a finite domain. A deferred predicate or a range bound alone does
+not supply the missing values. The validator supplies the
 dependency-aware rule. If you omit `depends_on`, callable parameter names are
 used as dependencies; specifying it explicitly is clearer when callbacks accept
 optional or keyword-only arguments.
