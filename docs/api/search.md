@@ -1,5 +1,13 @@
 # Search API
 
+Search projects manager data into a backend index and exposes configured
+searches through GraphQL. Begin with the [search model](../concepts/search.md)
+and [setup tutorial](../howto/search.md). Use
+[reconciliation](../howto/search_reconciliation.md) to initialize or repair
+persistent indexes; [GraphQL authorization](#generated-graphql-search-authorization)
+below explains how indexed hits become permitted application results.
+Direct backend searches do not perform that GraphQL authorization step.
+
 `general_manager.search` re-exports the configuration types, backend protocol
 and data/error types, backend registry helpers, `SearchIndexer`, and concrete
 backend classes listed in the public API snapshot. Reconciliation, task, async

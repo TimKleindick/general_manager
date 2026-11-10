@@ -1,7 +1,9 @@
 # Bulk Data-Change Notification Recipe
 
 This recipe batches a multi-row write while preserving the transaction boundary
-seen by GraphQL and RemoteAPI clients:
+seen by GraphQL and RemoteAPI clients. It assumes an existing `Project` manager
+with a `status` field and receives the ID of an account allowed to update those
+projects:
 
 ```python
 from django.db import transaction
@@ -10,11 +12,11 @@ from general_manager.api import bulk_data_change_notifications
 from myapp.managers import Project
 
 
-def archive_active_projects() -> None:
+def archive_active_projects(user_id: int) -> None:
     with bulk_data_change_notifications():
         with transaction.atomic():
             for project in Project.filter(status="active"):
-                project.update(status="archived")
+                project.update(creator_id=user_id, status="archived")
 ```
 
 The outer context emits one `refresh` event per affected GraphQL manager class
@@ -30,7 +32,9 @@ exception. If both the body and notification flush fail, the context raises a
 errors are logged while other queued targets continue flushing.
 
 To observe the surrounding ORM transaction lifecycle, register a started
-receiver and collect changed classes from the ordinary post-change signal:
+receiver and collect changed classes from the ordinary post-change signal.
+`begin_coordination()` and `finish_coordination(...)` stand for your application's
+own coordination functions:
 
 ```python
 from django.db import transaction
@@ -78,13 +82,13 @@ not queue a GraphQL/RemoteAPI refresh, search dispatch, or workflow event. An
 explicit audit touch opts back into persistence and notification:
 
 ```python
-def review_project(project: Project) -> None:
+def review_project(project: Project, user_id: int) -> None:
     with bulk_data_change_notifications():
-        project.update(status=project.status, ignore_permission=True)
+        project.update(creator_id=user_id, status=project.status)
         project.update(
             status=project.status,
             history_comment="Reviewed without changing fields",
-            ignore_permission=True,
+            creator_id=user_id,
         )
 ```
 

@@ -4,6 +4,12 @@ Search reconciliation initializes and repairs search indexes without tying work
 to a user request. It works alongside normal per-object indexing from manager
 create, update, and delete operations.
 
+Complete [search setup](search.md) first and apply GeneralManager's migrations.
+For a persistent backend, [run one sweep](#development-without-celery), then
+[schedule production reconciliation](#production-with-celery-beat).
+Use the backend's actual serving process for in-memory DevSearch; a separate
+maintenance command cannot populate another process's memory.
+
 ## What reconciliation does
 
 Each searchable manager/index pair gets a durable state row. The reconciler:
@@ -67,15 +73,17 @@ index or rebuild its documents.
 
 ## Production with Celery Beat
 
-Enable async indexing and reconciliation:
+Enable async indexing and reconciliation, merging these entries into existing settings:
 
 ```python
+import os
+
 GENERAL_MANAGER = {
     "SEARCH_BACKEND": {
         "class": "general_manager.search.backends.meilisearch.MeilisearchBackend",
         "options": {
             "url": "http://meilisearch:7700",
-            "api_key": MEILISEARCH_API_KEY,
+            "api_key": os.environ["MEILISEARCH_API_KEY"],
         },
     },
     "SEARCH_ASYNC": True,
@@ -89,9 +97,14 @@ package is `mysite`; replace only the Celery app path if the project already
 uses a different package name.
 
 ```bash
-celery -A mysite worker -l info
+celery -A mysite worker -Q celery,search.reconciliation -l info
 celery -A mysite beat -l info
 ```
+
+The worker must consume `search.reconciliation` as well as the queue used by
+ordinary indexing tasks (`celery` in an uncustomized Celery app). Adapt that
+second queue if the host app overrides its default/routes; a worker consuming
+only the default queue will not receive the reconciliation task.
 
 Celery Beat schedules
 `general_manager.search.tasks.reconcile_search_indexes_task`. When no index
@@ -150,7 +163,7 @@ when you want to exercise deployment behavior.
 
 ## Development without Celery
 
-Run one initialization pass:
+For a persistent backend such as Meilisearch, run one initialization pass:
 
 ```bash
 python manage.py search_reconcile --once
@@ -166,7 +179,7 @@ Inspect logs and `SearchIndexState.last_error` for the failing pair and error.
 Apply migrations and explicit read-only synchronization before deployment search
 maintenance. See [startup maintenance](startup_maintenance.md).
 
-Keep the in-memory development backend initialized while you work:
+To repeat reconciliation against that persistent backend while developing:
 
 ```bash
 python manage.py search_reconcile --watch --interval 5
@@ -174,7 +187,10 @@ python manage.py search_reconcile --watch --interval 5
 
 The watch command uses the same reconciliation service as Celery Beat, so
 behavior stays consistent without adding request-time side effects. Intervals are
-parsed as seconds and clamped to at least one second.
+parsed as seconds and clamped to at least one second. With DevSearch this command
+would update only its own process-local projection, not the web server's index.
+Use [lazy DevSearch hydration](../examples/dev_search_lifecycle.md) in the serving
+process instead.
 
 ## Force a rebuild
 
@@ -203,8 +219,9 @@ sufficient.
 
 ## Troubleshooting
 
-- If searches return no results after startup, run
-  `python manage.py search_reconcile --once`.
+- If a persistent backend is uninitialized or dirty, run
+  `python manage.py search_reconcile --once`. For DevSearch, check hydration in
+  the serving process instead. Also verify source data and read permissions.
 - If reconciliation keeps retrying, inspect `SearchIndexState.last_error`.
 - If production never reconciles, confirm Celery Beat is running and
   `SEARCH_RECONCILE_ENABLED` is `True`.

@@ -1,5 +1,19 @@
 # Workflow API
 
+Events describe changes, registries select handlers, and engines run workflow
+definitions. Start with [workflow concepts](../concepts/workflow.md) or the
+[event tutorial](../howto/workflow_events.md); use
+[workflow operations](../howto/workflow_ops.md) for durable queues and replay.
+
+The reference follows those layers: [events](#events-and-constructors),
+[registries and settings](#registries-and-settings),
+[execution](#workflow-definitions-and-execution), [actions](#actions),
+and [backend configuration](#backend-configuration-and-signal-bridge).
+Local backends keep process-local state; production defaults select database
+routing and the Celery engine.
+
+## Events and constructors
+
 ::: general_manager.workflow.event_registry.WorkflowEvent
 
 ::: general_manager.workflow.event_registry.WorkflowEventHandler
@@ -37,6 +51,8 @@ Payload contracts are stable:
 The helpers shallow-copy top-level `values`, `changes`, `old_values`,
 `identification`, and `metadata` mappings. Nested objects are not deep-copied or
 JSON-normalized; database registries rely on Django field serialization.
+
+## Registries and settings
 
 ::: general_manager.workflow.event_registry.EventRegistry
 
@@ -152,6 +168,8 @@ migration.
 
 ::: general_manager.workflow.telemetry.extract_outbox_snapshot_payload
 
+## Workflow definitions and execution
+
 ::: general_manager.workflow.engine.WorkflowDefinition
 
 ::: general_manager.workflow.engine.WorkflowExecution
@@ -182,6 +200,8 @@ errors include the execution id. Not-found and cancelled errors use
 cancelled.`; invalid-state errors include the attempted operation, current
 state, and comma-joined expected state list.
 
+## Actions
+
 ::: general_manager.workflow.actions.Action
 
 ::: general_manager.workflow.actions.ActionAlreadyRegisteredError
@@ -203,6 +223,8 @@ fresh empty dictionaries only when context or params are omitted, preserves
 supplied mapping objects including falsey mappings, and wraps exceptions raised
 by the action in `ActionExecutionError`. Action error messages include the
 relevant action name. `names()` returns registered names sorted alphabetically.
+
+## Backend configuration and signal bridge
 
 ::: general_manager.workflow.backend_registry.configure_workflow_engine
 

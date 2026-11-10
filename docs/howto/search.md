@@ -1,7 +1,9 @@
 # Search Tutorial
 
 This tutorial walks through enabling search with Meilisearch, indexing data, and
-querying via GraphQL. It assumes Django + the auto GraphQL schema are enabled.
+querying via GraphQL. It assumes an initialized Django project with GeneralManager
+and automatic GraphQL generation enabled. Keep the project's existing
+`GENERAL_MANAGER` settings when adding the search entries below.
 
 For a new index, start with Step 1 below. If an existing deployment is
 upgrading its identity-aware search transport, follow the
@@ -70,10 +72,16 @@ with `auto_reindex=True` or enabled later with
 
 ## Step 2: Add SearchConfig to a manager
 
-Define searchable, filterable, and sortable fields:
+In an installed application's `managers.py`, define searchable, filterable and
+sortable fields. This standalone example uses `name` and `status`. If extending
+an existing manager, retain its existing fields and permission policy:
 
 ```python
+from django.db.models import CharField
+from general_manager.interface import DatabaseInterface
+from general_manager.manager import GeneralManager
 from general_manager.search.config import IndexConfig
+
 
 class Project(GeneralManager):
     class Interface(DatabaseInterface):
@@ -91,10 +99,18 @@ class Project(GeneralManager):
         ]
 ```
 
+Apply the application's migrations after adding this stored manager. Create
+records through the manager API with an authorized `creator_id`, or use existing
+application data. Searching an empty source correctly returns no results. The
+GraphQL example below expects a matching project named `alpha` with status
+`public`; manager and field permissions still determine its visibility.
+
 ### Invalidate fields owned by related managers
 
-When a project document contains customer or investment data, put the rule on
-`Project`, the manager that owns the document:
+This optional extension assumes your application also defines customer and
+investment managers and the shown relations; they are not fields of the simple
+Project above. Merge these rules into the existing `Project.SearchConfig`,
+the owner of the document. For first setup, continue to [Step 3](#step-3-create-index-settings-and-reindex-data):
 
 ```python
 from general_manager import GeneralManager, IndexConfig, SearchInvalidationRule
