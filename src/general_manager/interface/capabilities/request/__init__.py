@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from types import SimpleNamespace
 from typing import ClassVar, TYPE_CHECKING, TypeVar, cast
 from django.core.exceptions import ValidationError
 
@@ -43,6 +42,10 @@ from general_manager.interface.requests import (
 )
 from general_manager.manager.input import Input
 from general_manager.rule import Rule
+from general_manager.interface.capabilities.request.relation_inputs import (
+    RequestRuleCandidate,
+    reconcile_request_relation_kwargs,
+)
 
 from ..base import CapabilityName
 from ..builtin import BaseCapability, ValidationCapability
@@ -1187,6 +1190,9 @@ class RequestCreateCapability(BaseCapability):
         del creator_id, history_comment
         operation = interface_cls.get_mutation_operation("create")
         serializer = getattr(interface_cls, "create_serializer", None)
+        kwargs = reconcile_request_relation_kwargs(
+            interface_cls, kwargs, has_serializer=callable(serializer)
+        )
         _apply_request_rules(interface_cls, kwargs)
         body = serializer(kwargs) if callable(serializer) else kwargs
         result = interface_cls.execute_request_plan(
@@ -1248,8 +1254,10 @@ class RequestUpdateCapability(BaseCapability):
             )
         )
         existing_values.update(dict(interface_instance.identification))
-        candidate_values = {**existing_values, **kwargs}
-        _apply_request_rules(interface_cls, candidate_values)
+        kwargs = reconcile_request_relation_kwargs(
+            interface_cls, kwargs, has_serializer=callable(serializer)
+        )
+        _apply_request_rules(interface_cls, kwargs, existing_values=existing_values)
         body = serializer(kwargs) if callable(serializer) else kwargs
         result = interface_cls.execute_request_plan(
             RequestQueryPlan(
@@ -1312,18 +1320,25 @@ class RequestDeleteCapability(BaseCapability):
 def _apply_request_rules(
     interface_cls: type["RequestInterface"],
     candidate_values: Mapping[str, object],
+    *,
+    existing_values: Mapping[str, object] | None = None,
 ) -> None:
     """
     Evaluate configured request rules against candidate values.
 
-    Candidate values are exposed as attributes on a SimpleNamespace. Each failed
+    Candidate values are exposed as attributes with lazy relation reads. Each failed
     rule contributes its error-message mapping, and merged errors are raised as a
     Django ValidationError.
     """
     rules = cast(list["Rule[GeneralManager]"], getattr(interface_cls, "rules", []))
     if not rules:
         return
-    candidate = SimpleNamespace(**candidate_values)
+    candidate = RequestRuleCandidate(
+        interface_cls,
+        {**(existing_values or {}), **candidate_values},
+        explicit_values=candidate_values,
+        existing_payload=existing_values,
+    )
     errors: dict[str, object] = {}
     for rule in rules:
         if rule.evaluate(cast("GeneralManager", candidate)) is False:

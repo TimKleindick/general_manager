@@ -828,8 +828,19 @@ unsuffixed relation keys to `<relation>_id`; raw non-model values for those
 forward `ForeignKey` and `OneToOneField` names are also sent to the
 `<relation>_id` key so Django receives an identifier assignment. Reverse
 relations, generic relations, and many-to-many fields are not renamed by this
-method. If both a relation key and its `<relation>_id` key appear, the later
-normalized key overwrites the earlier value according to input iteration order.
+method. If both a relation key and its raw `<relation>_id` key are explicitly
+supplied in the same create or update payload, the raw ID wins independently of
+keyword order, including when its value is `None`. Supplying only one alias
+retains its usual meaning. Existing values loaded for an update do not count as
+submitted aliases. Django model objects and `None` under the relation name obey
+the same collision rule as manager objects and raw identifiers.
+For a foreign key targeting a non-primary `to_field`, manager and Django model
+objects contribute that target field's value, not their primary key.
+`get_relation_identifier(field, value)` owns this extraction and target-field
+conversion for manager-valued mutation inputs and permission candidates. A
+Django model object still goes through Django's type and router checks. For an
+object with a usable primary key, the mutation clears the cached alternate-key
+relation so model rules load the row selected by the stored key.
 `normalize_many_values(kwargs)` also returns a new mapping and preserves input
 keys exactly. It skips `None` and `models.NOT_PROVIDED`, treats strings and
 bytes as scalar one-item assignments, expands other iterables, consumes

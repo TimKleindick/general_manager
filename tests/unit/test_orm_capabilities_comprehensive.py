@@ -33,6 +33,7 @@ from general_manager.interface.capabilities.orm import (
     OrmUpdateCapability,
     OrmValidationCapability,
     SoftDeleteCapability,
+    mutations as orm_mutations,
 )
 from general_manager.interface.capabilities.orm.mutations import (
     _assign_history_actor,
@@ -2727,6 +2728,78 @@ class TestOrmMutationCapability:
             {"avatar": "avatars/reserved.png"},
         )
         mark_finalizing.assert_called_once_with(locked, target_pk=42)
+
+    def test_routed_upload_retry_keeps_initialized_defaults_isolated(self):
+        """Restart from the authorized defaults after a failed upload attempt."""
+        defaults = []
+        attempts = []
+
+        class RetryUpload(Exception):
+            """Simulate a retry after the attempted save."""
+
+        def metadata_default():
+            defaults.append(True)
+            return {"labels": []}
+
+        class UploadRetryModel(models.Model):
+            avatar = models.CharField(max_length=100)
+            metadata = models.JSONField(default=metadata_default)
+
+            class Meta:
+                app_label = "upload_retry_test"
+
+        def save(_interface, instance, **_kwargs):
+            assert instance.metadata == {"labels": []}
+            attempts.append(instance)
+            if len(attempts) == 1:
+                instance.metadata["labels"].append("rolled back")
+                raise RetryUpload
+            return 42
+
+        def retry(_prepared, operation):
+            with pytest.raises(RetryUpload):
+                operation()
+            return operation()
+
+        interface = SimpleNamespace(_model=UploadRetryModel)
+        permission = orm_mutations._RoutedCreatePermission(
+            Mock(), {}, interface, shares_source=True
+        )
+        source = permission.get_source()
+        mutation = OrmMutationCapability()
+        candidate = UploadCandidate(
+            intent_id=UUID("9c90741f-72ce-4f34-886c-297bc019db16"),
+            filename="avatar.png",
+            size=3,
+            content_type="image/png",
+            checksum_sha256="a" * 64,
+        )
+        with (
+            patch.object(mutation, "save_with_history", side_effect=save),
+            patch.object(mutation, "apply_many_to_many"),
+            patch.multiple(
+                orm_mutations,
+                call_with_observability=lambda *_args, **kwargs: kwargs["func"](),
+                _normalize_payload=lambda *_args: ({"avatar": candidate}, {}),
+                _mutation_capability_for=lambda _interface: mutation,
+                prepare_upload_claims=Mock(
+                    return_value=SimpleNamespace(database_alias="default")
+                ),
+                lock_upload_claims=Mock(),
+                reserve_upload_names=Mock(
+                    return_value={"avatar": "avatars/reserved.png"}
+                ),
+                run_upload_transaction=retry,
+                mark_uploads_finalizing=Mock(),
+            ),
+        ):
+            assert OrmCreateCapability()._create(
+                interface, {"avatar": candidate}, permission=permission
+            ) == {"id": 42}
+        assert len(attempts) == 2
+        assert attempts[0] is not attempts[1]
+        assert source.metadata == {"labels": []}
+        assert defaults == [True]
 
     @pytest.mark.parametrize("operation", ("create", "update"))
     def test_non_upload_mutation_supports_legacy_save_with_history_override(

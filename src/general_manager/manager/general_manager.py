@@ -604,11 +604,27 @@ class GeneralManager(metaclass=GeneralManagerMeta):
             PermissionError: Propagated if the permission check fails.
         """
         reject_historical_mutation()
-        if not ignore_permission:
-            cls.Permission.check_create_permission(kwargs, cls, creator_id)
-        identification = cls.Interface.create(
-            creator_id=creator_id, history_comment=history_comment, **kwargs
-        )
+        from general_manager.interface.orm_interface import OrmInterfaceBase
+
+        interface = cls.Interface
+        if (
+            not ignore_permission
+            and isinstance(interface, type)
+            and issubclass(interface, OrmInterfaceBase)
+        ):
+            from general_manager.interface.capabilities.orm.mutations import (
+                _create_for_manager,
+            )
+
+            identification = _create_for_manager(
+                interface, cls, kwargs, creator_id, history_comment
+            )
+        else:
+            if not ignore_permission:
+                cls.Permission.check_create_permission(kwargs, cls, creator_id)
+            identification = interface.create(
+                creator_id=creator_id, history_comment=history_comment, **kwargs
+            )
         logger.info(
             "manager created",
             context={

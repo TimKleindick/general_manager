@@ -421,8 +421,9 @@ query/path/header/body key lists, and local predicate lookup keys before calling
 `execute_request_plan(plan)`.
 
 Create and update manager methods validate configured request `Rule` objects
-before sending the request. Create rules see the submitted kwargs. Update rules
-see existing payload values, the manager identification, and submitted kwargs
+before sending the request. Create rules see the submitted values and declared
+relationship aliases. Update rules see existing payload values, the manager
+identification, and submitted kwargs
 merged together; only the submitted kwargs are serialized into the update body.
 `create_serializer` and `update_serializer` customize those request bodies. Both
 create and update require exactly one response item and return the identification
@@ -432,6 +433,24 @@ payload. Delete sends only the identification-derived path parameters and return
 `None`. Request-backed create/update/delete accept `creator_id` and
 `history_comment` for compatibility with the common manager API, but the request
 capabilities ignore those values.
+
+Direct manager-typed `RequestField` attributes, including optional manager types, expose
+consistent `<relation>` and `<relation>_id` values in permission and rule check
+objects. When both are explicitly supplied in one create or update call, the
+`_id` value wins, including `None`, regardless of keyword order. Existing response
+values do not compete with an explicitly submitted update. Current relation
+values are read through their declared `source` and `normalizer`.
+
+Request bodies keep the submitted key set, and a lone relation argument retains
+its original value and type. For an explicit pair, the canonical relation value
+is reconciled to the winning target before the application serializer runs.
+Check-only aliases are never added to the outgoing body, and `source` is not
+used as an inverse write mapping. Unconsumed lone wire values are not validated
+as manager references. A check that resolves a composite target requires its
+manager instance or a complete identification mapping, not an ambiguous scalar;
+its check-only `_id` value is the full identification mapping. Ordinary scalar
+attributes such as `external_id` do not acquire relationship aliases merely
+because of their name.
 
 ## Practical examples
 

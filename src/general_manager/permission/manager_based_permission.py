@@ -211,6 +211,7 @@ class _ConfiguredManagerPermission(BasePermission):
         self._read_instance_result = None
 
     def __get_based_on_permission(self) -> BasePermission | None:
+        """Delegate through the normalized proposed relation when metadata exists."""
         from general_manager.manager.general_manager import GeneralManager
         from general_manager.permission.permission_data_manager import (
             PermissionDataManager,
@@ -225,12 +226,14 @@ class _ConfiguredManagerPermission(BasePermission):
         if (
             isinstance(self.instance, PermissionDataManager)
             and isinstance(self.instance.permission_data, dict)
+            and not self.instance._resolves_relation(__based_on__)
             and self.instance.manager is not None
             and f"{__based_on__}_id" in self.instance.permission_data
         ):
             field_type = self.instance.manager.Interface.get_field_type(__based_on__)
             if isinstance(field_type, type) and issubclass(field_type, GeneralManager):
-                # Match ORM payload normalization: the last relation alias wins.
+                # Normalized check candidates already resolve both aliases.
+                # Preserve the fallback for other payload adapters.
                 for key, value in self.instance.permission_data.items():
                     if key in (__based_on__, f"{__based_on__}_id"):
                         basis_object = value
@@ -598,10 +601,42 @@ class _ConfiguredManagerPermission(BasePermission):
         action: permission_type,
         attribute: str,
     ) -> tuple[list[str], bool]:
+        """Resolve one exact declaration using the constructor's MRO snapshot."""
         attribute_source = self.__attribute_permissions.get(attribute)
         if isinstance(attribute_source, dict) and action in attribute_source:
             return list(attribute_source[action]), True
         return [], False
+
+    def _get_manager_context(self) -> type[GeneralManager] | None:
+        """Resolve the owning manager without fetching relation or candidate data."""
+        from general_manager.manager.general_manager import GeneralManager
+        from general_manager.permission.permission_data_manager import (
+            PermissionDataManager,
+        )
+
+        subject = self.instance
+        if isinstance(subject, PermissionDataManager):
+            return subject.manager
+        if isinstance(subject, type) and issubclass(subject, GeneralManager):
+            return subject
+        return type(subject) if isinstance(subject, GeneralManager) else None
+
+    def _get_attribute_permission_groups(
+        self, action: permission_type, attribute: str
+    ) -> list[list[str]]:
+        """Keep distinct alias declarations as deterministic independent OR groups."""
+        from general_manager.permission.relation_aliases import (
+            permission_attribute_names,
+        )
+
+        groups: list[list[str]] = []
+        for name in permission_attribute_names(self._get_manager_context(), attribute):
+            expressions, present = self._get_attribute_permission_expressions(
+                action, name
+            )
+            if present and expressions not in groups:
+                groups.append(expressions)
+        return groups
 
     def _evaluate_local_permission(
         self,
@@ -630,6 +665,7 @@ class _ConfiguredManagerPermission(BasePermission):
         action: permission_type,
         attribute: str,
     ) -> bool:
+        """Enforce delegated, global, and all distinct declared alias field gates."""
         self._get_base_permissions(action)
         if self._is_superuser():
             self.__overall_results[action] = True
@@ -641,9 +677,9 @@ class _ConfiguredManagerPermission(BasePermission):
             return False
 
         base_permissions = self._get_base_permissions(action)
-        attribute_permissions, has_attribute_permissions = (
-            self._get_attribute_permission_expressions(action, attribute)
-        )
+        attribute_groups = self._get_attribute_permission_groups(action, attribute)
+        has_attribute_permissions = bool(attribute_groups)
+        attribute_permissions = attribute_groups[0] if attribute_groups else []
 
         can_use_action_cache = (
             not has_attribute_permissions and self.__based_on_permission is None
@@ -661,6 +697,12 @@ class _ConfiguredManagerPermission(BasePermission):
             attribute_permissions=attribute_permissions,
             has_attribute_permissions=has_attribute_permissions,
         )
+        # Preserve the existing merge hook's flat OR-list contract. Additional
+        # alias definitions add independent gates, without repeating the base gate.
+        if permission:
+            permission = all(
+                self._check_permission_list(group) for group in attribute_groups[1:]
+            )
         if can_use_action_cache:
             self.__overall_results[action] = permission
         return permission
@@ -783,16 +825,20 @@ class _ConfiguredManagerPermission(BasePermission):
         action: permission_type,
         attribute: str,
     ) -> tuple[str, ...]:
+        """Report the effective local alias groups and any delegated expressions."""
         base_permissions = self._get_base_permissions(action)
-        attribute_permissions, has_attribute_permissions = (
-            self._get_attribute_permission_expressions(action, attribute)
-        )
+        attribute_groups = self._get_attribute_permission_groups(action, attribute)
+        has_attribute_permissions = bool(attribute_groups)
+        attribute_permissions = attribute_groups[0] if attribute_groups else []
         combined = self._describe_local_permissions(
             action=action,
             attribute=attribute,
             base_permissions=base_permissions,
             attribute_permissions=attribute_permissions,
             has_attribute_permissions=has_attribute_permissions,
+        )
+        combined += tuple(
+            expression for group in attribute_groups[1:] for expression in group
         )
         if self.__based_on_permission is not None:
             combined += self.__based_on_permission.describe_permissions(
@@ -1012,13 +1058,18 @@ def _can_prepare_local_read_definitions(permission_class: object) -> bool:
 
 
 def additional_local_read_permission(
-    permission_class: object, attribute: str
+    permission_class: object,
+    attribute: str,
+    *,
+    manager: type[GeneralManager] | None = None,
 ) -> bool | None:
     """Compare declarative field rules with the row gate without evaluating users.
 
     Only the built-in additive/override implementation has known semantics.
     Custom executable policies require runtime field checks. The caller must
-    also inspect any delegated policy on its owning manager.
+    also inspect any delegated policy on its owning manager. Concrete manager
+    metadata pairs relation aliases; absent context cannot prove a possible
+    counterpart declaration irrelevant. Distinct alias groups are AND gates.
     Rule lists are OR alternatives: an empty list or a superset of the row
     alternatives cannot further restrict a row which already passed its gate.
     """
@@ -1055,15 +1106,33 @@ def additional_local_read_permission(
         if permission_class in implementations
         else permission_class.__read__
     )
-    field_rules = _attribute_permission_definition(permission_class, attribute)
-    if not isinstance(field_rules, dict) or "read" not in field_rules:
-        return False
-    field = field_rules["read"]
-    if not isinstance(field, (list, tuple)) or not isinstance(base, (list, tuple)):
-        return None
-    if not all(isinstance(rule, str) for rule in (*base, *field)):
-        return None
-    return bool(field) and (not base or not set(base).issubset(field))
+    if manager is None:
+        # Without schema context a possible counterpart is not a scalar alias
+        # claim, but it prevents proving that the field has no extra gate.
+        possible_counterparts = {f"{attribute}_id"}
+        if attribute.endswith("_id"):
+            possible_counterparts.add(attribute.removesuffix("_id"))
+        for counterpart in possible_counterparts:
+            definition = _attribute_permission_definition(permission_class, counterpart)
+            if isinstance(definition, dict) and "read" in definition:
+                return None
+
+    from general_manager.permission.relation_aliases import permission_attribute_names
+
+    additional = False
+    for name in permission_attribute_names(manager, attribute):
+        field_rules = _attribute_permission_definition(permission_class, name)
+        if not isinstance(field_rules, dict) or "read" not in field_rules:
+            continue
+        field = field_rules["read"]
+        if not isinstance(field, (list, tuple)) or not isinstance(base, (list, tuple)):
+            return None
+        if not all(isinstance(rule, str) for rule in (*base, *field)):
+            return None
+        # Each alias list is OR, but distinct groups are AND. A single group
+        # that can narrow the row gate requires the runtime field check.
+        additional |= bool(field) and (not base or not set(base).issubset(field))
+    return additional
 
 
 __all__ = [

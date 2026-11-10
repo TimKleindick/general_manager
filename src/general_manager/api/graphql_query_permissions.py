@@ -219,7 +219,7 @@ class _NativeQueryStructure:
         for name in names:
             if name not in self.additional:
                 self.additional[name] = additional_local_read_permission(
-                    self.permission, name
+                    self.permission, name, manager=self.manager
                 )
             if self.additional[name] is None:
                 return None
@@ -459,7 +459,8 @@ def authorize_query_fields(
         if getattr_static(permission, "__based_on__", None) is not None:
             return True
         return any(
-            additional_local_read_permission(permission, name) is not False
+            additional_local_read_permission(permission, name, manager=type(instance))
+            is not False
             for name in names
         )
 

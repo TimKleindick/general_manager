@@ -62,7 +62,10 @@ def analyze_search_projection(
             reasons.add("cyclic delegated permission")
             return
         permission = getattr(owner, "Permission", None)
-        if additional_local_read_permission(permission, field) is not False:
+        if (
+            additional_local_read_permission(permission, field, manager=owner)
+            is not False
+        ):
             reasons.add("additional or custom field permission")
         based_on = getattr(permission, "__based_on__", None)
         if based_on is not None:

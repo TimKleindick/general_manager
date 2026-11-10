@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.test import TestCase
+from unittest.mock import patch
 
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.permission import (
@@ -16,6 +17,21 @@ from general_manager.permission.permission_data_manager import (
 
 
 class PermissionDataManagerTests(TestCase):
+    def test_plain_payload_does_not_initialize_request_backends(self) -> None:
+        """Read plain dictionaries without importing unrelated request interfaces."""
+        original_import = __import__
+
+        def import_without_request_backend(name, *args, **kwargs):
+            """Fail if a plain payload tries to load the request backend."""
+            if name == "general_manager.interface.interfaces.request":
+                message = "Request backend unavailable"
+                raise ImportError(message)
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=import_without_request_backend):
+            candidate = PermissionDataManager({"status": "draft"})
+            self.assertEqual(candidate.status, "draft")
+
     def test_dict_payload_exposes_values_and_missing_keys_as_none(self) -> None:
         manager = PermissionDataManager({"status": "draft", "count": 3})
 
@@ -29,6 +45,13 @@ class PermissionDataManagerTests(TestCase):
         permission_data = PermissionDataManager({"status": "draft"}, GeneralManager)
 
         self.assertIs(permission_data.manager, GeneralManager)
+
+    def test_bare_manager_does_not_infer_customer_relation_from_id_suffix(self) -> None:
+        """Require declared relation metadata rather than guessing from a raw ID key."""
+        with self.assertNumQueries(0):
+            candidate = PermissionDataManager({"customer_id": 17}, GeneralManager)
+            self.assertEqual(candidate.customer_id, 17)
+            self.assertIsNone(candidate.customer)
 
     def test_wrapper_properties_take_precedence_over_payload_keys(self) -> None:
         payload = {"manager": "payload manager", "permission_data": "payload data"}
