@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.89.0 (2026-11-10)
+
+### Features
+
+- Configure GraphQL search scan limit from environment
+  ([`aa19a6c`](https://github.com/TimKleindick/general_manager/commit/aa19a6c6e3aa151e59bb830b83c22cd59ed2fa74))
+
+
 ## v0.88.0 (2026-11-10)
 
 ### Features
