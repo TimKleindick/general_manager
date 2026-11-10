@@ -9,7 +9,7 @@ Arbitrary custom adapters remain a trusted extension point.
 ## Install and configure django-storages
 
 ```bash
-pip install "general-manager[file-upload-s3]"
+pip install "GeneralManager[file-upload-s3]"
 ```
 
 The extra installs `boto3>=1.42.0` and `django-storages[s3]>=1.14`. A private

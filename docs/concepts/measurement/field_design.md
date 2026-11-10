@@ -16,6 +16,7 @@ class Product(models.Model):
 Assignments accept `Measurement` instances or human-readable strings:
 
 ```python
+product = Product()
 product.weight = Measurement(750, "gram")
 product.price = "19.99 EUR"
 ```
@@ -63,7 +64,7 @@ field declaration and migration serialization are unchanged. Generated
 partial-update inputs omit defaults, so omission preserves the stored value
 while explicit `None` remains a clear operation.
 
-Assignment clears the backing columns immediately. On a non-nullable field,
+Assigning `None` clears the backing columns immediately. On a non-nullable field,
 Django validation rejects that cleared value later through the normal
 `null=False` validation path. Saving without model validation relies on the
 database schema for the non-null backing columns.
@@ -115,7 +116,10 @@ within the field's configured base unit dimension.
 
 ## Validation and forms
 
-`MeasurementField` plugs into Django forms and admin just like other fields. Invalid strings raise `ValidationError` with descriptive messages. To customise form widgets, subclass `MeasurementFormField` or provide your own input parsing logic.
+For a custom form or admin widget, define how the user's value and unit become
+a `Measurement` before model validation. GeneralManager does not export a
+`MeasurementFormField` to subclass. Assignment to the model attribute parses
+measurement strings; direct field validation has a different contract:
 
 Assignment handles string parsing, currency checks, and dimensionality checks.
 Django's normal `clean()`/`validate()` lifecycle handles `null`, `blank`, and
@@ -174,4 +178,7 @@ their exact subclasses are not a stable GeneralManager field API.
 
 ## Migrations
 
-Because measurements store magnitudes as decimals, they migrate cleanly across databases. If you change the base unit, run a data migration to rescale stored values.
+Review both backing columns and history tables when changing a measurement
+field. A base-unit change requires a data migration to rescale stored values;
+follow the [migration guide](../../howto/migrations_gotchas.md#measurement-fields)
+and inspect the operations for your database backend.

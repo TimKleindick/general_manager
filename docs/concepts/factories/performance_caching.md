@@ -6,12 +6,18 @@ Factories generate many objects quickly—use them wisely to keep tests fast and
 
 `general_manager.factory.auto_factory.AutoFactory` inspects interface metadata to populate sensible defaults. It derives values for regular fields, handles special fields via `handle_custom_fields()`, and assigns many-to-many relations after saved creates. Build calls return unsaved models and do not write many-to-many relations.
 
-```python
-class ProjectFactory(AutoFactory):
-    interface = Project.Interface
+For the Project from the [quickstart](../../quickstart.md), start with its
+already generated factory:
 
-project = ProjectFactory()
+```python
+from projects.managers import Project
+
+project = Project.Factory.create(name="Apollo")
 ```
+
+Create strategy saves the model and returns its manager wrapper. It is fixture
+creation, not an authorized application write; build strategy returns an unsaved
+Django model instead.
 
 ## Batch creation
 
@@ -19,7 +25,9 @@ When you need multiple objects, use `Factory.create_batch()` and wrap the call i
 
 ## Caching interactions
 
-Factories interact with the dependency tracker when they call manager APIs. In test suites, disable expensive caches by configuring Django's cache backend to use the local memory backend. For stress tests, enable Redis so you can measure invalidation throughput.
+Factories interact with the dependency tracker when they call manager APIs. A local-memory cache is useful for isolated tests but still caches results;
+it does not disable caching. Choose `cache="none"` on the operation or a
+suitable test cache configuration when reuse itself is unwanted. For stress tests, enable Redis so you can measure invalidation throughput.
 
 ## Reusing fixtures
 
