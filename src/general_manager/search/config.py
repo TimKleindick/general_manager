@@ -11,7 +11,15 @@ from general_manager.manager.general_manager import GeneralManager
 
 
 _RESERVED_DOCUMENT_FIELD_NAMES = frozenset(
-    {"id", "gm_document_id", "type", "identification", "data", "gm_identity"}
+    {
+        "id",
+        "gm_document_id",
+        "type",
+        "identification",
+        "data",
+        "gm_identity",
+        "gm_numeric_tokens",
+    }
 )
 
 
