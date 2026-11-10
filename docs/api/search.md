@@ -232,6 +232,14 @@ across selected manager types; denied and stale hits consume it too. A backend
 can explicitly attest exhaustion even on a full final page. An explicitly
 incomplete short or empty page never establishes an exact result.
 
+The environment variable `GENERAL_MANAGER_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT`
+provides a positive-integer fallback when no explicit Django scan-limit setting
+is present. Existing nested, prefixed and top-level Django settings retain their
+precedence over the environment; the default remains `1000`. Invalid environment
+values raise `BAD_USER_INPUT`. Restart application workers after deployment
+environment changes. Meilisearch's per-index `pagination.maxTotalHits` is an
+independent provider cap and is not changed by this variable.
+
 `orderBy` is present when the registered searchable managers expose sortable
 fields; its `SearchOrderBy` input uses the generated sortable-field enum and
 `ASC`/`DESC` directions.
