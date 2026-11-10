@@ -2833,6 +2833,43 @@ def test_payload_normalizer_normalize_simple_values_converts_fk_plain_id() -> No
     assert normalized["_plant_id"] == 7
 
 
+@pytest.mark.parametrize("relation_type", [models.ForeignKey, models.OneToOneField])
+@pytest.mark.parametrize("relation_value", ["identifier", "model", "none"])
+@pytest.mark.parametrize("identifier", [2, None])
+@pytest.mark.parametrize("id_first", [True, False])
+def test_payload_normalizer_explicit_relation_id_wins(
+    relation_type, relation_value, identifier, id_first
+) -> None:
+    """Normalize explicit ID conflicts independently of relation type and order."""
+    from django.test.utils import isolate_apps
+
+    with isolate_apps():
+
+        class Related(models.Model):
+            class Meta:
+                app_label = "explicit_relation_alias"
+
+        class Record(models.Model):
+            basis = relation_type(Related, on_delete=models.CASCADE, null=True)
+
+            class Meta:
+                app_label = "explicit_relation_alias"
+
+        values = {"identifier": 1, "model": Related(pk=1), "none": None}
+        value = values[relation_value]
+        payload = (
+            {"basis_id": identifier, "basis": value}
+            if id_first
+            else {"basis": value, "basis_id": identifier}
+        )
+        original = dict(payload)
+
+        normalized = PayloadNormalizer(Record).normalize_simple_values(payload)
+
+        assert normalized == {"basis_id": identifier}
+        assert payload == original
+
+
 def test_payload_normalizer_normalize_simple_values_keeps_non_relation_scalar_keys() -> (
     None
 ):
@@ -2911,3 +2948,63 @@ def test_build_field_descriptors_does_not_mark_auto_pk_as_bigint_graphql_scalar(
     assert descriptors["id"].metadata["type"] is int
     assert "graphql_scalar" not in descriptors["id"].metadata
     assert descriptors["id"].metadata["is_identifier"] is True
+
+
+@pytest.mark.parametrize("key", ["current-key", None])
+@pytest.mark.parametrize("adding", [False, True])
+def test_usable_pk_alternate_key_models_keep_object_assignment(key, adding) -> None:
+    """Preserve model objects for Django type and database-router checks."""
+    from django.test.utils import isolate_apps
+
+    with isolate_apps():
+
+        class Target(models.Model):
+            code = models.CharField(max_length=30, unique=True, null=True)
+
+            class Meta:
+                app_label = "saved_target_alias"
+
+        class Source(models.Model):
+            basis = models.ForeignKey(
+                Target, to_field="code", null=True, on_delete=models.CASCADE
+            )
+
+            class Meta:
+                app_label = "saved_target_alias"
+
+        target = Target(pk=1, code=key)
+        target._state.adding = adding
+        assert PayloadNormalizer(Source).normalize_simple_values({"basis": target}) == {
+            "basis": target
+        }
+
+
+@pytest.mark.parametrize("key", ["current-key", None])
+@pytest.mark.parametrize("adding", [True, False])
+def test_alternate_key_model_without_pk_retains_unsaved_validation(key, adding) -> None:
+    """A missing model PK must not become an accepted raw ID or nullable None."""
+    from django.test.utils import isolate_apps
+
+    with isolate_apps():
+
+        class Target(models.Model):
+            code = models.CharField(max_length=30, unique=True, null=True)
+
+            class Meta:
+                app_label = "unsaved_target_alias"
+
+        class Source(models.Model):
+            basis = models.ForeignKey(
+                Target, to_field="code", null=True, on_delete=models.CASCADE
+            )
+
+            class Meta:
+                app_label = "unsaved_target_alias"
+
+        target = Target(code=key)
+        target._state.adding = adding
+        payload = PayloadNormalizer(Source).normalize_simple_values({"basis": target})
+        assert payload == {"basis": target}
+        instance = Source(**payload)
+        with pytest.raises(ValueError, match="unsaved related object"):
+            instance._prepare_related_fields_for_save(operation_name="save")

@@ -5,11 +5,14 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from copy import copy, deepcopy
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 
 from django.contrib.auth import get_user_model
 from django.db import DEFAULT_DB_ALIAS, models, router, transaction
 from django.db.models import NOT_PROVIDED
+from django.db.models.fields.related_descriptors import ForwardManyToOneDescriptor
 
 from general_manager.cache.data_change_context import (
     mark_data_change_unchanged,
@@ -53,13 +56,119 @@ from .support import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover
+    from django.db.models.fields.reverse_related import ForeignObjectRel
     from general_manager.interface.orm_interface import OrmInterfaceBase
+    from general_manager.manager.general_manager import GeneralManager
 
 type OrmInterfaceClass = type["OrmInterfaceBase[models.Model]"]
 type OrmInterfaceInstance = "OrmInterfaceBase[models.Model]"
 type MutationPayload = dict[str, object]
 type ManyToManyPayload = dict[str, list[object]]
 type MutationResult = dict[str, object]
+
+
+class _CreatePermissionTargetChangedError(PermissionError):
+    """The prepared create no longer targets the database or key authorized."""
+
+    def __init__(self) -> None:
+        super().__init__("The authorized ORM create relation target changed.")
+
+
+class _UnboundRoutedCreatePermissionError(PermissionError):
+    """A custom writer cannot bind its dynamic route to the permission check."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Resolving a related object during a custom ORM create "
+            "requires a fixed database alias."
+        )
+
+
+@dataclass(slots=True)
+class _RoutedCreatePermission:
+    """Share one prepared model between its permission check and write."""
+
+    manager: type[GeneralManager]
+    payload: MutationPayload
+    interface: OrmInterfaceClass
+    shares_source: bool
+    source: models.Model | None = None
+    routing_hint: models.Model | None = None
+    checked_relations: dict[str, tuple[models.ForeignKey[models.Model], object]] = (
+        field(default_factory=dict)
+    )
+
+    def get_source(self) -> models.Model:
+        """Initialize Django defaults only when a permission needs the source."""
+        if not self.shares_source:
+            raise _UnboundRoutedCreatePermissionError
+        if self.source is None:
+            self.source = self.interface._model()
+        return self.source
+
+    @property
+    def database_alias(self) -> str | None:
+        """Return the chosen database once the check resolves a related row."""
+        return self.routing_hint._state.db if self.routing_hint is not None else None
+
+    def verify_target(
+        self, instance: models.Model, configured_database: str | None
+    ) -> None:
+        """Reject routing or relation-key changes introduced by model validation."""
+        if self.database_alias is not None and self.database_alias != (
+            configured_database
+            or router.db_for_write(type(instance), instance=instance)
+        ):
+            raise _CreatePermissionTargetChangedError
+        if any(
+            relation.target_field.to_python(getattr(instance, attname)) != value
+            for attname, (relation, value) in self.checked_relations.items()
+        ):
+            raise _CreatePermissionTargetChangedError
+
+
+_routed_create_check = ContextVar[_RoutedCreatePermission | None](
+    "routed_create_check", default=None
+)
+_routed_create_write = ContextVar[tuple[models.Model, _RoutedCreatePermission] | None](
+    "routed_create_write", default=None
+)
+
+
+def _copy_create_source(
+    source: models.Model, *, isolate_defaults: bool = False
+) -> models.Model:
+    """Copy ORM state, with isolated field defaults for retryable writes."""
+    instance = object.__new__(type(source))
+    instance.__dict__.update(source.__dict__)
+    if isolate_defaults:
+        for concrete in source._meta.concrete_fields:
+            if concrete.attname in source.__dict__:
+                instance.__dict__[concrete.attname] = deepcopy(
+                    source.__dict__[concrete.attname]
+                )
+    instance._state = copy(source._state)
+    vars(instance._state)["fields_cache"] = dict(
+        cast(dict[str, object], source._state.fields_cache)
+    )
+    return instance
+
+
+@contextmanager
+def _bind_routed_create_write(
+    instance: models.Model,
+    permission: _RoutedCreatePermission | None,
+) -> Iterator[None]:
+    """Give the existing save hook the authorization for this exact model."""
+    if permission is None:
+        yield
+        return
+    token = _routed_create_write.set((instance, permission))
+    try:
+        yield
+    finally:
+        _routed_create_write.reset(token)
+
 
 _save_with_history_savepoint = ContextVar(
     "save_with_history_savepoint",
@@ -92,6 +201,37 @@ def _mutation_atomic(
     if use_savepoint:
         return transaction.atomic()
     return transaction.atomic(savepoint=False)
+
+
+class _ModelPkState(Protocol):
+    """Django's PK completeness check, absent from older stubs."""
+
+    def _is_pk_set(self) -> bool: ...
+
+
+def _discard_alternate_key_cache(
+    instance: models.Model, name: str, related: models.Model
+) -> None:
+    """Keep Django assignment checks and reload the current alternate-key owner."""
+    descriptor = getattr(type(instance), name, None)
+    if not isinstance(descriptor, ForwardManyToOneDescriptor):
+        return
+    relation = descriptor.field
+    if (
+        not isinstance(relation, models.ForeignKey)
+        or relation.target_field.primary_key
+        or not cast(_ModelPkState, related)._is_pk_set()
+        or not relation.is_cached(instance)
+    ):
+        # Leave unsaved objects cached so Django still rejects them at save.
+        return
+    relation.delete_cached_value(instance)
+    reverse = cast("ForeignObjectRel", relation.remote_field)
+    if (
+        not reverse.multiple
+        and reverse.get_cached_value(related, default=None) is instance
+    ):
+        reverse.delete_cached_value(related)
 
 
 class OrmMutationCapability(BaseCapability):
@@ -144,6 +284,8 @@ class OrmMutationCapability(BaseCapability):
                     raise InvalidFieldValueError(key, value) from error
                 except TypeError as error:
                     raise InvalidFieldTypeError(key, error) from error
+                if isinstance(value, models.Model):
+                    _discard_alternate_key_cache(instance, key, value)
             return instance
 
         return call_with_observability(
@@ -202,6 +344,15 @@ class OrmMutationCapability(BaseCapability):
             """
             support = get_support_capability(interface_cls)
             database_alias = support.get_database_alias(interface_cls)
+            create_write = _routed_create_write.get()
+            create_permission = (
+                create_write[1]
+                if create_write is not None and create_write[0] is instance
+                else None
+            )
+            write_database = (
+                create_permission.database_alias if create_permission else None
+            ) or database_alias
             from general_manager.manager.bulk_create import (
                 CreateManyUnsupportedError,
                 enclosing_create_many_batch,
@@ -216,7 +367,7 @@ class OrmMutationCapability(BaseCapability):
             if database_alias:
                 instance._state.db = database_alias
             atomic_context = _mutation_atomic(
-                database_alias,
+                write_database,
                 savepoint=_save_with_history_savepoint.get(),
             )
             with atomic_context:
@@ -237,8 +388,10 @@ class OrmMutationCapability(BaseCapability):
                         != batch.database_alias
                     ):
                         raise CreateManyUnsupportedError.routing()
-                if database_alias:
-                    instance.save(using=database_alias)
+                if create_permission is not None:
+                    create_permission.verify_target(instance, database_alias)
+                if write_database:
+                    instance.save(using=write_database)
                 else:
                     instance.save()
             return instance.pk
@@ -371,6 +524,16 @@ class OrmCreateCapability(BaseCapability):
                 wrapped.
         """
         _ = args
+        return self._create(interface_cls, kwargs)
+
+    def _create(
+        self,
+        interface_cls: OrmInterfaceClass,
+        kwargs: MutationPayload,
+        *,
+        permission: _RoutedCreatePermission | None = None,
+    ) -> MutationResult:
+        """Persist a create using the initialized source shared with its check."""
         payload_snapshot = {"kwargs": dict(kwargs)}
 
         def _perform() -> MutationResult:
@@ -399,6 +562,10 @@ class OrmCreateCapability(BaseCapability):
             if enclosing_create_many_batch() is not None:
                 validate_create_many_record(normalized_simple)
             mutation = _mutation_capability_for(interface_cls)
+            source = permission.source if permission is not None else None
+            authorized_database = (
+                permission.database_alias if permission is not None else None
+            )
             if has_upload_candidates(normalized_simple):
                 prepared = prepare_upload_claims(
                     interface_cls,
@@ -407,10 +574,18 @@ class OrmCreateCapability(BaseCapability):
                     actor_id=creator_id,
                     target_pk=None,
                 )
+                if authorized_database not in (None, prepared.database_alias):
+                    raise _CreatePermissionTargetChangedError
 
                 def _create_claimed() -> MutationResult:
                     locked = lock_upload_claims(prepared)
-                    instance = interface_cls._model()
+                    # An upload may retry the transaction. Each attempt starts
+                    # with the same authorized defaults and a fresh model state.
+                    instance = (
+                        _copy_create_source(source, isolate_defaults=True)
+                        if source is not None
+                        else interface_cls._model()
+                    )
                     ordinary_values = {
                         key: value
                         for key, value in normalized_simple.items()
@@ -431,12 +606,13 @@ class OrmCreateCapability(BaseCapability):
                         instance,
                         reserved_values,
                     )
-                    claimed_pk = mutation.save_with_history(
-                        interface_cls,
-                        claimed_instance,
-                        creator_id=creator_id,
-                        history_comment=history_comment,
-                    )
+                    with _bind_routed_create_write(claimed_instance, permission):
+                        claimed_pk = mutation.save_with_history(
+                            interface_cls,
+                            claimed_instance,
+                            creator_id=creator_id,
+                            history_comment=history_comment,
+                        )
                     mutation.apply_many_to_many(
                         interface_cls,
                         claimed_instance,
@@ -448,12 +624,16 @@ class OrmCreateCapability(BaseCapability):
 
                 return run_upload_transaction(prepared, _create_claimed)
             instance = mutation.assign_simple_attributes(
-                interface_cls, interface_cls._model(), normalized_simple
+                interface_cls,
+                source if source is not None else interface_cls._model(),
+                normalized_simple,
             )
             support = get_support_capability(interface_cls)
             database_alias = support.get_database_alias(interface_cls)
-            atomic_context = _mutation_atomic(database_alias)
-            with atomic_context:
+            with (
+                _mutation_atomic(authorized_database or database_alias),
+                _bind_routed_create_write(instance, permission),
+            ):
                 with _without_save_with_history_savepoint():
                     pk = mutation.save_with_history(
                         interface_cls,
@@ -475,6 +655,54 @@ class OrmCreateCapability(BaseCapability):
             payload=payload_snapshot,
             func=_perform,
         )
+
+
+def _create_for_manager(
+    interface: OrmInterfaceClass,
+    manager: type[GeneralManager],
+    payload: MutationPayload,
+    creator_id: int | None,
+    history_comment: str | None,
+) -> MutationResult:
+    """Use the prepared model for permission checks in canonical routed creates."""
+    from general_manager.interface.base_interface import InterfaceBase
+
+    create = interface.create
+    if not router.routers:
+        manager.Permission.check_create_permission(payload, manager, creator_id)
+        return create(creator_id=creator_id, history_comment=history_comment, **payload)
+
+    handler = interface.get_capability_handler("create")
+    builtin_create = (
+        isinstance(handler, OrmCreateCapability)
+        and getattr(handler.create, "__func__", None) is OrmCreateCapability.create
+        and getattr(create, "__func__", None)
+        is getattr(InterfaceBase.create, "__func__", None)
+    )
+    mutation = interface.get_capability_handler("orm_mutation")
+    builtin_save = (
+        isinstance(mutation, OrmMutationCapability)
+        and getattr(mutation.save_with_history, "__func__", None)
+        is OrmMutationCapability.save_with_history
+    )
+    permission = _RoutedCreatePermission(
+        manager, payload, interface, shares_source=builtin_create and builtin_save
+    )
+    token = _routed_create_check.set(permission)
+    try:
+        manager.Permission.check_create_permission(payload, manager, creator_id)
+    finally:
+        _routed_create_check.reset(token)
+
+    if not builtin_create:
+        return create(creator_id=creator_id, history_comment=history_comment, **payload)
+    assert isinstance(handler, OrmCreateCapability)
+    kwargs = {"creator_id": creator_id, "history_comment": history_comment, **payload}
+    return interface._observe_create(
+        (),
+        kwargs,
+        lambda: handler._create(interface, kwargs, permission=permission),
+    )
 
 
 class OrmUpdateCapability(BaseCapability):

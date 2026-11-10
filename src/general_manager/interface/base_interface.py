@@ -1183,7 +1183,6 @@ class InterfaceBase(ABC):
             The capability-level create result mapping.
         """
         reject_historical_mutation()
-        observer = cls.get_capability_handler("observability")
 
         def _invoke() -> dict[str, object]:
             """
@@ -1201,12 +1200,22 @@ class InterfaceBase(ABC):
                 return create_handler(cls, *args, **kwargs)
             raise NotImplementedError(f"{cls.__name__} does not support create.")
 
+        return cls._observe_create(args, kwargs, _invoke)
+
+    @classmethod
+    def _observe_create(
+        cls,
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        invoke: Callable[[], dict[str, object]],
+    ) -> dict[str, object]:
+        """Share the public create observation envelope with ORM manager writes."""
         return cls._execute_with_observability(
             target=cls,
             operation="create",
             payload={"args": args, "kwargs": kwargs},
-            func=_invoke,
-            observer=observer,
+            func=invoke,
+            observer=cls.get_capability_handler("observability"),
         )
 
     @classmethod

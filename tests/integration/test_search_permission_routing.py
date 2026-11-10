@@ -13,6 +13,7 @@ import graphene
 from graphql import GraphQLError
 
 from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql_search import register_search_query
 from general_manager.api.graphql_query_permissions import authorize_query_fields
 from general_manager.api.property import graph_ql_property
 from general_manager.interface import DatabaseInterface
@@ -185,6 +186,43 @@ class TestSearchPermissionRouting(GeneralManagerTransactionTestCase):
             with self.assertRaisesRegex(GraphQLError, "Permission denied"):
                 self.search(index="restricted", query="absent")
         backend.assert_not_called()
+
+    def test_relation_alias_read_gate_precedes_backend_for_absent_search(self):
+        """Reject a hidden relation alias before a backend can reveal hit existence."""
+        related = self.Related.Factory.create(text="classified", visibility="public")
+        self.Owner.Factory.create(name="ordinary", related=related)
+        cases = (
+            ("related_id", "relation_value"),
+            ("related", "relation_identity"),
+        )
+        for declared, index in cases:
+            with self.subTest(declared=declared, index=index):
+                with patch.object(
+                    self.Owner.Permission,
+                    declared,
+                    {"read": ["isAdmin"]},
+                    create=True,
+                ):
+                    fields = {}
+                    register_search_query(
+                        fields,
+                        GraphQL.manager_registry,
+                        GraphQL.graphql_type_registry,
+                        None,
+                        None,
+                    )
+                    with patch.object(
+                        self.backend, "search", wraps=self.backend.search
+                    ) as backend:
+                        with self.assertRaisesRegex(GraphQLError, "Permission denied"):
+                            fields["search"].resolver(
+                                None,
+                                self.info,
+                                types=["RouteOwner"],
+                                index=index,
+                                query="absent",
+                            )
+                    backend.assert_not_called()
 
     def test_mutated_index_lists_cannot_reuse_startup_fast_approval(self):
         """Runtime index mutations invalidate the startup fast-path proof."""

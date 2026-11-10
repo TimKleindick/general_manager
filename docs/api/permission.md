@@ -51,6 +51,40 @@ boolean indicating whether the permission was representable as a prefilter;
 
 ::: general_manager.permission.manager_based_permission.ManagerBasedPermission
 
+### Relation field permissions
+
+For a declared forward foreign key or one-to-one relation, the relation name and
+its raw ID attribute share field-permission declarations. A rule declared only
+under `project` also protects `project_id`, and a rule declared only under
+`project_id` also protects `project`. Explicit, non-derived manager-typed
+`RequestField` relations follow the same rule. Ordinary scalar names and
+many-to-many `_list` aliases are not inferred as relation pairs.
+
+```python
+class Permission(OverrideManagerPermission):
+    __update__ = ["isAuthenticated"]
+    project = {"update": ["isAdmin"]}
+    # No separate `project_id = project` declaration is needed.
+```
+
+Each action is resolved separately. When both aliases explicitly define rules
+for the same action, **both groups must allow it**, regardless of which spelling
+the caller supplies. Alternatives inside each list remain OR alternatives;
+between the two lists the requirement is AND. An empty list allows its group
+but does not bypass a restrictive group on the other alias. Repeating identical
+definitions is harmless.
+
+`AdditiveManagerPermission` still requires the CRUD base rule as well as the
+field groups. `OverrideManagerPermission` still replaces the CRUD base rule
+when a matching field declaration exists. Delegated authorization and superuser
+behavior remain unchanged. Field rules do not become row-visibility or
+field-free operation rules. Read-field optimization uses the same declared
+relation metadata rather than skipping a restriction under the other alias.
+
+This rule for permission **definitions** is independent of value precedence:
+a single supplied relation alias is protected, even though raw-ID value
+precedence applies only when both values are explicitly supplied.
+
 ### Delegated manager configuration
 
 `AdditiveManagerPermission` and `OverrideManagerPermission` expose the class
@@ -91,10 +125,13 @@ BasePermission.check_delete_permission(
 
 `data` may contain either a related manager object (`project`) or the
 normalized foreign-key value (`project_id`). Update checks use the proposed
-post-update relation. When both aliases are present, `PermissionDataManager`
-preserves input order so the last alias wins, matching ORM normalization. A
-foreign key with `to_field` resolves the normalized value through its target
-field before constructing the delegated manager.
+post-update relation. When both aliases are explicitly supplied in the same
+ORM create or update call, `project_id` wins regardless of keyword order,
+including an explicit `None`, matching ORM normalization. A lone `project`
+update overrides the old relation and its old ID; a lone `project_id` update
+also replaces both views. For a foreign key with `to_field`, both manager-valued
+and raw-ID inputs use the actual target field, not necessarily the related
+manager's primary key, in permission checks and the persisted write.
 
 Instance-level delegation raises `PermissionCheckError` when the related
 manager denies the operation, `InvalidBasedOnConfigurationError` when the
@@ -156,9 +193,38 @@ mutation, and delegated permission checks when the permission engine needs one
 attribute-access surface for either a payload dictionary or a manager instance.
 
 Dictionary payloads must be `dict` instances or subclasses, not arbitrary
-`Mapping` objects. Missing attributes resolve to `None` because lookups use
-`dict.get(...)`; `manager=None` is valid when delegated manager resolution is
-not needed. Wrapper properties win over same-named payload keys, so a key such
+`Mapping` objects. Ordinary attributes use `dict.get(...)`, so missing values
+resolve to `None`; `manager=None` is valid when delegated manager resolution is
+not needed. When `manager` supplies ORM metadata for a forward foreign-key or
+one-to-one relation, either input spelling exposes both attributes:
+`candidate.project` is the related manager (or Django object for an unwrapped
+model) and `candidate.project_id` is the raw foreign-key value. Both identify the
+same target; an explicit null resolves both to `None`. Resolving an object from
+an ID may load the related row and propagate invalid-value or missing-row errors.
+Resolved ORM alias values are cached only within that check wrapper.
+Related-row lookup uses source-instance database routing hints and the related
+model's base manager, including rows hidden by its default manager. Standalone
+permission checks build hints from submitted concrete fields and field-converted
+literal defaults without executing callable defaults. In a built-in ORM create
+with database routers, resolving a supplied related object initializes the
+source model when needed. The write reuses its initialized defaults, including
+values from callable defaults. The check loads the related row on the selected
+write database. If validation changes that database or a checked relation key,
+the create raises `PermissionError` before saving. Custom ORM writers need a
+fixed interface database alias to resolve a related object in a create
+permission when database routers are installed. A custom create permission
+that copies the payload must preserve the checked relation keys. No relation
+aliases are inferred for ordinary scalar fields.
+
+Custom related-manager and interface constructors run normally. Their result
+must preserve the resolved row's primary key, database alias, and foreign-key
+target value. A constructor that cannot reconstruct that row raises
+`PermissionRelationResolutionError` before the permission rule can evaluate
+another row.
+
+The `permission_data` property retains the original payload mapping; the
+consistent relation view is provided by attribute access. Wrapper properties
+win over same-named payload keys, so a key such
 as `"manager"` must be read from `permission_data` directly. For manager
 instance payloads, lookups delegate to `getattr(instance, name)` and therefore
 follow the manager's normal attribute behavior.
@@ -173,9 +239,27 @@ needs an explicit before/after comparison. Unsupported payload types raise
 
 Its exact signature is
 `for_update(base_data: GeneralManagerData, update_data: dict[str, object]) -> PermissionDataManager[GeneralManagerData]`.
-Values from `update_data` replace matching base keys, and relation aliases are
-kept in input order so the delegated permission sees the same final relation
-that the ORM will persist.
+Values from `update_data` replace matching base keys. Relation resolution keeps
+the explicitly submitted update separate from the old snapshot, so an old
+`project_id` cannot outrank a new `project`. Only when both aliases occur in
+`update_data` does its explicit `project_id` win. If neither is supplied, the old
+relation remains available for permission checks.
+
+ORM model rules receive the proposed backing Django model during `full_clean()`.
+The write payload is normalized before assignment, so rules also see matching
+relation and raw-ID attributes without a separate rule adapter. These ORM
+relation semantics do not infer relationships for untyped payloads or arbitrary
+objects passed directly to `Rule.evaluate()`.
+
+Request interfaces support the same check-view aliases for explicitly
+manager-typed, non-derived `RequestField` attributes, including optional types. Single-ID
+targets expose the scalar ID; composite targets expose a complete identification
+mapping. A scalar alone cannot identify a composite target. Request serializers
+retain the submitted key set and lone values; if both aliases are explicit, the
+relation value is reconciled to the ID target before rule checks and serialization.
+Existing `source`/`normalizer` hooks are used only to read the old relation, not
+to invent remote write keys. See the
+[request write contract](../concepts/interfaces/request_interface.md).
 
 ## Registry and reusable checks
 

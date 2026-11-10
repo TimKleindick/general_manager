@@ -31,9 +31,14 @@ class PayloadNormalizer:
         self._field_names = {field.name for field in model._meta.get_fields()}
         self._many_to_many_fields = {field.name for field in model._meta.many_to_many}
         self._relation_fields = {
-            field.name
+            field.name: field
             for field in model._meta.get_fields()
             if isinstance(field, (models.ForeignKey, models.OneToOneField))
+        }
+        self._relation_aliases = {
+            alias: field
+            for field in self._relation_fields.values()
+            for alias in (field.name, field.attname)
         }
 
     # region filter/exclude helpers
@@ -139,18 +144,56 @@ class PayloadNormalizer:
                 remaining_kwargs[key] = value
         return remaining_kwargs, many_kwargs
 
+    def get_relation_field(self, name: str) -> models.ForeignKey[models.Model] | None:
+        """Resolve an actual forward relation or its raw identifier attribute."""
+        return self._relation_aliases.get(name)
+
+    @staticmethod
+    def get_relation_identifier(
+        field: models.ForeignKey[models.Model], value: object
+    ) -> object:
+        """Extract the relation's target-field value, not necessarily its PK."""
+        if _is_general_manager_instance(value):
+            manager = cast("GeneralManager", value)
+            value = (
+                manager.identification["id"]
+                if field.target_field.primary_key
+                else getattr(manager, field.target_field.attname)
+            )
+        elif isinstance(value, models.Model):
+            value = getattr(value, field.target_field.attname)
+        return field.target_field.to_python(value)
+
+    def resolve_relation_aliases(self, kwargs: PayloadMapping) -> PayloadMapping:
+        """Prefer an explicitly supplied raw ID over the same relation object.
+
+        Only aliases present together in this mapping compete. In particular,
+        an explicit raw ID of ``None`` wins too. Callers handling updates must
+        apply this to submitted values, not to an old-state overlay.
+        """
+        return {
+            key: value
+            for key, value in kwargs.items()
+            if key not in self._relation_fields
+            or self._relation_fields[key].attname not in kwargs
+        }
+
     def normalize_simple_values(self, kwargs: PayloadMapping) -> PayloadMapping:
         """
         Normalize simple (single-valued) payload entries by converting general-manager objects to their identifier form and adjusting keys.
 
-        For each key/value in `kwargs`, if `value` is recognized as a general-manager instance its identifier is used as the value; when the original key does not end with `_id`, the key is renamed to `{key}_id`. Non-manager values are kept unchanged.
+        General-manager values for declared relations use the target field's
+        value, including non-primary-key ``to_field`` relations, under the
+        relation's raw ID attribute. Other general-manager values retain the
+        identifier conversion and ``_id`` suffix behavior. Django model objects
+        retain object assignment so Django can validate their type and routing.
         Returns a new mapping and does not mutate `kwargs`. Relation-key
         renaming applies only to forward `ForeignKey` and `OneToOneField`
         names cached from the model metadata. Reverse relations, generic
         relations, and many-to-many fields are not relation-renamed here. If
-        both a relation key and its `<relation>_id` key appear, the later
-        normalized key overwrites the earlier value according to input
-        iteration order.
+        both a relation key and its raw ID key are explicitly present, the raw
+        ID wins independently of iteration order, including when it is None.
+        A single supplied alias retains its usual meaning.
 
         Parameters:
                 kwargs: Mapping of field names to single values to normalize.
@@ -159,11 +202,15 @@ class PayloadNormalizer:
                 A new mapping with manager values replaced by their identifiers and keys suffixed with `_id` when appropriate.
         """
         normalized: PayloadMapping = {}
-        for key, value in kwargs.items():
+        for key, value in self.resolve_relation_aliases(kwargs).items():
             normalized_key = key
             normalized_value = value
             manager_value = self._maybe_general_manager(value)
-            if manager_value is not None and not key.endswith("_id"):
+            relation = self.get_relation_field(key)
+            if manager_value is not None and relation is not None:
+                normalized_key = relation.attname
+                normalized_value = self.get_relation_identifier(relation, value)
+            elif manager_value is not None and not key.endswith("_id"):
                 normalized_key = f"{key}_id"
                 normalized_value = manager_value
             elif manager_value is not None:
