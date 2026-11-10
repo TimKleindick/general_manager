@@ -30,6 +30,7 @@ from general_manager.permission import (
     OverrideManagerPermission,
 )
 from general_manager.permission.base_permission import ReadPermissionPlan
+from general_manager.search.authorization import analyze_search_projection
 from general_manager.search.backend_registry import configure_search_backend
 from general_manager.search.backends.dev import DevSearchBackend
 from general_manager.search.backends.meilisearch import MeilisearchBackend
@@ -338,24 +339,45 @@ class GraphQLSearchIdentityTests(GeneralManagerTransactionTestCase):
         self.assertEqual(result.data["search"]["total"], expected)
         return result.data["search"]
 
-    def test_native_foreign_key_checks_both_primary_key_names(self) -> None:
-        """The id alias cannot bypass a policy on a differently named primary key."""
+    def test_foreign_key_alias_proof_matches_runtime_field_checks(self) -> None:
+        """Primary keys check both names and a to_field checks its own name."""
         row = self.Integer(7)
         info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
-        for denied_name in ("id", "code"):
+        for alias, owner, denied_name, fast in (
+            ("code_reference_id", self.Integer, "code_reference_id", False),
+            ("code_reference_id", self.Integer, "code_reference", False),
+            ("code_reference_id", self.Code, "id", False),
+            ("code_reference_id", self.Code, "code", False),
+            ("code_reference_id", self.Code, "external_number", True),
+            ("number_reference_id", self.Code, "external_number", False),
+            ("number_reference_id", self.Code, "id", True),
+        ):
             permission = type(
                 "RestrictedIdentityPermission",
                 (OverrideManagerPermission,),
                 {"__read__": ["public"], denied_name: {"read": ["isAdmin"]}},
             )
+            index = IndexConfig("global", fields=(alias,))
+            config = SearchConfigSpec(indexes=(index,))
             with (
-                self.subTest(denied_name=denied_name),
-                patch.object(self.Code, "Permission", permission),
-                self.assertRaises(QueryFieldPermissionError),
+                self.subTest(alias=alias, denied_name=denied_name),
+                patch.object(owner, "Permission", permission),
             ):
-                authorize_query_fields(
-                    [row], info, ["code_reference_id"], native_paths=True
+                plan = analyze_search_projection(
+                    self.Integer, config, index, GraphQL.manager_registry
                 )
+                assert plan.error is None
+                assert plan.paths == (alias,)
+                assert plan.has_relations
+                assert plan.fast is fast
+                if fast:
+                    authorize_query_fields([row], info, plan.paths, native_paths=True)
+                else:
+                    assert plan.reasons == ("additional or custom field permission",)
+                    with self.assertRaises(QueryFieldPermissionError):
+                        authorize_query_fields(
+                            [row], info, plan.paths, native_paths=True
+                        )
 
     def test_custom_projection_relation_fallback_requires_identity_leaves(self) -> None:
         """Covered native relation fallback uses the actual serialized identity."""

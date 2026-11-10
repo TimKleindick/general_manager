@@ -86,6 +86,7 @@ from general_manager.utils.executable_contract import (
 
 if TYPE_CHECKING:
     from graphene import ResolveInfo as GraphQLResolveInfo
+    from general_manager.interface.base_interface import InterfaceBase
     from general_manager.api.graphql_errors import (
         GraphQLResolveInfo as ReadPermissionInfo,
     )
@@ -1353,6 +1354,29 @@ def relation_id_alias_field(
         if getattr(native_field, "attname", None) != field_name:
             return None
     return relation_field
+
+
+def relation_id_alias_target_fields(
+    interface: type[InterfaceBase], relation_field: str
+) -> tuple[str, ...]:
+    """Return the target field names protected by a native ORM alias."""
+    from django.core.exceptions import FieldDoesNotExist
+    from django.db import models
+    from general_manager.interface.orm_interface import OrmInterfaceBase
+
+    if not safe_issubclass(interface, OrmInterfaceBase):
+        return ()
+    orm_interface = cast(type[OrmInterfaceBase[models.Model]], interface)
+    try:
+        foreign_key = orm_interface._model._meta.get_field(relation_field)
+    except FieldDoesNotExist:
+        return ()
+    target_field = getattr(foreign_key, "target_field", None)
+    if not isinstance(target_field, models.Field):
+        return ()
+    if target_field.primary_key and target_field.name != "id":
+        return tuple(sorted((target_field.name, "id")))
+    return (target_field.name,)
 
 
 def _unwrap_optional_annotation(annotation: object) -> object:

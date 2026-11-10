@@ -35,7 +35,11 @@ def analyze_search_projection(
 ) -> SearchProjectionAuthorization:
     """Inspect definitions once, without evaluating a permission or property."""
     from general_manager.api.graphql_relations import resolve_general_manager_type
-    from general_manager.api.graphql_resolvers import relation_id_alias_field
+    from general_manager.api.graphql_resolvers import (
+        relation_id_alias_field,
+        relation_id_alias_target_fields,
+    )
+    from general_manager.api.graphql_value_contract import _manager_source
     from general_manager.permission.manager_based_permission import (
         additional_local_read_permission,
     )
@@ -87,9 +91,31 @@ def analyze_search_projection(
             if alias is not None:
                 inspect_permission(owner, alias, frozenset())
                 has_relations = True
-                # The alias target leaf is checked at runtime; retain the
-                # thorough path until its complete field policy is known.
-                reasons.add("relation identity alias")
+                target = resolve_general_manager_type(
+                    owner.Interface.get_attribute_types()[alias].get("type"), registry
+                )
+                target_fields = relation_id_alias_target_fields(owner.Interface, alias)
+                if (
+                    target is None
+                    or not target_fields
+                    or not _manager_source(owner, alias)
+                ):
+                    reasons.add("unknown relation identity target")
+                    continue
+                for target_field in target_fields:
+                    known, _ = source_field_annotation(target, target_field)
+                    if (
+                        not known
+                        or relation_id_alias_field(
+                            target, target_field, native_source=True
+                        )
+                        is not None
+                    ):
+                        reasons.add("unknown relation identity target")
+                    else:
+                        inspect_permission(target, target_field, frozenset())
+                # Retain the exact alias path for the runtime target-row check.
+                continue
             _, annotation = source_field_annotation(owner, field)
             target = resolve_general_manager_type(annotation, registry)
             if target is not None:

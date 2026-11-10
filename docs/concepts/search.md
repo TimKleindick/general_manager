@@ -234,6 +234,11 @@ Every configured serialized searchable, filterable, and sortable key is covered,
 even when a request does not filter or sort on it. DevSearch scores all serialized
 values, and shared indexes can make fields searchable across manager types.
 
+For ORM aliases such as `customer_id` and `team_members_list__role_id`, the
+startup proof covers the alias, the underlying relation, and the referenced
+field. A primary-key reference also checks the target manager's public `id`.
+A foreign key with `to_field` uses the referenced field's own permissions.
+
 The fast runtime route applies only to the native `DatabaseBucket` with standard
 `id` identification. It loads the current native source instances for each hit
 batch and applies the existing row authorization. The thorough route enumerates
