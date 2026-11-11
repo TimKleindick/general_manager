@@ -19,7 +19,7 @@ def _clear_scan_limit_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @override_settings(GENERAL_MANAGER={})
 def test_search_scan_limit_keeps_default_without_environment() -> None:
-    assert get_graphql_search_total_scan_limit() == 1000
+    assert get_graphql_search_total_scan_limit() is None
 
 
 @pytest.mark.parametrize("value", ["1", "10000", " 25000 "])
@@ -32,7 +32,7 @@ def test_search_scan_limit_reads_environment(
     assert get_graphql_search_total_scan_limit() == int(value)
 
 
-@pytest.mark.parametrize("value", ["", " ", "0", "-1", "1.5", "true", "unlimited"])
+@pytest.mark.parametrize("value", ["", " ", "0", "-1", "1.5", "true"])
 @override_settings(GENERAL_MANAGER={})
 def test_search_scan_limit_rejects_invalid_environment(
     monkeypatch: pytest.MonkeyPatch, value: str
@@ -83,7 +83,7 @@ def test_search_scan_limit_preserves_django_setting_precedence(
         assert get_graphql_search_total_scan_limit() == expected
 
 
-@pytest.mark.parametrize("value", [None, True, 0, -1, 1.5, "2000"])
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "2000"])
 def test_search_scan_limit_does_not_hide_invalid_django_setting(
     monkeypatch: pytest.MonkeyPatch, value: object
 ) -> None:

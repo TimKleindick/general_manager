@@ -192,9 +192,8 @@ Relation paths require permission on the relation and on the related row and
 field. Relation-ID aliases also check the canonical relation permission.
 
 This adds work proportional to candidates × distinct operand paths, plus related
-rows visited. Duplicate lookup paths are consolidated. Native list resolvers
-budget at most 1,000 field/path visits with additional, unknown or custom read
-policies. A field whose current policy demonstrably adds no restriction beyond
+rows visited. Duplicate lookup paths are consolidated. Native list resolvers account for field/path visits with additional, unknown or custom read
+policies. These workload budgets are unlimited by default and can be bounded explicitly. A field whose current policy demonstrably adds no restriction beyond
 its object's read rule does not consume that budget. This also applies to
 standard `__based_on__` delegation when every resolved policy in the chain adds
 no field restriction. The concrete target policies and nullable fallback are
@@ -211,7 +210,7 @@ or Permission instances between field checks. This permits ordinary large lists
 without relaxing denials or increasing the additional-policy budget.
 
 Search, request-backed list sources and direct calls to the operand authorizer
-retain the strict default limit of 1,000 field/path visits. Search shares that
+account for every field/path visit, with an optional configured limit. Search shares that
 counter across its projection checks and hit batches within one resolver call;
 it never shares permission decisions. Neither budget bounds
 database materialization or preceding row authorization. Pagination does not
@@ -256,7 +255,7 @@ backend search. Declarations describe sources, not equality, so custom document
 filters cannot become native permission pushdown. See
 [projection dependencies](../search.md#projection-dependencies) for the contract.
 
-Source authorization on the thorough route caps work at 1,000 candidates across
+Source authorization on the thorough route optionally caps candidates across
 selected manager types, counting denied rows before native permission checks.
 This budget is separate from backend scanning and field/path decisions and does
 not bound preceding SQL bucket materialization. Fast hit batches remain subject
@@ -273,3 +272,31 @@ those old values. Indexing a calculation outside its source domain never
 grants access. Both `exact` and `bounded` total modes raise
 `SEARCH_SCAN_LIMIT_EXCEEDED` on exhausted scan budgets; neither releases a partial
 prefix, and successful responses always have `totalIsExact: true`.
+
+
+### Configuring query workload budgets
+
+All three query workload budgets default to **unlimited** (`None`). They limit
+computation, not permissions: every required row, field and relation check still
+runs. Unlimited processing can increase query duration and memory use; configure
+finite budgets where bounded resource use is required.
+
+| `GENERAL_MANAGER` setting | Work counted |
+| --- | --- |
+| `GRAPHQL_QUERY_PERMISSION_LIMIT` | Additional/unknown field and relation-path authorization visits (all visits for search/request sources) |
+| `GRAPHQL_SEARCH_SOURCE_AUTHORIZATION_LIMIT` | Thorough-search source candidates, including denied rows |
+| `GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT` | Backend search hits scanned across selected types |
+
+Each accepts a positive integer or `None`. An environment variable with the
+`GENERAL_MANAGER_` prefix accepts a positive integer, `none`, or `unlimited`.
+Django settings take precedence over the environment, including explicit `None`.
+For example, `GENERAL_MANAGER_GRAPHQL_QUERY_PERMISSION_LIMIT=10000` bounds field
+work; `GENERAL_MANAGER_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT=unlimited` disables the
+scan budget. Existing explicitly configured finite values remain effective.
+Invalid values (including zero, negative numbers and booleans) are rejected.
+
+Exceeding an explicitly configured budget still fails the whole operation; it
+never returns a partially authorized result. Pagination cannot reduce the
+operand authorization domain. Page-size, transport/subscription, backend-specific
+index limits and permission rules are unchanged. Search continues fetching finite
+batches until the backend is exhausted, even when its total scan is unlimited.

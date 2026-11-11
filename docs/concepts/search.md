@@ -380,18 +380,17 @@ export GENERAL_MANAGER_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT=10000
 
 Explicit Django settings retain precedence: `GENERAL_MANAGER["GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT"]`,
 then `GENERAL_MANAGER_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT`, then the legacy top-level
-`GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT`, then the environment variable, then the default
-`1000`. Remove an explicit Django value if you want the environment to control
-the limit. Environment values must parse as positive integers; empty, malformed,
+`GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT`, then the environment variable, then the unlimited default (`None`). Remove an explicit Django value if you want the environment to control
+the limit. Environment values accept positive integers, `none`, or `unlimited`; empty, malformed,
 zero or negative values raise `BAD_USER_INPUT` rather than silently falling back.
 Restart application workers after changing the deployment environment. This does
 not configure Meilisearch's separate per-index `pagination.maxTotalHits` cap;
 increase that provider setting separately when searching beyond its cap.
 
-`GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT` is a positive, server-owned candidate budget
-(default `1000`) shared across all manager types in one search resolver call.
+`GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT` is an optional positive, server-owned candidate budget
+(unlimited by default) shared across all manager types in one search resolver call.
 Both total modes obey it. Client-selected `page`, `pageSize`, `types`, and
-`totalMode` cannot increase the budget. Each backend request is limited to the
+`totalMode` cannot increase the budget. When finite, each backend request is limited to the
 remaining budget, and returned hits consume it before hydration or authorization;
 denied, stale, and unexpected-type hits also count.
 
@@ -1017,3 +1016,5 @@ Then run the test with:
 MEILISEARCH_URL=http://127.0.0.1:7700 python -m pytest \
   tests/integration/test_meilisearch_search.py
 ```
+
+See [query workload budgets](graphql/security.md#configuring-query-workload-budgets) for independent field-authorization and source-candidate limits.
