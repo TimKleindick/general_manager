@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 import json
-import os
 from collections.abc import Callable, Generator, Iterable, Mapping
 from datetime import date, datetime
 from decimal import Decimal
@@ -28,6 +27,7 @@ from graphql import GraphQLError, GraphQLID
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
+from general_manager.api.graphql_work_limits import get_graphql_work_limit
 from general_manager.conf import get_setting
 from general_manager.api.graphql_identifiers import property_identifier_type
 from general_manager.api.graphql_ordering import (
@@ -101,15 +101,11 @@ SearchTotalMode = Literal["exact", "bounded"]
 _BAD_USER_INPUT_CODE = "BAD_USER_INPUT"
 _PAGE_MUST_BE_POSITIVE = "page must be a positive integer."
 _PAGE_SIZE_MUST_BE_POSITIVE = "pageSize must be a positive integer."
-DEFAULT_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT = 1000
-_SEARCH_TOTAL_SCAN_LIMIT_UNSET = object()
+DEFAULT_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT: int | None = None
 SEARCH_SOURCE_AUTHORIZATION_LIMIT_ERROR = (
     "Search source authorization candidate limit exceeded."
 )
 SEARCH_TOTAL_MODE_ERROR = "must be one of: exact, bounded."
-SEARCH_TOTAL_SCAN_LIMIT_ERROR = (
-    "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT must be a positive integer."
-)
 _MALFORMED_NATIVE_ID = object()
 
 _SEARCH_SCAN_LIMIT_EXCEEDED = (
@@ -204,24 +200,11 @@ def normalize_search_total_mode(total_mode: str | None = None) -> SearchTotalMod
     return cast(SearchTotalMode, normalized)
 
 
-def get_graphql_search_total_scan_limit() -> int:
-    """Resolve the shared candidate budget from Django settings, then the env."""
-    raw_limit = get_setting(
-        "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT",
-        _SEARCH_TOTAL_SCAN_LIMIT_UNSET,
+def get_graphql_search_total_scan_limit() -> int | None:
+    """Resolve the optional shared candidate budget from settings, then env."""
+    return get_graphql_work_limit(
+        "GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT", DEFAULT_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT
     )
-    if raw_limit is _SEARCH_TOTAL_SCAN_LIMIT_UNSET:
-        env_limit = os.environ.get("GENERAL_MANAGER_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT")
-        if env_limit is None:
-            raw_limit = DEFAULT_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT
-        else:
-            try:
-                raw_limit = int(env_limit)
-            except ValueError:
-                raise _bad_user_input_error(SEARCH_TOTAL_SCAN_LIMIT_ERROR) from None
-    if not isinstance(raw_limit, int) or isinstance(raw_limit, bool) or raw_limit <= 0:
-        raise _bad_user_input_error(SEARCH_TOTAL_SCAN_LIMIT_ERROR)
-    return raw_limit
 
 
 def sort_search_hit_entries(
@@ -1569,6 +1552,9 @@ def register_search_query(
             QueryFieldAuthorizationBudget,
         )
 
+        source_limit = get_graphql_work_limit(
+            "GRAPHQL_SEARCH_SOURCE_AUTHORIZATION_LIMIT", MAX_QUERY_PERMISSION_CANDIDATES
+        )
         source_candidate_count = 0
         authorization_budget = QueryFieldAuthorizationBudget()
 
@@ -1577,7 +1563,7 @@ def register_search_query(
         ) -> Generator[GeneralManager, None, None]:
             nonlocal source_candidate_count
             for candidate in source:
-                if source_candidate_count >= MAX_QUERY_PERMISSION_CANDIDATES:
+                if source_limit is not None and source_candidate_count >= source_limit:
                     raise GraphQLError(SEARCH_SOURCE_AUTHORIZATION_LIMIT_ERROR)
                 source_candidate_count += 1
                 if passes_permission_filters(candidate, info, permission_plan=plan):
@@ -1804,11 +1790,19 @@ def register_search_query(
                 fast_source is not None and common_filter_execution_valid()
             )
             while True:
-                remaining_scan_budget = total_scan_limit - scanned_hits
-                if remaining_scan_budget <= 0:
+                remaining_scan_budget = (
+                    None
+                    if total_scan_limit is None
+                    else total_scan_limit - scanned_hits
+                )
+                if remaining_scan_budget is not None and remaining_scan_budget <= 0:
                     manager_total_is_exact = False
                     break
-                query_limit = min(fetch_limit, remaining_scan_budget)
+                query_limit = (
+                    fetch_limit
+                    if remaining_scan_budget is None
+                    else min(fetch_limit, remaining_scan_budget)
+                )
                 result = backend.search(
                     index_name,
                     query,
@@ -1981,7 +1975,7 @@ def register_search_query(
                     break
                 if len(result.hits) < query_limit and not can_continue_page:
                     break
-                if scanned_hits >= total_scan_limit:
+                if total_scan_limit is not None and scanned_hits >= total_scan_limit:
                     manager_total_is_exact = False
                     break
             total += total_hits_for_manager

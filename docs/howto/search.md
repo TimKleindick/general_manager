@@ -296,8 +296,8 @@ For environment-only configuration, omit the explicit Django scan-limit setting
 and set `GENERAL_MANAGER_GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT=10000` in your deployment.
 Restart application workers to pick up the changed environment. Explicit nested,
 prefixed and top-level Django settings take precedence, in that order; without
-any setting or environment variable, the default remains `1000`. The environment
-value must be a positive integer. With Meilisearch, also raise the separate
+any setting or environment variable, the default is unlimited (`None`). The environment
+value accepts a positive integer, `none`, or `unlimited`. With Meilisearch, also raise the separate
 per-index `pagination.maxTotalHits` provider setting as needed; changing this
 GraphQL budget does not change that cap.
 
@@ -441,3 +441,5 @@ extraction, and backend write/list/delete errors propagate to the caller.
   failures.
 - Apply migration `0011_search_index_state_dirty_generation` before enabling
   lifecycle invalidation workers.
+
+See [query workload budgets](../concepts/graphql/security.md#configuring-query-workload-budgets) for independent field-authorization and source-candidate limits.

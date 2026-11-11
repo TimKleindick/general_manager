@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from graphql import GraphQLError
 
+from general_manager.api.graphql_work_limits import get_graphql_work_limit
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.bucket.request_bucket import RequestBucket
 from general_manager.manager.general_manager import GeneralManager
@@ -47,7 +48,7 @@ CUSTOM_PROJECTION_ERROR = (
 )
 
 # Bound field/path decisions; bucket materialization and row checks precede this.
-MAX_QUERY_PERMISSION_CANDIDATES = 1000
+MAX_QUERY_PERMISSION_CANDIDATES: int | None = None
 _LOOKUPS = {
     "exact",
     "iexact",
@@ -79,11 +80,16 @@ class QueryFieldAuthorizationBudget:
     """Share only accounting across authorization calls in one operation."""
 
     decisions: int = 0
+    limit: int | None = field(
+        default_factory=lambda: get_graphql_work_limit(
+            "GRAPHQL_QUERY_PERMISSION_LIMIT", MAX_QUERY_PERMISSION_CANDIDATES
+        )
+    )
 
     def charge(self) -> None:
         """Reject work exceeding the operation's field/path decision limit."""
         self.decisions += 1
-        if self.decisions > MAX_QUERY_PERMISSION_CANDIDATES:
+        if self.limit is not None and self.decisions > self.limit:
             raise GraphQLError(_LIMIT_ERROR)
 
 
