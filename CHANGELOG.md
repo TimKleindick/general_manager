@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.91.0 (2026-11-11)
+
+### Bug Fixes
+
+- Resolve lazy ORM models in permission candidates
+  ([`81039f4`](https://github.com/TimKleindick/general_manager/commit/81039f43ab3b4e069dc7e32e4bb76ec2837d8109))
+
+### Features
+
+- Make query workload budgets optional and configurable
+  ([`8c12750`](https://github.com/TimKleindick/general_manager/commit/8c12750f32a6e9d5b39d7ba548efef631eeee978))
+
+
 ## v0.90.0 (2026-11-10)
 
 ### Features
