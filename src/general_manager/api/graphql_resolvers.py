@@ -1184,6 +1184,12 @@ def check_read_permission(
     return check_read_permission_for_user(instance, info.context.user, field_name)
 
 
+_QUERY_PUSHDOWN_CHECKS = tuple(
+    (function, executable_signature(function))
+    for function in (check_read_permission, check_read_permission_for_user)
+)
+
+
 def resolve_with_read_permission(
     instance: GeneralManager,
     info: GraphQLResolveInfo,
@@ -2114,6 +2120,24 @@ def create_list_resolver(
                     # requests nor validate the remote lookup vocabulary.
                     qs = MaterializedBucket(manager_class, qs)
         else:
+            from general_manager.api.graphql_query_permissions import (
+                can_filter_before_query_authorization,
+            )
+
+            filter_first = all(
+                current is original and executable_matches(original, signature)
+                for current, (original, signature) in zip(
+                    (check_read_permission, check_read_permission_for_user),
+                    _QUERY_PUSHDOWN_CHECKS,
+                    strict=True,
+                )
+            ) and can_filter_before_query_authorization(
+                base_queryset,
+                set(plan.filters) | set(plan.excludes) | set(plan.normalized_excludes),
+                info,
+            )
+            if filter_first:
+                base_queryset = apply_query_parameter_plan(base_queryset, plan, None)
             authorization_result = apply_read_authorization(
                 base_queryset,
                 manager_class,
@@ -2130,7 +2154,8 @@ def create_list_resolver(
                 budget_additional_permissions_only=True,
                 prepare_native_structure=isinstance(qs, DatabaseBucket),
             )
-            qs = apply_query_parameter_plan(qs, plan, None)
+            if not filter_first:
+                qs = apply_query_parameter_plan(qs, plan, None)
         if grouping_validator is not None:
             grouping_validator(qs, group_by, order_by, info)
         qs_grouped = apply_grouping(qs, group_by)

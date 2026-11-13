@@ -661,3 +661,136 @@ def authorize_query_fields(
                 check(candidate, normalized_parts)
     if isinstance(candidates, RequestBucket) and not candidates.response_is_complete:
         raise GraphQLError(INCOMPLETE_ERROR)
+
+
+def _prepare_pushdown_structure(
+    manager: type[GeneralManager],
+) -> _NativeQueryStructure | None:
+    """Attest native construction before statically interpreting field policies."""
+    from general_manager.utils.executable_contract import executable_matches
+
+    if type(manager) is not GeneralManagerMeta:
+        return None
+    from general_manager.manager.general_manager import (
+        _QUERY_PUSHDOWN_MANAGER_METHODS,
+        _COMMON_MANAGER_IDENTIFICATION,
+    )
+    from general_manager.interface.orm_interface import (
+        _QUERY_PUSHDOWN_INTERFACE_METHODS,
+    )
+
+    if not _unchanged_metadata_methods(manager, _QUERY_PUSHDOWN_MANAGER_METHODS):
+        return None
+    identification, signature = _COMMON_MANAGER_IDENTIFICATION
+    if getattr_static(
+        manager, "identification"
+    ) is not identification or not executable_matches(identification.fget, signature):
+        return None
+    interface = getattr_static(manager, "Interface", None)
+    if not _unchanged_metadata_methods(interface, _QUERY_PUSHDOWN_INTERFACE_METHODS):
+        return None
+    for owner in (manager, interface):
+        if any(
+            getattr_static(owner, name, None) is not getattr_static(object, name)
+            for name in ("__new__", "__getattribute__", "__setattr__")
+        ):
+            return None
+    structure = _prepare_native_query_structure(manager)
+    if structure is None:
+        return None
+    return structure
+
+
+def can_filter_before_query_authorization(
+    candidates: Bucket[GeneralManager],
+    paths: Iterable[str],
+    info: ResolveInfo | None = None,
+) -> bool:
+    """Prove predicates harmless once, before narrowing a native row domain.
+
+    Permission declarations remain stable during a query. Every relation hop
+    must be readable, and each traversed target must have an unconditional row
+    read plan for this actor; otherwise membership could reveal hidden targets.
+    Unknown/custom policies retain full-domain runtime authorization.
+    """
+    from general_manager.bucket.database_bucket import DatabaseBucket
+    from general_manager.api.graphql_errors import get_read_permission_filter
+    from general_manager.api.graphql_relations import (
+        get_graphql_manager_registry,
+        resolve_general_manager_type,
+    )
+    from general_manager.permission.manager_based_permission import (
+        additional_local_read_permission,
+    )
+
+    if type(candidates) is not DatabaseBucket:
+        return False
+    structures: dict[type[GeneralManager], _NativeQueryStructure | None] = {}
+    readable_targets: dict[type[GeneralManager], bool] = {}
+
+    def safe_path(manager: type[GeneralManager], parts: tuple[str, ...]) -> bool:
+        if manager not in structures:
+            structures[manager] = _prepare_pushdown_structure(manager)
+        structure = structures[manager]
+        if structure is None or not parts:
+            return False
+        prepared = structure.flat_field(parts)
+        if prepared is not None:
+            return not prepared.additional
+        field_name, *rest = parts
+        aliases, names, _ = _operand_field_names(
+            manager, field_name, structure.attributes, native_paths=False
+        )
+        if (
+            len(aliases) > 1
+            or not names.intersection(structure.attributes)
+            or names.intersection(structure.properties)
+            or any(
+                additional_local_read_permission(
+                    structure.permission, name, manager=manager
+                )
+                is not False
+                for name in names
+            )
+        ):
+            return False
+        metadata: dict[str, object] = dict(
+            structure.attributes.get(aliases[0] if aliases else field_name, {})
+        )
+        target = resolve_general_manager_type(
+            metadata.get("type"), get_graphql_manager_registry()
+        )
+        if target is None or not rest:
+            return False
+        if target not in structures:
+            structures[target] = _prepare_pushdown_structure(target)
+        target_structure = structures[target]
+        if target_structure is None:
+            return False
+        # A target field called e.g. "contains" wins over lookup spelling,
+        # matching the existing runtime authorization grammar.
+        if (
+            len(rest) == 1
+            and rest[0] in _LOOKUPS
+            and rest[0]
+            not in (
+                set(target_structure.attributes)
+                | set(target_structure.properties)
+                | set(target_structure.interface.get_attributes())
+            )
+        ):
+            return True
+        if info is None:
+            return False
+        if target not in readable_targets:
+            plan = get_read_permission_filter(target, info)
+            readable_targets[target] = (
+                plan.decision == "allow_all"
+                and not plan.requires_instance_check
+                and not plan.filters
+            )
+        return readable_targets[target] and safe_path(target, tuple(rest))
+
+    return all(
+        safe_path(candidates._manager_class, tuple(path.split("__"))) for path in paths
+    )

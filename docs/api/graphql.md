@@ -1322,3 +1322,17 @@ legacy `keys`, `sums`, `members` or `count` wrappers. Plain
 `List[GraphQLType]` properties remain output collections without query controls.
 See the [grouping contract](../concepts/graphql/filters_pagination.md#grouping)
 for aggregation rules, identity handling and backend restrictions.
+
+### Native filter pushdown and field permissions
+
+For ordinary database managers, native filters and exclusions are applied before
+row traversal when a single static analysis proves that their operand fields
+have no additional read restriction. Permission declarations must remain stable
+throughout the query. An unrelated field rule does not prevent this optimization;
+a rule on the filtered field (including its canonical relation/ID alias) does.
+Row permissions, grouping/ordering permissions and returned-field permissions
+remain enforced. Nested native relation paths qualify when every traversed
+field is unrestricted and each target's row-read plan is unconditionally allowed
+for the current actor. Nullable relations and exclusions retain SQL semantics.
+Custom providers, object-dependent target permissions and policies whose field
+rules cannot be established statically retain the conservative authorization path.

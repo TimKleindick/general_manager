@@ -71,7 +71,10 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
                 name = models.CharField(max_length=30)
                 rank = models.IntegerField()
                 target = models.ForeignKey(
-                    "general_manager.StructurePlanTarget", on_delete=models.CASCADE
+                    "general_manager.StructurePlanTarget",
+                    on_delete=models.CASCADE,
+                    null=True,
+                    blank=True,
                 )
 
             class Permission(OverrideManagerPermission):
@@ -647,3 +650,161 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
                     "name",
                     "name",
                 ]
+
+    def test_plain_filter_does_not_read_unrelated_rows_before_authorization(self):
+        """Public native operands must be pushed into SQL before row traversal."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self.Record.Factory.create(name="outside", rank=3, target=self.target)
+        resolver = graphql_resolvers.create_list_resolver(
+            lambda *_: self.Record.all(), self.Record
+        )
+        with CaptureQueriesContext(connection) as queries:
+            result = resolver(None, self.info, filter={"name": "match"})
+            assert [item.name for item in result["items"]] == ["match"]
+        table = self.Record.Interface._model._meta.db_table
+        reads = [q["sql"] for q in queries if f'FROM "{table}"' in q["sql"]]
+        assert reads
+        assert all("WHERE" in sql and "match" in sql for sql in reads), reads
+
+    def test_custom_hydration_cannot_hide_denied_nonmatching_candidates(self):
+        """Runtime policies installed by hydration require the full-domain check."""
+        self.Record.Factory.create(name="outside", rank=3, target=self.target)
+        original = self.Record._from_trusted_orm_instance
+
+        class Restricted(OverrideManagerPermission):
+            __read__: ClassVar[list[str]] = ["public"]
+            name: ClassVar[dict] = {"read": ["isAdmin"]}
+
+        def hydrate(cls, instance, **kwargs):
+            manager = original(instance, **kwargs)
+            if instance.name == "outside":
+                manager.Permission = Restricted
+            return manager
+
+        resolver = graphql_resolvers.create_list_resolver(
+            lambda *_: self.Record.all(), self.Record
+        )
+        with patch.object(
+            self.Record, "_from_trusted_orm_instance", classmethod(hydrate)
+        ):
+            for value in ("match", "missing"):
+                with (
+                    self.subTest(value=value),
+                    self.assertRaisesMessage(GraphQLError, "query field 'name'"),
+                ):
+                    resolver(None, self.info, filter={"name": value})
+
+    def test_unrelated_field_rule_does_not_prevent_filter_pushdown(self):
+        """A rank restriction cannot make the independent name predicate secret."""
+        from general_manager.api.graphql_query_permissions import (
+            can_filter_before_query_authorization,
+        )
+
+        with patch.object(
+            self.Record.Permission, "rank", {"read": ["isAdmin"]}, create=True
+        ):
+            assert can_filter_before_query_authorization(self.Record.all(), {"name"})
+            assert not can_filter_before_query_authorization(
+                self.Record.all(), {"rank__gte"}
+            )
+
+    def test_row_only_policy_does_not_prevent_filter_pushdown(self):
+        """Row permission constraints remain downstream of harmless predicates."""
+        from general_manager.api.graphql_query_permissions import (
+            can_filter_before_query_authorization,
+        )
+
+        with patch.object(self.Record.Permission, "__read__", ["isSelf"]):
+            assert can_filter_before_query_authorization(self.Record.all(), {"name"})
+
+    def test_relation_alias_field_rule_prevents_filter_pushdown(self):
+        """The canonical relation permission also protects its scalar ID alias."""
+        from general_manager.api.graphql_query_permissions import (
+            can_filter_before_query_authorization,
+        )
+
+        with patch.object(
+            self.Record.Permission, "target", {"read": ["isAdmin"]}, create=True
+        ):
+            assert not can_filter_before_query_authorization(
+                self.Record.all(), {"target_id"}
+            )
+
+    def test_nested_filter_is_applied_before_row_traversal(self):
+        """An unrestricted target field permits SQL pushdown across a relation."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        outside = self.Target.Factory.create(name="outside")
+        self.Record.Factory.create(name="outside", rank=2, target=outside)
+        resolver = graphql_resolvers.create_list_resolver(
+            lambda *_: self.Record.all(), self.Record
+        )
+        with CaptureQueriesContext(connection) as queries:
+            result = resolver(None, self.info, filter={"target__name": "target"})
+            assert [item.name for item in result["items"]] == ["match"]
+        table = self.Record.Interface._model._meta.db_table
+        reads = [q["sql"] for q in queries if f'FROM "{table}"' in q["sql"]]
+        assert reads
+        assert all("WHERE" in sql and "target" in sql for sql in reads), reads
+
+    def test_nested_terminal_permission_rejects_even_empty_matches(self):
+        """An unreadable target field may not influence presence or absence."""
+        resolver = graphql_resolvers.create_list_resolver(
+            lambda *_: self.Record.all(), self.Record
+        )
+        with patch.object(
+            self.Target.Permission, "name", {"read": ["isAdmin"]}, create=True
+        ):
+            for value in ("target", "missing"):
+                with (
+                    self.subTest(value=value),
+                    self.assertRaisesMessage(GraphQLError, "query field 'name'"),
+                ):
+                    resolver(None, self.info, filter={"target__name": value})
+
+    def test_nested_target_row_gate_rejects_hidden_target_predicates(self):
+        """Hidden related rows cannot become an indirect filter oracle."""
+        resolver = graphql_resolvers.create_list_resolver(
+            lambda *_: self.Record.all(), self.Record
+        )
+        with patch.object(self.Target.Permission, "__read__", ["isAdmin"]):
+            for value in ("target", "missing"):
+                with (
+                    self.subTest(value=value),
+                    self.assertRaisesMessage(GraphQLError, "traverse query relation"),
+                ):
+                    resolver(None, self.info, filter={"target__name": value})
+
+    def test_nested_exclusion_preserves_null_related_rows(self):
+        """SQL exclusion preserves nullable-relation semantics after pushdown."""
+        self.Record.Factory.create(name="null", rank=3, target=None)
+        other = self.Target.Factory.create(name="outside")
+        self.Record.Factory.create(name="outside", rank=2, target=other)
+        resolver = graphql_resolvers.create_list_resolver(
+            lambda *_: self.Record.all(), self.Record
+        )
+        result = resolver(None, self.info, exclude={"target__name": "target"})
+        assert sorted(item.name for item in result["items"]) == ["null", "outside"]
+        nulls = resolver(None, self.info, filter={"target__isnull": True})
+        assert [item.name for item in nulls["items"]] == ["null"]
+
+    def test_nested_intermediate_permission_rejects_filter_and_exclusion(self):
+        """The relation field itself protects every path through it."""
+        resolver = graphql_resolvers.create_list_resolver(
+            lambda *_: self.Record.all(), self.Record
+        )
+        with patch.object(
+            self.Record.Permission, "target", {"read": ["isAdmin"]}, create=True
+        ):
+            for operation in ("filter", "exclude"):
+                for value in ("target", "missing"):
+                    with (
+                        self.subTest(operation=operation, value=value),
+                        self.assertRaisesMessage(GraphQLError, "query field 'target'"),
+                    ):
+                        resolver(
+                            None, self.info, **{operation: {"target__name": value}}
+                        )

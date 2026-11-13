@@ -189,3 +189,18 @@ class OrmInterfaceBase(InterfaceBase, Generic[HistoryModelT]):
             ),
         )
         return lifecycle.describe_custom_fields(model)
+
+
+from general_manager.utils.executable_contract import executable_signature as _signature
+
+_QUERY_PUSHDOWN_INTERFACE_METHODS = tuple(
+    (
+        name,
+        descriptor,
+        _signature(
+            descriptor.__func__ if isinstance(descriptor, classmethod) else descriptor
+        ),
+    )
+    for name in ("__init__", "_from_trusted_orm_instance")
+    for descriptor in (OrmInterfaceBase.__dict__[name],)
+)
