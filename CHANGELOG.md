@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.91.1 (2026-11-13)
+
+### Bug Fixes
+
+- Push safe native filters before permission traversal
+  ([`b6086a9`](https://github.com/TimKleindick/general_manager/commit/b6086a9f78bb2f217e1fdee3de2510661024467f))
+
+### Testing
+
+- **graphql**: Quote filter scan assertions for database backend
+  ([`bb310b9`](https://github.com/TimKleindick/general_manager/commit/bb310b90a4e2287d568f9186f6f3557bdfa432b4))
+
+
 ## v0.91.0 (2026-11-11)
 
 ### Bug Fixes
