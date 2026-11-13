@@ -89,9 +89,9 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
             "current_page": 2,
             "total_pages": 4,
         }
-        # Every source row is still inspected for operands. Only returned rows
-        # need a second hydration; counting the filtered domain does not.
-        assert len(hydrated) == 12 + 3
+        # Proven-readable native filters narrow the operand domain before
+        # hydration. Only returned rows need a second hydration.
+        assert len(hydrated) == 10 + 3
 
     def test_denied_nonmatch_or_offpage_row_still_rejects(self) -> None:
         """Reject denied source rows even when filtering or pagination excludes them."""
@@ -142,7 +142,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
             "current_page": 1,
             "total_pages": 1,
         }
-        assert len(hydrated) == 12 + 10
+        assert len(hydrated) == 10 + 10
 
     def test_custom_count_and_length_remain_authoritative(self) -> None:
         """Custom count, length, and dynamic count hooks must control page totals."""

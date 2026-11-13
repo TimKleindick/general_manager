@@ -920,3 +920,22 @@ _COMMON_MANAGER_EXECUTABLES = tuple(
         _COMMON_MANAGER_GETATTR,
     )
 )
+
+
+# Native filter pushdown may not erase observable custom hydration behavior.
+_QUERY_PUSHDOWN_MANAGER_METHODS = tuple(
+    (
+        name,
+        descriptor,
+        executable_signature(
+            descriptor.__func__ if isinstance(descriptor, classmethod) else descriptor
+        ),
+    )
+    for name in (
+        "__init__",
+        "__getattr__",
+        "_from_trusted_orm_instance",
+        "_track_identification_dependency",
+    )
+    for descriptor in (GeneralManager.__dict__[name],)
+)
