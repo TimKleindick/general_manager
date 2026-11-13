@@ -664,7 +664,11 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
             result = resolver(None, self.info, filter={"name": "match"})
             assert [item.name for item in result["items"]] == ["match"]
         table = self.Record.Interface._model._meta.db_table
-        reads = [q["sql"] for q in queries if f'FROM "{table}"' in q["sql"]]
+        reads = [
+            q["sql"]
+            for q in queries
+            if f"FROM {connection.ops.quote_name(table)}" in q["sql"]
+        ]
         assert reads
         assert all("WHERE" in sql and "match" in sql for sql in reads), reads
 
@@ -746,7 +750,11 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
             result = resolver(None, self.info, filter={"target__name": "target"})
             assert [item.name for item in result["items"]] == ["match"]
         table = self.Record.Interface._model._meta.db_table
-        reads = [q["sql"] for q in queries if f'FROM "{table}"' in q["sql"]]
+        reads = [
+            q["sql"]
+            for q in queries
+            if f"FROM {connection.ops.quote_name(table)}" in q["sql"]
+        ]
         assert reads
         assert all("WHERE" in sql and "target" in sql for sql in reads), reads
 
