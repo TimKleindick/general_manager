@@ -892,6 +892,15 @@ The same contract applies to
 generated groups. They include nullable
 `filter` and `exclude` only when a filter input type can be generated for the
 manager, and nullable typed `orderBy` only when sortable fields exist.
+
+For database-backed lists, use ordinary generated filters as usual. The resolver
+may apply the whole filter/exclusion plan before row traversal when it can prove
+every operand unrestricted. An additional read rule on an operand, a restricted related
+row, or custom behavior that prevents the proof retains the conservative path;
+permissions remain enforced in either case. Keep permission declarations stable
+throughout a query. See the [filtering concept](../concepts/graphql/filters_pagination.md#query-arguments)
+and [query recipe](../examples/graphql_queries.md#filter-a-native-list).
+
 Soft-delete managers also expose nullable `includeInactive`
 on top-level list queries, which defaults to `false` and switches fallback list
 loading from `Manager.all()` to `Manager.filter(include_inactive=True)` when

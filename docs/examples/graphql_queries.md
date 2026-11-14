@@ -99,6 +99,26 @@ server check. Use `types` to select manager classes. Synthetic `type` filter
 keys retain backend matching semantics and are excluded from operand permission
 checks unless the selected manager actually exposes a field named `type`.
 
+## Filter a native list
+
+With a database-backed `Project` exposing a readable `name` field, query a
+matching subset using the generated filter input:
+
+```graphql
+query ProjectsNamedApollo {
+  projectList(filter: {name: "Apollo"}) {
+    items { id name }
+  }
+}
+```
+
+When all filter and exclusion operands are statically proven unrestricted, the
+native query can narrow rows before permission traversal. An additional read rule
+on `name` or custom policies that prevent the proof keep the conservative path,
+which checks row-visible nonmatching candidates too. Both paths enforce row and
+field permissions. See the [list how-to](../howto/expose_via_graphql.md#query-generated-lists)
+and [API reference](../api/graphql.md#native-filter-pushdown-and-field-permissions).
+
 ## Paginated listings
 
 ```graphql
