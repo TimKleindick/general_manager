@@ -8,6 +8,8 @@ from unittest.mock import patch
 from graphql import GraphQLError
 
 from general_manager.api.graphql import GraphQL
+from general_manager.api.graphql_resolvers import create_list_resolver
+from general_manager.bucket.request_bucket import RequestBucket
 
 from django.contrib.auth import get_user_model
 from django.db.models import CharField
@@ -708,11 +710,79 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
             response.json()["data"]["filteredRemoteRequestSortItemList"],
             {"items": [{"rootKey": "Beta"}], "pageInfo": {"totalCount": 1}},
         )
-        self.assertEqual(len(self.remote_transport.requests), 2)
+        self.assertEqual(len(self.remote_transport.requests), 1)
         for request in self.remote_transport.requests:
             self.assertEqual(request.body["filters"], {"root_key": "Beta"})
 
-    def test_remote_request_authorizes_full_scope_before_forwarding_order_and_page(
+    def test_partial_permission_alternatives_cannot_lose_provenance_with_operands(self):
+        original = self.remote_transport.send
+
+        def partial(*args, **kwargs):
+            response = original(*args, **kwargs)
+            response.payload["total_count"] = 100
+            return response
+
+        for arguments in (
+            'filter: {rootKey: "Alpha"}',
+            "orderBy: [{field: rootKey, direction: ASC}]",
+        ):
+            with (
+                self.subTest(arguments=arguments),
+                patch.object(self.remote_transport, "send", partial),
+            ):
+                response = self.query(
+                    "{ disjunctiveRemoteRequestSortItemList("
+                    + arguments
+                    + ") { items { id } pageInfo { totalCount } } }"
+                )
+            self.assertResponseHasErrors(response)
+            self.assertIn("incomplete", response.json()["errors"][0]["message"])
+
+    def test_local_permission_subset_does_not_complete_a_partial_snapshot(self):
+        items = tuple(self.request_sort_item.all())
+        executions = self.transport.execution_count
+        info = SimpleNamespace(context=SimpleNamespace(user=self.user))
+        plan = ReadPermissionPlan(
+            filters=[{"filter": {"root_key": "Beta"}}], requires_instance_check=False
+        )
+        for complete, total in ((True, 3), (False, 100), (False, None)):
+            with self.subTest(complete=complete, total=total):
+                source = RequestBucket(
+                    self.request_sort_item,
+                    self.request_sort_item.Interface,
+                    items=items,
+                    response_is_complete=complete,
+                    total_count=total,
+                    upstream_page=1,
+                    upstream_page_size=3,
+                )
+                resolver = create_list_resolver(
+                    lambda *_, source=source: source, self.request_sort_item
+                )
+                with patch(
+                    "general_manager.api.graphql_resolvers.get_read_permission_filter",
+                    return_value=plan,
+                ):
+                    if complete:
+                        result = resolver(
+                            None,
+                            info,
+                            order_by=[{"field": "root_key", "direction": "ASC"}],
+                        )
+                        self.assertEqual([item.id for item in result["items"]], [1])
+                        self.assertEqual(result["pageInfo"]["total_count"], 1)
+                    else:
+                        with self.assertRaisesMessage(
+                            GraphQLError, "requires a complete candidate set"
+                        ):
+                            resolver(
+                                None,
+                                info,
+                                order_by=[{"field": "root_key", "direction": "ASC"}],
+                            )
+        self.assertEqual(self.transport.execution_count, executions)
+
+    def test_remote_request_authorizes_complete_scope_before_local_order_and_page(
         self,
     ) -> None:
         response = self.query(
@@ -737,14 +807,10 @@ class TestGraphQLRequestRelationSorting(GeneralManagerTransactionTestCase):
             payload["pageInfo"],
             {"totalCount": 3, "pageSize": 1, "currentPage": 2, "totalPages": 3},
         )
-        self.assertEqual(len(self.remote_transport.requests), 2)
+        self.assertEqual(len(self.remote_transport.requests), 1)
         self.assertFalse(self.remote_transport.requests[0].body.get("ordering"))
         self.assertNotIn("page", self.remote_transport.requests[0].body)
         self.assertNotIn("page_size", self.remote_transport.requests[0].body)
-        body = self.remote_transport.requests[1].body
-        self.assertEqual(body["page"], 2)
-        self.assertEqual(body["page_size"], 1)
-        self.assertEqual(body["ordering"], ["-root_key"])
 
     def test_remote_request_pushes_permission_filter_before_provenance_fetch(
         self,

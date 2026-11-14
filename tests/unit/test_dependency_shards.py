@@ -5,10 +5,12 @@ from collections.abc import Iterable, Mapping
 from types import SimpleNamespace
 from unittest import mock
 
+import pytest
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 
 from general_manager.cache.dependency_matching import (
+    SCAN_OPERATORS,
     parse_dependency_identifier,
     stable_value_hash,
 )
@@ -309,6 +311,55 @@ class DependencyShardKeyTests(TestCase):
         remove_cache_key_from_shards("missing")
 
         assert cache.get(reverse_membership_key("missing")) is None
+
+    @pytest.mark.perf
+    def test_candidate_lookup_batches_all_shards_without_changing_members(self) -> None:
+        """One metadata batch preserves both scan spellings and payload handling."""
+        for action in ("filter", "exclude"):
+            for lookup in ("status", "status__gte"):
+                with self.subTest(action=action, lookup=lookup):
+                    counting_cache = CountingShardCache()
+                    shard_keys = [
+                        scan_lookup_shard_key("Project", action, name, operator)
+                        for operator in SCAN_OPERATORS
+                        for name in (f"status__{operator}", "status")
+                    ]
+                    expected = {"composite", "all", "shared"}
+                    for index, shard_key in enumerate(shard_keys):
+                        member = f"scan-{index}"
+                        counting_cache.store[shard_key] = [member, 12, ["invalid"]]
+                        expected.add(member)
+                    # Missing, malformed and empty payloads stay empty; accepted
+                    # tuple/frozenset payloads still drop non-string members.
+                    del counting_cache.store[shard_keys[0]]
+                    counting_cache.store[shard_keys[1]] = {"bad": "payload"}
+                    counting_cache.store[shard_keys[2]] = None
+                    counting_cache.store[shard_keys[3]] = 12
+                    expected.difference_update(f"scan-{index}" for index in range(4))
+                    counting_cache.store[shard_keys[4]] = ("scan-4", "shared", 12)
+                    counting_cache.store[shard_keys[5]] = frozenset({"scan-5", 12})
+                    shard_keys.extend(
+                        (
+                            composite_lookup_shard_key("Project", action, "status"),
+                            all_records_shard_key("Project"),
+                        )
+                    )
+                    counting_cache.store[shard_keys[-2]] = {"composite", "shared"}
+                    counting_cache.store[shard_keys[-1]] = {"all", "shared"}
+
+                    with mock.patch(
+                        "general_manager.cache.dependency_shards.cache", counting_cache
+                    ):
+                        actual = candidate_cache_keys_for_lookup(
+                            "Project", action, lookup
+                        )
+
+                    assert actual == expected
+                    assert counting_cache.get_calls == []
+                    assert len(counting_cache.get_many_calls) == 1
+                    requested = counting_cache.get_many_calls[0]
+                    assert len(requested) == len(set(shard_keys))
+                    assert set(requested) == set(shard_keys)
 
     def test_all_records_value_constant_is_compatible_with_existing_index_name(
         self,
@@ -917,7 +968,21 @@ class DependencyIndexShardFacadeTests(TestCase):
         assert unrelated_reverse_keys.isdisjoint(counting_cache.get_calls)
         assert unrelated_reverse_keys.isdisjoint(fetched_in_batches)
         assert len(counting_cache.get_calls) <= 50
-        assert counting_cache.get_many_calls == [
+        assert len(counting_cache.get_many_calls) == 4
+        for batch, action in zip(
+            counting_cache.get_many_calls[:2], ("filter", "exclude"), strict=True
+        ):
+            expected_shards = {
+                scan_lookup_shard_key("Project", action, lookup, operator)
+                for operator in SCAN_OPERATORS
+                for lookup in (f"status__{operator}", "status")
+            } | {
+                composite_lookup_shard_key("Project", action, "status"),
+                all_records_shard_key("Project"),
+            }
+            assert len(batch) == len(expected_shards)
+            assert set(batch) == expected_shards
+        assert counting_cache.get_many_calls[2:] == [
             (candidate_shard,),
             (REVERSE_MEMBERSHIP_REGISTRY_KEY,),
         ]

@@ -5,6 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import Enum
 from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, cast
+from general_manager.utils.executable_contract import (
+    executable_matches as _executable_matches,
+    executable_signature as _executable_signature,
+)
 
 if TYPE_CHECKING:
     from django.contrib.auth.models import AbstractBaseUser, AnonymousUser
@@ -240,10 +244,15 @@ def _permission_public(
 def _matches_permission_filter(
     _user: AbstractBaseUser | AnonymousUser, config: list[str]
 ) -> PermissionFilterResult:
-    """Convert ``matches:<field>:<value>`` into an equality queryset filter."""
+    """Keep stringification rules on the runtime path.
+
+    Typed equality is not equivalent to ``str(value) == configured``. SQL
+    coercion can accept integer 1 for "01", reject a readable None for
+    "None", or use a different string collation. No generic prefilter is safe.
+    """
     if len(config) < 2:
         return PermissionFilterDecision.DENY_ALL
-    return {"filter": {config[0]: config[1]}}
+    return None
 
 
 @register_permission("matches", permission_filter=_matches_permission_filter)
@@ -423,3 +432,26 @@ def _permission_many_to_many_contains_user(
         return False
     filtered = _relation_filter(related_manager, pk=user_pk)
     return _filter_result_exists(filtered)
+
+
+_BUILTIN_READ_PROVIDERS = {
+    name: (
+        (entry["permission_method"], _executable_signature(entry["permission_method"])),
+        (entry["permission_filter"], _executable_signature(entry["permission_filter"])),
+    )
+    for name, entry in permission_functions.items()
+}
+
+
+def _read_provider_is_authoritative(name: str) -> bool:
+    """A replaced builtin method cannot inherit its former SQL proof."""
+    original = _BUILTIN_READ_PROVIDERS.get(name)
+    if original is None:
+        return True
+    current = permission_functions[name]
+    return all(
+        current.get(key) is function and _executable_matches(function, signature)
+        for key, (function, signature) in zip(
+            ("permission_method", "permission_filter"), original, strict=True
+        )
+    )

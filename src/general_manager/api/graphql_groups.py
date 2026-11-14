@@ -15,10 +15,8 @@ from general_manager.api.graphql_ordering import order_by_to_sort_terms
 from general_manager.api.graphql_ordering import sortable_field_paths
 from general_manager.api.graphql_relations import resolve_general_manager_type
 from general_manager.api.graphql_resolvers import (
-    check_read_permission,
     apply_grouped_projection_sorting,
     create_list_resolver,
-    relation_id_alias_field,
 )
 from general_manager.bucket.base_bucket import Bucket
 from general_manager.manager.general_manager import GeneralManager
@@ -176,25 +174,8 @@ def _validate_group_request(
         )
     except ValueError as exc:
         raise GraphQLError(str(exc)) from exc
-    permission_fields = {}
-    for field_name in protected_fields:
-        relation_field = relation_id_alias_field(queryset._manager_class, field_name)
-        permission_fields[field_name] = (
-            (field_name, relation_field)
-            if relation_field is not None
-            else (field_name,)
-        )
-    denied_fields: set[str] = set()
-    for member in queryset:
-        for field_name, checked_fields in permission_fields.items():
-            if any(
-                not check_read_permission(member, info, permission_field)
-                for permission_field in checked_fields
-            ):
-                denied_fields.add(field_name)
-    for field_name in protected_fields:
-        if field_name in denied_fields:
-            raise GroupQueryError.denied_key(field_name)
+    # Contributor filtering owns group-key availability. Aggregate ordering
+    # uses its own per-field members instead of intersecting metric domains.
 
 
 def _is_collection_type(field_type: object) -> bool:

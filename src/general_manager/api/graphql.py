@@ -1613,12 +1613,16 @@ class GraphQL:
         info: GraphQLResolveInfo,
         field_name: str,
         value_factory: Callable[[], object],
+        *,
+        group_value_factory: Callable[[GroupManager[GeneralManager]], object]
+        | None = None,
     ) -> object:
         return _resolve_with_read_permission_fn(
             instance,
             info,
             field_name,
             value_factory,
+            group_value_factory=group_value_factory,
         )
 
     @staticmethod
@@ -1697,6 +1701,7 @@ class GraphQL:
                 info,
                 field_name,
                 lambda: resolver(manager_instance, info, **kwargs),
+                group_value_factory=lambda group: resolver(group, info, **kwargs),
             )
 
         return relation_resolver
@@ -1812,6 +1817,7 @@ class GraphQL:
                 info,
                 source_field_name or field_name,
                 lambda: resolver(manager_instance, info, **kwargs),
+                group_value_factory=lambda group: resolver(group, info, **kwargs),
             )
 
         fields[f"resolve_{group_field_name}"] = group_resolver

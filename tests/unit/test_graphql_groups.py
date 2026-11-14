@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 from typing import Annotated
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -31,9 +31,8 @@ def test_group_ordering_unwraps_scalar_metadata(annotation, eligible):
     assert ("displayName" in paths) is eligible
 
 
-def test_group_permission_validation_iterates_source_once_and_preserves_key_priority(
-    monkeypatch,
-):
+def test_group_control_validation_does_not_repeat_member_authorization():
+    """Contributor filtering and per-metric checks precede this syntax boundary."""
     first, second = object(), object()
 
     class Source:
@@ -46,29 +45,13 @@ def test_group_permission_validation_iterates_source_once_and_preserves_key_prio
             yield second
 
     source = Source()
-    alias = Mock(
-        side_effect=lambda _manager, field: "customer"
-        if field == "customer_id"
-        else None
+    graphql_groups._validate_group_request(
+        source,
+        ["customer_id", "name"],
+        [{"field": "amount"}],
+        None,
     )
-    check = Mock(
-        side_effect=lambda member, _info, field: not (
-            (member is first and field == "amount")
-            or (member is second and field == "customer")
-        )
-    )
-    monkeypatch.setattr(graphql_groups, "relation_id_alias_field", alias)
-    monkeypatch.setattr(graphql_groups, "check_read_permission", check)
-    with pytest.raises(graphql_groups.GroupQueryError, match="'customer_id'"):
-        graphql_groups._validate_group_request(
-            source,
-            ["customer_id", "name"],
-            [{"field": "amount"}],
-            None,
-        )
-    assert source.iterations == 1
-    assert alias.call_count == 3
-    assert any(call.args[2] == "customer" for call in check.call_args_list)
+    assert source.iterations == 0
 
 
 @pytest.mark.parametrize(

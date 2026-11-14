@@ -3,6 +3,7 @@
 from __future__ import annotations
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from inspect import getattr_static
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Generator, TypeGuard, TypeVar, cast
 
@@ -10,6 +11,7 @@ from django.core.exceptions import EmptyResultSet, FieldDoesNotExist, FieldError
 from django.db import models
 from django.db.models.expressions import Col
 from django.db.models.sql.query import Query
+from django.db.models.query import ModelIterable
 from simple_history.models import HistoricalChanges
 
 from general_manager.bucket.base_bucket import Bucket
@@ -48,6 +50,10 @@ from general_manager.interface.capabilities.orm_utils.collection_probes import (
     collection_probe_hint_is_current,
 )
 from general_manager.utils.filter_parser import create_filter_function
+from general_manager.utils.executable_contract import (
+    executable_matches,
+    executable_signature,
+)
 
 if TYPE_CHECKING:
     from general_manager.bucket.group_bucket import GroupBucket
@@ -1317,6 +1323,26 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
                 ids.append(cast(object, obj.pk))
         return ids
 
+    def _validate_filter_structure(self, **kwargs: LookupValue) -> None:
+        """Validate native predicates without evaluating property providers.
+
+        Contributor authorization may remove every candidate. Invalid native
+        fields and lookup values must still fail, while a denied property's
+        annotation callback or getter must remain unevaluated.
+        """
+        annotations, orm_kwargs, _python_filters = self.__parse_filter_definitions(
+            **kwargs
+        )
+        native = {
+            key: value
+            for key, value in orm_kwargs.items()
+            if key.split("__", 1)[0] not in annotations
+        }
+        try:
+            self._data.none().filter(**native)
+        except (FieldError, TypeError, ValueError) as error:
+            raise QuerysetFilteringError(error) from error
+
     def filter(self, **kwargs: LookupValue) -> DatabaseBucket[GeneralManagerType]:
         """
         Return a new DatabaseBucket refined by the given Django-style lookup expressions.
@@ -2135,11 +2161,7 @@ class _DatabaseMaterializedBucket(MaterializedBucket[GeneralManagerType]):
         return primary_key.name if primary_key is not None else "pk"
 
     def _primary_key_for(self, item: GeneralManagerType) -> object:
-        lookup = self._primary_key_lookup()
-        identification = item.identification
-        if lookup in identification:
-            return identification[lookup]
-        return identification["id"]
+        return _database_primary_key_for(item, self._source_model)
 
     def _matching_primary_keys(
         self, kwargs: dict[str, object], *, exclude: bool = False
@@ -2170,6 +2192,19 @@ class _DatabaseMaterializedBucket(MaterializedBucket[GeneralManagerType]):
         return self._new(
             item for item in self._items if self._primary_key_for(item) in retained
         )
+
+
+def _database_primary_key_for(
+    item: GeneralManager, source_model: type[models.Model] | None = None
+) -> object:
+    """Resolve the native primary key, including custom manager key names."""
+    model = getattr(item.Interface, "_model", None)
+    if not isinstance(model, type) or not issubclass(model, models.Model):
+        model = source_model
+    primary_key = model._meta.pk if model is not None else None
+    lookup = primary_key.name if primary_key is not None else "pk"
+    identification = item.identification
+    return identification[lookup] if lookup in identification else identification["id"]
 
 
 def _database_materialized_lookup_data(
@@ -2259,4 +2294,54 @@ def _restore_database_materialized_bucket(
         database_alias,
         annotation_query,
         snapshot=snapshot,
+    )
+
+
+_NATIVE_LIST_TERMINALS = {
+    owner: tuple(
+        (name, method, executable_signature(method))
+        for name in names
+        for method in (getattr_static(owner, name),)
+    )
+    for owner, names in (
+        (DatabaseBucket, ("count", "__len__", "__iter__")),
+        (models.QuerySet, ("count", "__len__", "__iter__", "_fetch_all")),
+        (ModelIterable, ("__iter__",)),
+        (Query, ("get_count", "get_aggregation")),
+    )
+}
+
+
+def _has_native_list_terminals(bucket: DatabaseBucket[GeneralManager]) -> bool:
+    """Permit count-from-items only for the unchanged native terminal chain."""
+    if (
+        type(bucket) is not DatabaseBucket
+        or getattr_static(type(bucket), "__getattribute__")
+        is not object.__getattribute__
+    ):
+        return False
+    data = getattr_static(bucket, "_data", None)
+    if (
+        type(data) is not models.QuerySet
+        or getattr_static(data, "_iterable_class", None) is not ModelIterable
+    ):
+        return False
+    query = getattr_static(data, "_query", None)
+    if type(query) is not Query:
+        return False
+    if any(
+        getattr_static(type(value), "__getattribute__") is not object.__getattribute__
+        for value in (data, query)
+    ):
+        return False
+    return all(
+        getattr_static(value, name, None) is method
+        and executable_matches(method, signature)
+        for value, owner in (
+            (bucket, DatabaseBucket),
+            (data, models.QuerySet),
+            (query, Query),
+            (ModelIterable, ModelIterable),
+        )
+        for name, method, signature in _NATIVE_LIST_TERMINALS[owner]
     )

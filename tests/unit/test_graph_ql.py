@@ -62,6 +62,7 @@ from general_manager.as_of import (
     current_as_of_date,
 )
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket._materialized_bucket import MaterializedBucket
 from general_manager.measurement.measurement import Measurement
 
 FrameworkMeasurement = Measurement
@@ -93,6 +94,8 @@ from graphql import (
 )
 from graphql.language import StringValueNode
 from graphql.validation import ASTValidationRule
+from tests.utils.manager_rows import materialized_manager
+from tests.utils.simple_manager_interface import BaseTestInterface
 
 
 def _restore_graphql_registry(snapshot: GraphQLRegistry) -> None:
@@ -2674,34 +2677,54 @@ class GraphQLTests(TestCase):
             {"value": Decimal("1"), "unit": "count"},
         )
 
-    def test_create_resolver_list_case(self):
-        mock_instance = MagicMock()
-        mock_queryset = MagicMock()
-        mock_filtered = MagicMock()
-        mock_queryset.filter.return_value = mock_filtered
-        mock_filtered.exclude.return_value = mock_filtered
-        # Assign the queryset directly
-        mock_instance.abc_list = mock_queryset
-
-        resolver = GraphQL._create_resolver("abc_list", GeneralManager)
-        with (
-            patch("json.loads", side_effect=json.loads),
-            patch(
-                "general_manager.api.graphql_resolvers.get_read_permission_filter",
-                return_value=ReadPermissionPlan(
-                    filters=[],
-                    requires_instance_check=False,
-                ),
-            ),
+    def test_create_resolver_list_filters_and_excludes_real_members(self):
+        registry = GraphQL.get_registry_snapshot()
+        self.addCleanup(_restore_graphql_registry, registry)
+        for queue in (
+            GeneralManagerMeta.all_classes,
+            GeneralManagerMeta.pending_graphql_interfaces,
+            GeneralManagerMeta.pending_attribute_initialization,
         ):
-            resolver(
-                mock_instance,
-                self.info,
-                filter=json.dumps({"field": "value"}),
-                exclude=json.dumps({"other_field": "value"}),
-            )
-            mock_queryset.filter.assert_called_with(field="value")
-            mock_filtered.exclude.assert_called_with(other_field="value")
+            self.addCleanup(queue.__setitem__, slice(None), queue.copy())
+
+        class ResolverListFixture(GeneralManager):
+            class Interface(BaseTestInterface):
+                input_fields: ClassVar[dict] = {"id": Input(int)}
+
+                @classmethod
+                def get_attribute_types(cls):
+                    return {
+                        "id": {"type": int},
+                        "field": {"type": str},
+                        "other_field": {"type": str},
+                    }
+
+            Permission = None
+
+        rows = [
+            materialized_manager(
+                ResolverListFixture, {"id": 1, "field": "value", "other_field": "keep"}
+            ),
+            materialized_manager(
+                ResolverListFixture, {"id": 2, "field": "value", "other_field": "value"}
+            ),
+            materialized_manager(
+                ResolverListFixture, {"id": 3, "field": "other", "other_field": "keep"}
+            ),
+        ]
+        source = MaterializedBucket(ResolverListFixture, rows)
+        root = SimpleNamespace(abc_list=source)
+        resolver = GraphQL._create_resolver("abc_list", ResolverListFixture)
+        result = resolver(
+            root,
+            self.info,
+            filter=json.dumps({"field": "value"}),
+            exclude=json.dumps({"other_field": "value"}),
+        )
+        self.assertEqual(result["items"], [rows[0]])
+        self.assertIs(result["items"][0], rows[0])
+        self.assertEqual(result["pageInfo"]["total_count"], 1)
+        self.assertEqual(list(source), rows)
 
     @patch("general_manager.interface.base_interface.InterfaceBase")
     def test_create_graphql_interface_graphql_property(self, mock_interface):

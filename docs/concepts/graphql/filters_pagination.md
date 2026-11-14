@@ -4,7 +4,11 @@ The GraphQL layer reuses bucket semantics to expose flexible filtering and pagin
 
 ## Permission-aware filtering
 
-Before executing a query, the resolver calls `get_read_permission_filter()`. Permission classes translate their rules into Django-style filter/exclude dictionaries. The GraphQL layer applies these constraints to ensure clients only see authorised records.
+Generated resolvers obtain the manager's read-permission plan and apply its
+row constraints and required instance checks. Exact native plans can stay in
+SQL; custom rules retain runtime evaluation. Field permissions also determine
+which values may contribute to filters, ordering and aggregates, separately
+from the permission checks on returned fields.
 
 ## Query arguments
 
@@ -38,57 +42,56 @@ Nested relation filters are normalized before they reach the bucket. Relation
 dictionary key named `none` at any depth under `exclude`, including a top-level
 `none` key, raises
 `UnsupportedExcludeNoneRelationFilterError` because the resolver cannot invert
-that relation shape safely. For non-calculation, non-request lists, permission filters and
-any required per-instance row gate run before user filters. Calculation lists
-first apply only proven plain constructor-input constraints that need no input
-normalization callback (apart from a native daily date range with identity
-normalization) to restrict their possible candidate domain, then apply permission
-filtering and the row gate. An exclusion mapping moves into that early phase only
-when every member is such a constraint, so its NOT(AND) meaning stays atomic. The
-authorized rows are frozen before all remaining declared-input
-and computed-property predicates run. User input
-filters therefore cannot replace permission constraints and reintroduce
-unauthorized candidates.
+that relation shape safely.
 
-Native database lists authorize filter and sort operands across the row-visible
-source before applying those operands or pagination. For ordinary ORM scalar
-fields and foreign-key identity aliases, the resolver prepares field/alias
-structure and additional-rule accounting lazily once per authorization call.
-This standard path treats schema definitions and declarative permission rules
-(including their dictionaries and lists) as unchanged during that call. A new
-call reads the definitions again. Mutating those definitions from a permission
-callback is outside this static contract.
+## Evaluation order
 
-Preparation stores no user/object decision and reuses no Permission instance.
-Every runtime field check and callback still executes, including repeated
-operands, nonmatching candidates and rows outside the requested page. A later
-denial or exception retains its existing effect. Custom metadata providers,
-dynamic descriptors, executable/delegated Permission implementations, custom
-rule-container subclasses and direct settings-backed policies use the general
-path, as do properties, ambiguous aliases and multi-step relationships. The
-eligibility probe does not execute these custom providers. Search, request and
-calculation paths retain their existing behavior.
+The resolver parses and normalizes the complete query plan. Native database
+lists apply safe scalar/FK predicates early to reduce the candidate domain.
+Exact row and field permission plans remain in SQL where possible. Client
+predicates cannot overwrite permission constraints or widen an authorized
+source.
 
-The resolver parses and normalizes all query arguments before authorization. For
-non-calculation, non-request lists, permission prefilters and the row gate run first, then
-normalized positive filter predicates, explicit excludes, and the accumulated
-relation-derived exclusions from both inputs. Calculation lists have an early
-plain-constructor phase (including proven native daily date ranges) before authorization, followed by remaining
-declared-input predicates and then deferred computed-property predicates on the
-frozen, authorized rows. Grouping, sorting, total-count calculation, and pagination
-follow all applicable phases. Filter
-normalizers receive the parsed object mapping for the current `filter` or
-`exclude` input and must return both `filter` and `exclude` mappings; missing
-keys propagate the resulting Python `KeyError`.
+Calculation lists first apply only proven constructor constraints that can
+move without executing custom normalization callbacks. Exclusion mappings stay
+atomic: a mixed constructor/computed exclusion is not split. The requested
+constructor domain is frozen as exact instances before permission constraints
+are intersected. Remaining declared-input and computed-property predicates
+operate on that authorized snapshot. See the
+[calculation authorization contract](../../adr/0009-calculation-filter-authorization.md#current-contract)
+for the early/deferred boundary.
 
-Request-backed lists follow a separate path. Unless the permission plan denies
-all rows, user predicates are applied to the base request bucket before that
-filtered source is authorized. When query operands are present, an earlier
-query-field permission check uses a separately authorized subset; it does not
-restrict the base bucket used to apply user predicates. Do not assume these
-predicates operate only on authorized rows. Supported remote ordering and
-pagination controls may also be forwarded while preparing the request source,
-before its final row authorization.
+Ordinary lists authorize the contributors used by filters, exclusions, ordering
+and grouping. A denied scalar or FK operand excludes its root row. A denied
+related member cannot supply a matching witness or add join multiplicity;
+positive predicates on a plural path use the same readable member. Group keys
+determine visible rows, and each aggregate has its own readable contributor
+subset. Grouping, ordering and total-count calculation precede pagination, so
+pages and totals reflect authorized contributions.
+
+Unknown/custom policies retain the required runtime checks over the remaining
+candidate domain, including off-page rows when global ordering or counts need
+them. Proven native paths can avoid those Python scans. Preparation shares
+passive structure and rule metadata within an operation, invalidates affected
+preparation after callbacks, and never caches actor/object grants. Real
+validation, getter, permission-callback and configured-budget errors remain
+errors; a boolean denial removes a contribution instead of aborting the list.
+
+Request-backed lists may apply server-side predicates and supported remote
+ordering/pagination controls while preparing their source. Local row and
+operand authorization still determine the final contributors. Local filtering
+and derived buckets preserve partial/unknown response provenance: a partial
+page cannot become a proven complete result or exact global count. See the
+[pagination model](#pagination-model) below for complete-response requirements.
+
+Search and direct `authorize_query_fields()` calls retain their stricter
+operand-authorization contract. The ordinary-list exclusion behavior does not
+turn denied search dependencies into silently omitted values. See
+[query operands and search projections](security.md#query-operands-and-search-projections).
+
+Filter normalizers receive the parsed object mapping for the current `filter`
+or `exclude` input and must return both `filter` and `exclude` mappings;
+missing keys propagate the resulting Python `KeyError`.
 
 ## Computed-property filters and ordering
 

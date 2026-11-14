@@ -1,5 +1,12 @@
 # GraphQL Query Patterns
 
+Ordinary list filters, exclusions, sorting and grouping use readable contributors.
+Unreadable scalar/FK operands exclude their row before count and pagination;
+unreadable plural children cannot satisfy `any` or `none` predicates or add join
+multiplicity. Each grouped metric uses its own authorized values. A denied
+output-only field still returns `null`. Callback and validation errors remain
+errors, and search retains its separate strict projection checks.
+
 ## Reuse identifier variables
 
 Use `ID` for actual ORM primary keys and scalar foreign-key references, and

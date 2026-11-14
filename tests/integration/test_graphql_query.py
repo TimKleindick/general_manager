@@ -1,4 +1,6 @@
 # type: ignore
+import sys
+from contextlib import contextmanager
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -6,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.db.models import CharField, DateField, ForeignKey, CASCADE
 from django.utils.crypto import get_random_string
+from graphql import GraphQLError
 from general_manager.api.property import graph_ql_property
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.interface import DatabaseInterface
@@ -16,6 +19,28 @@ from general_manager.permission.manager_based_permission import (
 from general_manager.utils.testing import (
     GeneralManagerTransactionTestCase,
 )
+
+
+@contextmanager
+def record_row_permission_calls(permission_class):
+    """Observe the unchanged policy code without invalidating its planner proof."""
+    code = permission_class.can_read_instance.__code__
+    calls = []
+    previous = sys.getprofile()
+
+    def observe(frame, event, arg):
+        if event == "call" and frame.f_code is code:
+            policy = frame.f_locals.get("self")
+            if isinstance(policy, permission_class):
+                calls.append(policy.instance)
+        if previous is not None:
+            previous(frame, event, arg)
+
+    sys.setprofile(observe)
+    try:
+        yield calls
+    finally:
+        sys.setprofile(previous)
 
 
 class TestGraphQLQueryPagination(GeneralManagerTransactionTestCase):
@@ -802,6 +827,9 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
         query = """
         query {
             internalRecordList {
+                items {
+                    id
+                }
                 pageInfo {
                     totalCount
                 }
@@ -811,15 +839,16 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
 
         with (
             patch("general_manager.api.graphql_resolvers.logger") as logger_mock,
-            patch.object(
-                self.internal_record.Permission,
-                "can_read_instance",
-                side_effect=AssertionError("deny_all must not check candidate rows"),
-            ),
+            record_row_permission_calls(self.internal_record.Permission) as row_calls,
         ):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
+        self.assertEqual(row_calls, [])
+        self.assertEqual(
+            response.json()["data"]["internalRecordList"],
+            {"items": [], "pageInfo": {"totalCount": 0}},
+        )
         contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
         matching = [
             context
@@ -847,15 +876,18 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
 
         with (
             patch("general_manager.api.graphql_resolvers.logger") as logger_mock,
-            patch.object(
-                self.internal_record.Permission,
-                "can_read_instance",
-                side_effect=AssertionError("allow_all must not check candidate rows"),
-            ),
+            record_row_permission_calls(self.internal_record.Permission) as row_calls,
         ):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
+        self.assertEqual(row_calls, [])
+        payload = response.json()["data"]["internalRecordList"]
+        self.assertEqual(
+            {str(item["id"]) for item in payload["items"]},
+            {str(row.id) for row in self.internal_record.all()},
+        )
+        self.assertEqual(payload["pageInfo"]["totalCount"], 2)
         contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
         matching = [
             context
@@ -864,6 +896,47 @@ class TestGraphQLQueryReadHardening(GeneralManagerTransactionTestCase):
             and context.get("manager") == "InternalRecord"
         ]
         self.assertEqual(matching, [])
+
+    def test_replaced_row_authority_keeps_denials_and_errors_for_static_policies(self):
+        query = (
+            """query { internalRecordList { items { id } pageInfo { totalCount } } }"""
+        )
+        for is_staff in (False, True):
+            self.user.is_staff = is_staff
+            self.user.save(update_fields=["is_staff"])
+            with (
+                self.subTest(is_staff=is_staff, decision="deny"),
+                patch.object(
+                    self.internal_record.Permission,
+                    "can_read_instance",
+                    return_value=False,
+                ) as check,
+            ):
+                response = self.query(query)
+                self.assertResponseNoErrors(response)
+                self.assertEqual(
+                    response.json()["data"]["internalRecordList"],
+                    {"items": [], "pageInfo": {"totalCount": 0}},
+                )
+                self.assertEqual(check.call_count, 2)
+            for error in (
+                RuntimeError("custom row failure"),
+                GraphQLError("custom row failure"),
+            ):
+                with (
+                    self.subTest(is_staff=is_staff, error=type(error).__name__),
+                    patch.object(
+                        self.internal_record.Permission,
+                        "can_read_instance",
+                        side_effect=error,
+                    ) as check,
+                ):
+                    response = self.query(query)
+                    self.assertEqual(
+                        response.json()["errors"][0]["message"], "custom row failure"
+                    )
+                    self.assertIsNone(response.json()["data"]["internalRecordList"])
+                    self.assertEqual(check.call_count, 1)
 
 
 class TestGraphQLQueryBasedOnReadHardening(GeneralManagerTransactionTestCase):
@@ -945,15 +1018,20 @@ class TestGraphQLQueryBasedOnReadHardening(GeneralManagerTransactionTestCase):
 
         with (
             patch("general_manager.api.graphql_resolvers.logger") as logger_mock,
-            patch.object(
-                self.delegated_document.Permission,
-                "can_read_instance",
-                side_effect=AssertionError("allow_all must not check candidate rows"),
-            ),
+            record_row_permission_calls(
+                self.delegated_document.Permission
+            ) as row_calls,
         ):
             response = self.query(query)
 
         self.assertResponseNoErrors(response)
+        self.assertEqual(row_calls, [])
+        payload = response.json()["data"]["delegatedDocumentList"]
+        self.assertEqual(
+            {str(item["id"]) for item in payload["items"]},
+            {str(row.id) for row in self.delegated_document.all()},
+        )
+        self.assertEqual(payload["pageInfo"]["totalCount"], 1)
         contexts = [call.kwargs["context"] for call in logger_mock.info.call_args_list]
         matching = [
             context

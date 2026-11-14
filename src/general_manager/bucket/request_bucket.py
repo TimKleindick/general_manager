@@ -333,7 +333,12 @@ class RequestBucket(Bucket[GeneralManagerType]):
             deduplicated = MaterializedBucket(
                 self._manager_class, self._ensure_items()
             ) | MaterializedBucket(self._manager_class, other._ensure_items())
-            return self._from_items(tuple(deduplicated))
+            return self._from_items(
+                tuple(deduplicated),
+                response_is_complete=(
+                    self._response_is_complete and other._response_is_complete
+                ),
+            )
         if isinstance(other, self._manager_class):
             deduplicated = (
                 MaterializedBucket(self._manager_class, self._ensure_items()) | other
@@ -618,7 +623,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
 
     def none(self) -> "RequestBucket[GeneralManagerType]":
         """Return an empty materialized bucket preserving the operation name."""
-        return self._from_items(tuple())
+        return self._from_items(tuple(), response_is_complete=True)
 
     def with_instances(
         self,
@@ -717,9 +722,16 @@ class RequestBucket(Bucket[GeneralManagerType]):
         items: tuple[GeneralManagerType, ...],
         *,
         preserve_response_provenance: bool = False,
+        response_is_complete: bool | None = None,
     ) -> "RequestBucket[GeneralManagerType]":
         if preserve_response_provenance:
             self._ensure_raw_items()
+        if response_is_complete is None:
+            # Local derivation cannot recover rows missing from a loaded page.
+            # Explicit instances on an unfetched plan define their own scope.
+            response_is_complete = (
+                self._response_is_complete if self._materialized else True
+            )
         return RequestBucket(
             self._manager_class,
             self._interface_cls,
@@ -727,9 +739,7 @@ class RequestBucket(Bucket[GeneralManagerType]):
             items=items,
             count_override=len(items),
             total_count=self._total_count if preserve_response_provenance else None,
-            response_is_complete=(
-                self._response_is_complete if preserve_response_provenance else True
-            ),
+            response_is_complete=response_is_complete,
             upstream_page=(
                 self._upstream_page if preserve_response_provenance else None
             ),
