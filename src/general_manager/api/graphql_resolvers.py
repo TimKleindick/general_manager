@@ -1929,7 +1929,19 @@ def create_list_resolver(
             # Retain the request backend's lookup/value validation without
             # executing negative or protected predicates on an upstream domain
             # that still contains unreadable witnesses.
-            apply_query_parameter_plan(base_queryset, plan, None)
+            request_source = cast(RequestBucket[GeneralManager], base_queryset)
+            if request_source.request_plan is None:
+                if plan.filters:
+                    request_source._validate_materialized_filters(plan.filters)
+                if plan.excludes:
+                    request_source._validate_materialized_excludes(plan.excludes)
+                if plan.normalized_excludes:
+                    request_source._validate_materialized_excludes(
+                        plan.normalized_excludes
+                    )
+            else:
+                # A lazy plan compiles lookups without evaluating manager values.
+                apply_query_parameter_plan(base_queryset, plan, None)
             operand_preparation = complete_disjunction or prepare_read_authorization(
                 base_queryset,
                 manager_class,

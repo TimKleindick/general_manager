@@ -633,7 +633,6 @@ def test_request_resolver_rejects_partial_scope_before_local_materialization(
         response_is_complete=False,
         total_count=10,
     )
-    local = SimpleBucket(_ResolverManager, [item])
     resolver = create_list_resolver(lambda _parent, _inactive: source, _ResolverManager)
     conditional = ReadPermissionPlan(filters=[], requires_instance_check=False)
     with (
@@ -641,14 +640,18 @@ def test_request_resolver_rejects_partial_scope_before_local_materialization(
             "general_manager.api.graphql_resolvers.get_read_permission_filter",
             return_value=conditional,
         ),
-        patch(
-            "general_manager.api.graphql_resolvers.apply_query_parameter_plan",
-            return_value=local,
-        ) as plan_query,
+        # Lookup grammar is covered with real request interfaces elsewhere.
+        # This stub isolates the incomplete-source boundary from that grammar.
+        patch.object(source, "_validate_materialized_filters"),
+        patch.object(source, "_validate_materialized_excludes"),
+        patch.object(
+            source,
+            "_ensure_items",
+            side_effect=AssertionError("partial source was locally evaluated"),
+        ),
         pytest.raises(GraphQLError, match="requires a complete candidate set"),
     ):
         resolver(object(), _ResolverInfo(), **operands)
-    plan_query.assert_called_once()
     assert not source.response_is_complete
 
 

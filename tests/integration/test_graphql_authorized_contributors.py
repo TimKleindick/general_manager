@@ -1420,6 +1420,120 @@ class TestAuthorizedContributors(GeneralManagerTransactionTestCase):
             assert ordinary["pageInfo"]["total_count"] == 1
             assert [row.cost for row in ordinary["items"]] == [300]
 
+    def test_request_snapshot_validation_does_not_read_denied_property(self):
+        from general_manager.interface.requests import (
+            InvalidRequestFilterValueError,
+            UnknownRequestFilterError,
+        )
+
+        reads = []
+
+        class GuardedSnapshotRequest(GeneralManager):
+            class Interface(RequestInterface):
+                id = Input(int)
+                visible = RequestField(bool)
+
+                class Meta:
+                    filters: ClassVar[dict] = {
+                        "danger": RequestFilter(
+                            value_type=str, allow_local_fallback=True
+                        ),
+                    }
+                    query_operations: ClassVar[dict] = {
+                        "list": RequestQueryOperation(
+                            name="list", method="GET", path="/guarded"
+                        ),
+                        "detail": RequestQueryOperation(
+                            name="detail", method="GET", path="/guarded/{id}"
+                        ),
+                    }
+                    transport_config = RequestTransportConfig(
+                        base_url="https://guarded.example.test", timeout=1
+                    )
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+                danger: ClassVar[dict] = {"read": ["contributorFlag:visible"]}
+
+            @graph_ql_property(filterable=True)
+            def danger(self) -> str:
+                reads.append(self.id)
+                assert self.visible, "denied request getter was evaluated"
+                return "needle"
+
+        raw_source = RequestBucket(
+            GuardedSnapshotRequest,
+            GuardedSnapshotRequest.Interface,
+            raw_items=({"id": 1, "visible": False}, {"id": 2, "visible": True}),
+        )
+        sources = (
+            ("payloads", raw_source),
+            (
+                "instances",
+                RequestBucket(
+                    GuardedSnapshotRequest,
+                    GuardedSnapshotRequest.Interface,
+                    items=tuple(raw_source),
+                ),
+            ),
+        )
+        for kind, source in sources:
+            resolver = create_list_resolver(
+                lambda *_, source=source: source, GuardedSnapshotRequest
+            )
+            normalized = create_list_resolver(
+                lambda *_, source=source: source,
+                GuardedSnapshotRequest,
+                filter_normalizer=lambda _manager, values: {
+                    "filter": {},
+                    "exclude": values,
+                },
+            )
+            for mode in ("field", "row"):
+                with (
+                    patch.object(
+                        GuardedSnapshotRequest.Permission,
+                        "__read__",
+                        ["contributorFlag:visible"] if mode == "row" else ["public"],
+                    ),
+                    patch.object(
+                        GuardedSnapshotRequest.Permission,
+                        "danger",
+                        {
+                            "read": ["public"]
+                            if mode == "row"
+                            else ["contributorFlag:visible"]
+                        },
+                    ),
+                ):
+                    for operation, selected, kwargs in (
+                        ("filter", resolver, {"filter": {"danger": "needle"}}),
+                        ("exclude", resolver, {"exclude": {"danger": "other"}}),
+                        (
+                            "normalized_exclude",
+                            normalized,
+                            {"filter": {"danger": "other"}},
+                        ),
+                    ):
+                        reads.clear()
+                        with self.subTest(kind=kind, mode=mode, operation=operation):
+                            result = selected(None, self.info, **kwargs)
+                            assert [row.id for row in result["items"]] == [2]
+                            assert result["pageInfo"]["total_count"] == 1
+                            assert set(reads) <= {2}
+            for kwargs, failure in (
+                ({"filter": {"unknown": "needle"}}, UnknownRequestFilterError),
+                ({"filter": {"danger": 42}}, InvalidRequestFilterValueError),
+                ({"exclude": {"danger": 42}}, InvalidRequestFilterValueError),
+            ):
+                reads.clear()
+                with (
+                    self.subTest(kind=kind, invalid=kwargs),
+                    self.assertRaises(failure),
+                ):
+                    resolver(None, self.info, **kwargs)
+                assert reads == []
+
     def test_generic_request_relation_isnull_checks_the_parent_and_remaining_fields(
         self,
     ):
