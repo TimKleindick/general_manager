@@ -1956,7 +1956,10 @@ def create_list_resolver(
             from general_manager.api.graphql_contributors import apply_list_contributors
 
             request_contributors = apply_list_contributors(
-                operand_candidates, info, plan, () if group_by else ordering_paths
+                operand_candidates,
+                info,
+                plan,
+                () if group_by is not None else ordering_paths,
             )
             if group_by is not None and isinstance(request_contributors, RequestBucket):
                 request_contributors = MaterializedBucket(
@@ -2208,20 +2211,22 @@ def create_list_resolver(
                 authorization_result.queryset,
                 info,
                 plan,
-                () if group_by else ordering_paths,
+                () if group_by is not None else ordering_paths,
             )
-        if group_by:
+        if group_by is not None:
             from general_manager.api.graphql_contributors import (
                 _has_zero_key_grouping_default,
                 filter_contributors,
             )
 
+            # Both empty forms invoke group_by() without keys.
+            requested_grouping_paths = group_by or [""]
             grouping_paths = (
                 ()
-                if group_by == [""]
+                if requested_grouping_paths == [""]
                 and _has_zero_key_grouping_default(base_queryset)
                 and _has_zero_key_grouping_default(qs)
-                else group_by
+                else requested_grouping_paths
             )
             qs = filter_contributors(qs, info, grouping_paths, rows_authorized=True)
         if grouping_validator is not None:

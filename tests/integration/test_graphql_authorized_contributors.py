@@ -1308,14 +1308,16 @@ class TestAuthorizedContributors(GeneralManagerTransactionTestCase):
             assert [row.entry for row in ordinary["items"]] == [1, 3]
             assert ordinary["pageInfo"]["total_count"] == 2
 
-    def test_blank_grouping_sentinel_uses_the_native_zero_key_default(self):
-        self.parent("one", allow_secret=False)
-        self.parent("two")
-        result = self.resolver(None, self.info, group_by=[""])
-        groups = list(result["items"])
-        assert len(groups) == result["pageInfo"]["total_count"] == 1
-        assert groups[0]._group_by_value == {}
-        assert len(groups[0].members) == 2
+    def test_default_grouping_forms_use_the_native_zero_key_default(self):
+        self.parent("one", secret=1, allow_secret=False)
+        self.parent("two", secret=2)
+        for grouping in ([], [""]):
+            with self.subTest(native=True, grouping=grouping):
+                result = self.resolver(None, self.info, group_by=grouping)
+                groups = list(result["items"])
+                assert len(groups) == result["pageInfo"]["total_count"] == 1
+                assert groups[0]._group_by_value == {}
+                assert len(groups[0].members) == 2
         explicit = self.resolver(None, self.info, group_by=["secret"])
         assert len(next(iter(explicit["items"])).members) == 1
         from general_manager.bucket.database_bucket import DatabaseBucket
@@ -1343,16 +1345,80 @@ class TestAuthorizedContributors(GeneralManagerTransactionTestCase):
             custom_resolver = create_list_resolver(
                 lambda *_, custom=custom: custom, self.Parent
             )
-            with (
-                self.subTest(bucket_type=bucket_type),
-                self.assertRaises(QueryFieldPermissionError),
-            ):
-                custom_resolver(None, self.info, group_by=[""])
-        assert calls == []
+            for grouping in ([], [""]):
+                calls.clear()
+                with self.subTest(bucket_type=bucket_type, grouping=grouping):
+                    with self.assertRaises(QueryFieldPermissionError):
+                        custom_resolver(None, self.info, group_by=grouping)
+                    assert calls == []
+            explicit = custom_resolver(None, self.info, group_by=["secret"])
+            groups = list(explicit["items"])
+            assert explicit["pageInfo"]["total_count"] == 1
+            assert groups[0]._group_by_value == {"secret": 2}
+            assert len(groups[0].members) == 1
         self.Parent.Interface._model.objects.all().delete()
-        empty = self.resolver(None, self.info, group_by=[""])
-        assert list(empty["items"]) == []
-        assert empty["pageInfo"]["total_count"] == 0
+        for grouping in ([], [""]):
+            with self.subTest(empty=True, grouping=grouping):
+                empty = self.resolver(None, self.info, group_by=grouping)
+                assert list(empty["items"]) == []
+                assert empty["pageInfo"]["total_count"] == 0
+
+    def test_default_group_order_keeps_independent_metric_contributors(self):
+        self.parent("hidden-hours", hours=100, cost=200, allow_hours=False)
+        self.parent("visible-hours", hours=10, cost=300)
+
+        class DefaultMetricRequest(GeneralManager):
+            class Interface(RequestInterface):
+                id = Input(int)
+                hours = RequestField(int)
+                cost = RequestField(int)
+                allow_hours = RequestField(bool)
+
+                class Meta:
+                    query_operations: ClassVar[dict] = {
+                        "list": RequestQueryOperation(
+                            name="list", method="GET", path="/metrics"
+                        ),
+                        "detail": RequestQueryOperation(
+                            name="detail", method="GET", path="/metrics/{id}"
+                        ),
+                    }
+                    transport_config = RequestTransportConfig(
+                        base_url="https://metrics.example.test", timeout=1
+                    )
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+                hours: ClassVar[dict] = {"read": ["contributorFlag:allow_hours"]}
+
+        source = RequestBucket(
+            DefaultMetricRequest,
+            DefaultMetricRequest.Interface,
+            raw_items=(
+                {"id": 1, "hours": 100, "cost": 200, "allow_hours": False},
+                {"id": 2, "hours": 10, "cost": 300, "allow_hours": True},
+            ),
+        )
+        request_resolver = create_list_resolver(lambda *_: source, DefaultMetricRequest)
+        ordering = [{"field": "hours", "direction": "ASC"}]
+        for backend, resolver in (
+            ("database", self.resolver),
+            ("request", request_resolver),
+        ):
+            for grouping in ([], [""]):
+                with self.subTest(backend=backend, grouping=grouping):
+                    result = resolver(
+                        None, self.info, group_by=grouping, order_by=ordering
+                    )
+                    groups = list(result["items"])
+                    assert result["pageInfo"]["total_count"] == 1
+                    assert len(groups) == 1
+                    assert len(groups[0].members) == 2
+                    assert create_normal_resolver("hours")(groups[0], self.info) == 10
+                    assert create_normal_resolver("cost")(groups[0], self.info) == 500
+            ordinary = resolver(None, self.info, group_by=None, order_by=ordering)
+            assert ordinary["pageInfo"]["total_count"] == 1
+            assert [row.cost for row in ordinary["items"]] == [300]
 
     def test_generic_request_relation_isnull_checks_the_parent_and_remaining_fields(
         self,
