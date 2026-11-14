@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v0.91.2 (2026-11-14)
+
+### Bug Fixes
+
+- Authorize empty grouping requests consistently
+  ([`0d3ca94`](https://github.com/TimKleindick/general_manager/commit/0d3ca94abbe771d5ed3e23d260c68f3b37c270c8))
+
+- Preserve contributor lookup and grouping contracts
+  ([`870c0c9`](https://github.com/TimKleindick/general_manager/commit/870c0c976adac355d2305c3e1ff7b0394bd21d32))
+
+- Validate request snapshots without reading operands
+  ([`aa4687a`](https://github.com/TimKleindick/general_manager/commit/aa4687aa995ece4c55434ceef8fa3a88ac68cbed))
+
+### Documentation
+
+- Clarify calculation domains and superseded authorization order
+  ([`b5d181d`](https://github.com/TimKleindick/general_manager/commit/b5d181dc5037f73b82b29e17d74fed58952770b9))
+
+- Clarify configuration, reference navigation and operations
+  ([`98e827c`](https://github.com/TimKleindick/general_manager/commit/98e827c538647dd29c347395854b47de0506450f))
+
+- Complete concept and tutorial editorial review
+  ([`5279510`](https://github.com/TimKleindick/general_manager/commit/5279510207d8540e6be32b842998c3777f687f35))
+
+- Consolidate developer documentation improvements
+  ([`9bc52a0`](https://github.com/TimKleindick/general_manager/commit/9bc52a00e89abfe63bee5f7ccac04e6208667a4b))
+
+### Performance Improvements
+
+- Authorize list contributors before pagination
+  ([`bbebb44`](https://github.com/TimKleindick/general_manager/commit/bbebb44bd0309fce792b4841f3781397077db8d2))
+
+
 ## v0.91.1 (2026-11-13)
 
 ### Bug Fixes
