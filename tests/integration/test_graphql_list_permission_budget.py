@@ -1,5 +1,5 @@
 # ruff: noqa: S106
-"""List operand authorization keeps its strict budget unless explicitly proven safe."""
+"""List contributors budget runtime checks; the direct search authorizer stays strict."""
 
 from types import SimpleNamespace
 from typing import ClassVar
@@ -183,8 +183,8 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
         ):
             authorize_query_fields(self.Record.all(), self.info, ["first_filter"])
 
-    def test_additional_field_rules_remain_budgeted_on_opted_in_list(self) -> None:
-        """A declared field restriction still consumes the lowered visit budget."""
+    def test_definitive_extra_field_plan_needs_no_runtime_visit_budget(self) -> None:
+        """A proven superuser field grant stays native even with a low visit bound."""
         admin = get_user_model().objects.create_superuser(username="budget-admin")
         info = SimpleNamespace(context=SimpleNamespace(user=admin))
         for name in ("first", "second"):
@@ -195,9 +195,11 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
                 "general_manager.api.graphql_query_permissions.MAX_QUERY_PERMISSION_CANDIDATES",
                 1,
             ),
-            self.assertRaisesMessage(GraphQLError, "candidate limit"),
         ):
-            self.resolver_for(self.Additional)(None, info, filter={"secret": "shared"})
+            result = self.resolver_for(self.Additional)(
+                None, info, filter={"secret": "shared"}
+            )
+        assert result["pageInfo"]["total_count"] == 2
 
     def test_custom_permission_remains_budgeted_on_opted_in_list(self) -> None:
         """An executable policy remains unknown even when it currently grants access."""
@@ -211,7 +213,9 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
             ),
             self.assertRaisesMessage(GraphQLError, "candidate limit"),
         ):
-            self.resolver_for(self.Custom)(None, self.info, filter={"name": "first"})
+            self.resolver_for(self.Custom)(
+                None, self.info, filter={"name__in": ["first", "second"]}
+            )
 
     def test_object_only_delegation_allows_large_filtered_paginated_list(self) -> None:
         """Two operands over 811 rows must not exhaust the extra-field budget."""
@@ -496,12 +500,14 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
             ),
             self.assertRaisesMessage(GraphQLError, "candidate limit"),
         ):
-            self.resolver_for(self.Delegated)(None, info, filter={"name": "first"})
+            self.resolver_for(self.Delegated)(
+                None, info, filter={"name__in": ["first", "second"]}
+            )
 
-    def test_denied_nonmatching_row_is_checked_before_filtering_and_paging(
+    def test_safe_native_filter_narrows_runtime_checks_before_paging(
         self,
     ) -> None:
-        """Proven fields stay checked even when the denied row cannot be returned."""
+        """An unreachable native nonmatch needs no field authorization callback."""
         self.Record.Factory.create(
             name="visible", first_filter="first", second_filter="second", rank=2
         )
@@ -509,8 +515,11 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
             name="hidden", first_filter="other", second_filter="other", rank=1
         )
 
+        checks = []
+
         def check(instance: GeneralManager, _info: object, field: str) -> bool:
             """Deny the hidden row only when its first filter field is inspected."""
+            checks.append((instance.name, field))
             return not (instance.name == "hidden" and field == "first_filter")
 
         with (
@@ -519,9 +528,8 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
                 1,
             ),
             patch.object(graphql_resolvers, "check_read_permission", side_effect=check),
-            self.assertRaisesMessage(GraphQLError, "query field 'first_filter'"),
         ):
-            self.resolver(
+            result = self.resolver(
                 None,
                 self.info,
                 filter={"first_filter": "first"},
@@ -529,6 +537,9 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
                 page=1,
                 page_size=1,
             )
+        assert [item.name for item in result["items"]] == ["visible"]
+        assert result["pageInfo"]["total_count"] == 1
+        assert checks == [("visible", "first_filter"), ("visible", "rank")]
 
     def test_repeated_candidate_permission_result_is_not_cached(self) -> None:
         """The second visit must observe a new denial for the same object."""
@@ -637,24 +648,26 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
                     )
                 assert calls == 2
 
-    def test_repeated_scalar_denial_still_covers_nonmatching_and_offpage_rows(
+    def test_repeated_scalar_checks_cover_the_filtered_authorized_domain(
         self,
     ) -> None:
-        """A denied operand outside the filtered page must still reject the request."""
+        """Every used lookup is checked on each remaining candidate occurrence."""
         for rank in (1, 2):
             self.Record.Factory.create(
                 name=str(rank), first_filter="first", second_filter="second", rank=rank
             )
 
+        seen = []
+
         def check(instance: GeneralManager, _info: object, field: str) -> bool:
             """Deny the second row only when its rank operand is inspected."""
+            seen.append(instance.rank)
             return not (instance.rank == 2 and field == "rank")
 
         with (
             patch.object(graphql_resolvers, "check_read_permission", side_effect=check),
-            self.assertRaisesMessage(GraphQLError, "query field 'rank'"),
         ):
-            self.resolver(
+            result = self.resolver(
                 None,
                 self.info,
                 filter={"rank__gte": 1, "rank__lte": 1},
@@ -662,6 +675,9 @@ class TestGraphQLListPermissionBudget(GeneralManagerTransactionTestCase):
                 page=1,
                 page_size=1,
             )
+        assert [row.rank for row in result["items"]] == [1]
+        assert result["pageInfo"]["total_count"] == 1
+        assert seen == [1, 1, 1]
 
     def test_runtime_permission_override_remains_budgeted(self) -> None:
         """The concrete candidate policy, rather than its manager declaration, wins."""

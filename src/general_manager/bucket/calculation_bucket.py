@@ -28,6 +28,7 @@ from general_manager.interface.base_interface import (
     GeneralManagerType,
 )
 from general_manager.bucket.base_bucket import Bucket
+from general_manager.utils.executable_contract import executable_signature
 from general_manager.bucket.indexing import freeze_bucket_index_value
 from general_manager.bucket._ordering import (
     SortTerm,
@@ -1882,6 +1883,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         manager identity are retained; this method does not authorize reads.
         """
         snapshot = self.with_instances(instances)
+        if not self._parsed_filter_call_groups and not self._parsed_exclude_call_groups:
+            return snapshot
         return snapshot.with_instances(
             instance
             for instance in snapshot
@@ -1910,3 +1913,9 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         return MaterializedBucket(
             self._manager_class, selected, snapshot=self._effective_search_date
         )
+
+
+_DEFAULT_GROUPING_CONTRACT = (
+    CalculationBucket.group_by,
+    executable_signature(CalculationBucket.group_by),
+)

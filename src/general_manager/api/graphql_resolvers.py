@@ -461,7 +461,10 @@ def apply_sorting(
 
 
 def apply_grouped_projection_sorting(
-    queryset: GroupBucket[GeneralManager], order_by: object
+    queryset: GroupBucket[GeneralManager],
+    order_by: object,
+    *,
+    info: GraphQLResolveInfo | None = None,
 ) -> GroupBucket[GeneralManager]:
     """Sort groups by the same flat values exposed by their GraphQL type."""
     try:
@@ -498,6 +501,10 @@ def apply_grouped_projection_sorting(
 
     def value_for(group: GroupManager[GeneralManager], field_path: str) -> object:
         root, *rest = field_path.split("__", 1)
+        if info is not None:
+            from general_manager.api.graphql_contributors import authorized_group
+
+            group = authorized_group(group, info, root)
         if rest == ["id"]:
             return relation_identity(group, root)
         if rest:
@@ -1195,6 +1202,9 @@ def resolve_with_read_permission(
     info: GraphQLResolveInfo,
     field_name: str,
     value_factory: Callable[[], ResolverValueT],
+    *,
+    group_value_factory: Callable[[GroupManager[GeneralManager]], ResolverValueT]
+    | None = None,
 ) -> ResolverValueT | None | Awaitable[ResolverValueT | None]:
     """Resolve a field after checking read permission.
 
@@ -1203,18 +1213,18 @@ def resolve_with_read_permission(
     remains synchronous.
     """
     if isinstance(instance, GroupManager):
-        # A group is a projection, not an entity with its own permission
-        # identity.  Check every contributing member before its aggregate is
-        # read; returning a selectively aggregated value would leak protected
-        # data and passing the synthetic group to Permission is invalid.
+        if group_value_factory is not None:
+            from general_manager.api.graphql_contributors import authorized_group
+
+            return group_value_factory(authorized_group(instance, info, field_name))
         permission_fields = [field_name]
         relation_field = relation_id_alias_field(instance._manager_class, field_name)
         if relation_field is not None:
             permission_fields.append(relation_field)
         for member in instance.members:
             if any(
-                not check_read_permission(member, info, permission_field)
-                for permission_field in permission_fields
+                not check_read_permission(member, info, name)
+                for name in permission_fields
             ):
                 raise GroupedFieldPermissionError(field_name)
         return value_factory()
@@ -1533,6 +1543,12 @@ def can_read_instance(
     return can_read_instance_for_user(instance, info.context.user)
 
 
+_CONTRIBUTOR_ROW_CHECKS = tuple(
+    (function, executable_signature(function))
+    for function in (can_read_instance, can_read_instance_for_user)
+)
+
+
 # ---------------------------------------------------------------------------
 # Resolver factories
 # ---------------------------------------------------------------------------
@@ -1664,11 +1680,11 @@ def create_measurement_resolver(field_name: str) -> Resolver:
     ) -> object:
         _ensure_as_of_compatible(self)
 
-        def resolve_measurement() -> object:
-            if isinstance(self, GroupManager):
-                _validate_grouped_field_projection(self, field_name)
+        def resolve_measurement(current: object = self) -> object:
+            if isinstance(current, GroupManager):
+                _validate_grouped_field_projection(current, field_name)
             return resolve_measurement_output(
-                read_grouped_field_value(self, field_name),
+                read_grouped_field_value(cast(GeneralManager, current), field_name),
                 target_unit,
             )
 
@@ -1677,6 +1693,7 @@ def create_measurement_resolver(field_name: str) -> Resolver:
             info,
             field_name,
             resolve_measurement,
+            group_value_factory=resolve_measurement,
         )
 
     _FIELD_RESOLVER_BINDINGS[cast(FunctionType, resolver)] = (
@@ -1701,16 +1718,16 @@ def create_normal_resolver(
     def resolver(self: GeneralManager, info: GraphQLResolveInfo) -> object:
         _ensure_as_of_compatible(self)
 
-        def resolve_normal() -> object:
-            if isinstance(self, GroupManager):
-                relation_id = grouped_relation_id_alias_value(self, field_name)
+        def resolve_normal(current: object = self) -> object:
+            if isinstance(current, GroupManager):
+                relation_id = grouped_relation_id_alias_value(current, field_name)
                 if relation_id is not _NO_GROUPED_RELATION_ID_ALIAS:
                     return relation_id
-                _validate_grouped_field_projection(self, field_name)
+                _validate_grouped_field_projection(current, field_name)
             value = project_grouped_field_value(
-                self,
+                cast(GeneralManager, current),
                 field_name,
-                read_grouped_field_value(self, field_name),
+                read_grouped_field_value(cast(GeneralManager, current), field_name),
             )
             if authorize_manager_collection and value is not None:
                 return [
@@ -1725,6 +1742,7 @@ def create_normal_resolver(
             info,
             field_name,
             resolve_normal,
+            group_value_factory=resolve_normal,
         )
 
     if authorize_manager_collection is False:
@@ -1855,16 +1873,15 @@ def create_list_resolver(
             exclude,
             filter_normalizer=bound_filter_normalizer,
         )
-        from general_manager.api.graphql_query_permissions import authorize_query_fields
-
         try:
             ordering_terms = order_by_to_sort_terms(order_by)
         except GraphQLOrderingInputError as exc:
             raise GraphQLError(str(exc)) from exc
         ordering_paths = {term.field for term in ordering_terms}
-        operand_paths = (
+        predicate_paths = (
             set(plan.filters) | set(plan.excludes) | set(plan.normalized_excludes)
         )
+        operand_paths = set(predicate_paths)
         operand_paths.update(ordering_paths)
         from general_manager.interface import CalculationInterface
 
@@ -1874,7 +1891,8 @@ def create_list_resolver(
         request_provenance: RequestPaginationProvenance | None = None
         authorization_result: ReadAuthorizationResult[GeneralManager]
         complete_disjunction: ReadAuthorizationPreparation[GeneralManager] | None = None
-        if is_request_source and not operand_paths:
+        request_contributors: Bucket[GeneralManager] | None = None
+        if is_request_source:
             request_permission_plan = get_read_permission_filter(manager_class, info)
             if (
                 request_permission_plan.decision != "deny_all"
@@ -1908,8 +1926,27 @@ def create_list_resolver(
                     ),
                 )
         if operand_paths and is_request_source:
-            operand_preparation = prepare_read_authorization(
-                base_queryset, manager_class, info
+            # Retain the request backend's lookup/value validation without
+            # executing negative or protected predicates on an upstream domain
+            # that still contains unreadable witnesses.
+            request_source = cast(RequestBucket[GeneralManager], base_queryset)
+            if request_source.request_plan is None:
+                if plan.filters:
+                    request_source._validate_materialized_filters(plan.filters)
+                if plan.excludes:
+                    request_source._validate_materialized_excludes(plan.excludes)
+                if plan.normalized_excludes:
+                    request_source._validate_materialized_excludes(
+                        plan.normalized_excludes
+                    )
+            else:
+                # A lazy plan compiles lookups without evaluating manager values.
+                apply_query_parameter_plan(base_queryset, plan, None)
+            operand_preparation = complete_disjunction or prepare_read_authorization(
+                base_queryset,
+                manager_class,
+                info,
+                permission_plan=request_permission_plan,
             )
             # Inspect the permission-filtered source before a final instance
             # gate can materialize it and discard upstream provenance. Never
@@ -1924,11 +1961,31 @@ def create_list_resolver(
                 )
 
                 raise GraphQLError(INCOMPLETE_ERROR)
-            operand_candidates = finalize_read_authorization(
+            operand_result = finalize_read_authorization(
                 operand_preparation, manager_class, info, source="query_fields"
-            ).queryset
-            authorize_query_fields(operand_candidates, info, operand_paths)
-        if isinstance(interface, type) and issubclass(interface, CalculationInterface):
+            )
+            operand_candidates = operand_result.queryset
+            from general_manager.api.graphql_contributors import apply_list_contributors
+
+            request_contributors = apply_list_contributors(
+                operand_candidates,
+                info,
+                plan,
+                () if group_by is not None else ordering_paths,
+            )
+            if group_by is not None and isinstance(request_contributors, RequestBucket):
+                request_contributors = MaterializedBucket(
+                    manager_class, request_contributors
+                )
+            authorization_result = operand_result
+            request_provenance = RequestPaginationProvenance(
+                None, None, len(request_contributors), True
+            )
+        if request_contributors is not None:
+            qs = request_contributors
+        elif isinstance(interface, type) and issubclass(
+            interface, CalculationInterface
+        ):
             from general_manager.bucket.calculation_bucket import CalculationBucket
 
             input_plan, deferred_plan = partition_calculation_query_plan(
@@ -2005,20 +2062,50 @@ def create_list_resolver(
                 # those authorized instances without materializing plain
                 # constructor-input ordering such as daily date ranges.
                 qs = qs.with_instances(qs)
-            authorize_query_fields(
-                qs,
-                info,
-                operand_paths,
-                budget_additional_permissions_only=True,
+            from general_manager.api.graphql_contributors import (
+                _plural_path,
+                apply_list_contributors,
+                filter_contributors,
             )
-            if operand_paths and permission_plan.decision != "deny_all":
+
+            deferred: CalculationBucket[GeneralManager] | None = None
+            if (
+                deferred_plan.filters
+                or deferred_plan.excludes
+                or deferred_plan.normalized_excludes
+            ) and permission_plan.decision != "deny_all":
                 # Parse deferred predicates through their owning calculation
                 # grammar; generic snapshots do not perform Input normalization.
-                deferred = apply_query_parameter_plan(
+                deferred_bucket = apply_query_parameter_plan(
                     CalculationBucket(manager_class), deferred_plan, None
                 )
-                assert isinstance(deferred, CalculationBucket)
-                qs = deferred.filter_instances(qs)
+                assert isinstance(deferred_bucket, CalculationBucket)
+                deferred = deferred_bucket
+            if deferred is not None and any(
+                _plural_path(manager_class, path) for path in operand_paths
+            ):
+                input_paths = (
+                    set(input_plan.filters)
+                    | set(input_plan.excludes)
+                    | set(input_plan.normalized_excludes)
+                )
+                qs = filter_contributors(qs, info, input_paths, rows_authorized=True)
+                qs = apply_list_contributors(
+                    qs,
+                    info,
+                    deferred_plan,
+                    () if group_by is not None else ordering_paths,
+                    calculation_plan=deferred,
+                )
+            else:
+                qs = filter_contributors(
+                    qs,
+                    info,
+                    predicate_paths if group_by is not None else operand_paths,
+                    rows_authorized=True,
+                )
+                if deferred is not None:
+                    qs = deferred.filter_instances(qs)
         elif complete_disjunction is not None:
             authorization_result = finalize_read_authorization(
                 complete_disjunction, manager_class, info, source="list"
@@ -2120,51 +2207,73 @@ def create_list_resolver(
                     # requests nor validate the remote lookup vocabulary.
                     qs = MaterializedBucket(manager_class, qs)
         else:
-            from general_manager.api.graphql_query_permissions import (
-                can_filter_before_query_authorization,
+            from general_manager.api.graphql_contributors import (
+                apply_list_contributors,
+                prefilter_native_scalars,
             )
 
-            filter_first = all(
-                current is original and executable_matches(original, signature)
-                for current, (original, signature) in zip(
-                    (check_read_permission, check_read_permission_for_user),
-                    _QUERY_PUSHDOWN_CHECKS,
-                    strict=True,
-                )
-            ) and can_filter_before_query_authorization(
-                base_queryset,
-                set(plan.filters) | set(plan.excludes) | set(plan.normalized_excludes),
-                info,
-            )
-            if filter_first:
-                base_queryset = apply_query_parameter_plan(base_queryset, plan, None)
+            base_queryset = prefilter_native_scalars(base_queryset, plan)
             authorization_result = apply_read_authorization(
                 base_queryset,
                 manager_class,
                 info,
                 source="list",
             )
-            qs = authorization_result.queryset
-            from general_manager.bucket.database_bucket import DatabaseBucket
-
-            authorize_query_fields(
-                qs,
+            qs = apply_list_contributors(
+                authorization_result.queryset,
                 info,
-                operand_paths,
-                budget_additional_permissions_only=True,
-                prepare_native_structure=isinstance(qs, DatabaseBucket),
+                plan,
+                () if group_by is not None else ordering_paths,
             )
-            if not filter_first:
-                qs = apply_query_parameter_plan(qs, plan, None)
+        if group_by is not None:
+            from general_manager.api.graphql_contributors import (
+                _has_zero_key_grouping_default,
+                filter_contributors,
+            )
+
+            # Both empty forms invoke group_by() without keys.
+            requested_grouping_paths = group_by or [""]
+            grouping_paths = (
+                ()
+                if requested_grouping_paths == [""]
+                and _has_zero_key_grouping_default(base_queryset)
+                and _has_zero_key_grouping_default(qs)
+                else requested_grouping_paths
+            )
+            qs = filter_contributors(qs, info, grouping_paths, rows_authorized=True)
         if grouping_validator is not None:
             grouping_validator(qs, group_by, order_by, info)
         qs_grouped = apply_grouping(qs, group_by)
         effective_ordering = None if remote_ordering_forwarded else order_by
         qs_sorted: Bucket[GeneralManager] | GroupBucket[GeneralManager]
-        if isinstance(qs_grouped, GroupBucket) and group_sorter is not None:
-            qs_sorted = group_sorter(qs_grouped, effective_ordering)
+        if isinstance(qs_grouped, GroupBucket):
+            if group_sorter is None or group_sorter is apply_grouped_projection_sorting:
+                qs_sorted = apply_grouped_projection_sorting(
+                    qs_grouped, effective_ordering, info=info
+                )
+            else:
+                qs_sorted = group_sorter(qs_grouped, effective_ordering)
         else:
             qs_sorted = apply_sorting(qs_grouped, effective_ordering)
+
+        native_items: list[GeneralManager] | None = None
+        if not effective_pagination.requested and request_provenance is None:
+            from general_manager.bucket.database_bucket import (
+                DatabaseBucket,
+                _has_native_list_terminals,
+            )
+            from general_manager.api.graphql_query_permissions import (
+                _prepare_pushdown_structure,
+            )
+
+            if (
+                type(qs_sorted) is DatabaseBucket
+                and _has_native_list_terminals(qs_sorted)
+                and _prepare_pushdown_structure(manager_class) is not None
+            ):
+                # Complete native lists need every item. The iterator retains
+                # dependency tracking, without invoking a second length hint.
+                native_items = list(iter(qs_sorted))
 
         if request_provenance is None or request_provenance.is_complete:
             from inspect import getattr_static
@@ -2172,7 +2281,9 @@ def create_list_resolver(
             from general_manager.bucket.database_bucket import DatabaseBucket
 
             total_count: int | None
-            if (
+            if native_items is not None:
+                total_count = len(native_items)
+            elif (
                 effective_pagination.requested
                 and isinstance(qs_sorted, DatabaseBucket)
                 and getattr_static(type(qs_sorted), "__getattribute__", None)
@@ -2211,7 +2322,9 @@ def create_list_resolver(
             )
         )
         items: object
-        if hasattr(qs_paginated, "groups"):
+        if native_items is not None:
+            items = native_items
+        elif hasattr(qs_paginated, "groups"):
             items = qs_paginated
         else:
             items = list(cast(Iterable[GeneralManager], qs_paginated))

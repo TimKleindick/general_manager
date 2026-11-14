@@ -584,6 +584,17 @@ def test_request_resolver_rejects_global_operations_after_local_materialization(
     ):
         resolver(object(), _ResolverInfo(), page=2, page_size=4)
 
+
+def test_request_resolver_orders_a_complete_snapshot_after_local_materialization() -> (
+    None
+):
+    first, second = _ResolverManager(id=1), _ResolverManager(id=2)
+    first.name, second.name = "Zulu", "Alpha"
+    source = RequestBucket(_ResolverManager, _RequestInterface, items=(first, second))
+    local = SimpleBucket(_ResolverManager, [first, second])
+    resolver = create_list_resolver(lambda _parent, _inactive: source, _ResolverManager)
+    conditional = ReadPermissionPlan(filters=[], requires_instance_check=False)
+    assert source.response_is_complete
     with (
         patch(
             "general_manager.api.graphql_resolvers.get_read_permission_filter",
@@ -593,13 +604,70 @@ def test_request_resolver_rejects_global_operations_after_local_materialization(
             "general_manager.api.graphql_resolvers.apply_query_parameter_plan",
             return_value=local,
         ),
-        pytest.raises(GraphQLError, match="global ordering"),
     ):
-        resolver(
-            object(),
-            _ResolverInfo(),
-            order_by=[{"field": "name", "direction": "ASC"}],
+        payload = resolver(
+            object(), _ResolverInfo(), order_by=[{"field": "name", "direction": "ASC"}]
         )
+    assert [item.identification["id"] for item in payload["items"]] == [2, 1]
+    assert payload["items"][0] is second
+    assert payload["items"][1] is first
+    assert payload["pageInfo"]["total_count"] == 2
+
+
+@pytest.mark.parametrize(
+    "operands",
+    [
+        {"order_by": [{"field": "name", "direction": "ASC"}]},
+        {"filter": {"name": "name"}},
+        {"exclude": {"name": "missing"}},
+    ],
+)
+def test_request_resolver_rejects_partial_scope_before_local_materialization(
+    operands,
+) -> None:
+    item = _ResolverManager(id=1)
+    source = RequestBucket(
+        _ResolverManager,
+        _RequestInterface,
+        items=(item,),
+        response_is_complete=False,
+        total_count=10,
+    )
+    resolver = create_list_resolver(lambda _parent, _inactive: source, _ResolverManager)
+    conditional = ReadPermissionPlan(filters=[], requires_instance_check=False)
+    with (
+        patch(
+            "general_manager.api.graphql_resolvers.get_read_permission_filter",
+            return_value=conditional,
+        ),
+        # Lookup grammar is covered with real request interfaces elsewhere.
+        # This stub isolates the incomplete-source boundary from that grammar.
+        patch.object(source, "_validate_materialized_filters"),
+        patch.object(source, "_validate_materialized_excludes"),
+        patch.object(
+            source,
+            "_ensure_items",
+            side_effect=AssertionError("partial source was locally evaluated"),
+        ),
+        pytest.raises(GraphQLError, match="requires a complete candidate set"),
+    ):
+        resolver(object(), _ResolverInfo(), **operands)
+    assert not source.response_is_complete
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_request_resolver_checks_ordering_syntax_before_scope_planning(
+    complete: bool,
+) -> None:
+    item = _ResolverManager(id=1)
+    source = RequestBucket(
+        _ResolverManager,
+        _RequestInterface,
+        items=(item,),
+        response_is_complete=complete,
+    )
+    local = SimpleBucket(_ResolverManager, [item])
+    resolver = create_list_resolver(lambda _parent, _inactive: source, _ResolverManager)
 
     # Operand authorization parses ordering before planning or evaluating the
     # incomplete-source guard. Malformed direction is rejected at that boundary.

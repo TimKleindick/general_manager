@@ -57,7 +57,7 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
         cls.general_manager_classes = [ConfidentialEntry, ConfidentialLink]
         cls.Entry = ConfidentialEntry
 
-    def test_filter_reveals_secret_while_field_denied(self):
+    def test_filter_denied_secret_has_no_readable_matches(self):
         user = get_user_model().objects.create_user(username="field-probe")
         self.Entry.create(name="visible", secret="hidden-value", creator_id=user.id)
         schema = graphene.Schema(query=GraphQL._query_class)
@@ -74,9 +74,12 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
             context_value=context,
         )
         assert direct.data["confidentialEntryList"]["items"][0]["secret"] is None
-        assert present.errors and absent.errors
-        assert "Permission denied to use query field" in str(present.errors)
-        assert "Permission denied to use query field" in str(absent.errors)
+        assert present.errors is None and absent.errors is None
+        assert (
+            present.data
+            == absent.data
+            == {"confidentialEntryList": {"pageInfo": {"totalCount": 0}}}
+        )
 
     def test_allowed_field_filter_preserves_membership_and_count(self):
         user = get_user_model().objects.create_user(username="allowed")
@@ -88,7 +91,7 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
         assert result.errors is None
         assert result.data["confidentialEntryList"]["pageInfo"]["totalCount"] == 1
 
-    def test_order_and_exclude_rejected_before_value_dependent_result(self):
+    def test_order_and_exclude_remove_unreadable_scalar_contributors(self):
         user = get_user_model().objects.create_user(username="ordering")
         self.Entry.create(name="visible", secret="hidden", creator_id=user.id)
         for arguments in [
@@ -101,10 +104,13 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
                 + ") { items { name } pageInfo { totalCount } } }",
                 context_value=SimpleNamespace(user=user),
             )
-            assert result.errors
-            assert "Permission denied to use query field" in str(result.errors)
+            assert result.errors is None, result.errors
+            assert result.data["confidentialEntryList"] == {
+                "items": [],
+                "pageInfo": {"totalCount": 0},
+            }
 
-    def test_conditional_field_checks_cover_nonmatching_rows(self):
+    def test_conditional_field_checks_follow_safe_native_filter(self):
         user = get_user_model().objects.create_user(username="conditional")
         for name in ["allowed", "denied"]:
             self.Entry.create(name=name, secret=name, creator_id=user.id)
@@ -120,9 +126,9 @@ class TestFieldInference(GeneralManagerTransactionTestCase):
             "general_manager.api.graphql_resolvers.check_read_permission",
             side_effect=permission,
         ):
-            with self.assertRaisesMessage(GraphQLError, "Permission denied"):
-                resolver(None, info, filter={"secret": "allowed"})
-        assert set(checks) == {("allowed", "secret"), ("denied", "secret")}
+            result = resolver(None, info, filter={"secret": "allowed"})
+        assert [row.name for row in result["items"]] == ["allowed"]
+        assert checks == [("allowed", "secret")]
 
     def test_all_conditionally_authorized_candidates_allowed_with_measured_queries(
         self,

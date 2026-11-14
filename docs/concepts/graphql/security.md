@@ -191,48 +191,59 @@ paths, or other internal details.
 
 ### Query operands and search projections
 
-Filtering, exclusions, ordering and full-text matching can expose values without
-selecting their output fields. GraphQL therefore checks their field permissions
-against the entire row-authorized candidate set **before** applying these
-operations. Conditional field permissions use the same instance permission
-checks as output fields. If any candidate denies an operand, the query fails;
-it does not silently remove that candidate or check only matching results.
-Relation paths require permission on the relation and on the related row and
-field. Relation-ID aliases also check the canonical relation permission.
+Filtering, exclusions, ordering and grouping can expose values without selecting
+their output fields. Ordinary lists evaluate these operations over readable
+contributors. A denied scalar or singular relation removes its root row from
+that operation's domain before count and pagination. Denial is availability:
+`exclude` and null comparisons cannot recover an unreadable value. An
+output-only denied scalar retains its existing `null` behavior.
 
-This adds work proportional to candidates × distinct operand paths, plus related
-rows visited. Duplicate lookup paths are consolidated. Native list resolvers account for field/path visits with additional, unknown or custom read
-policies. These workload budgets are unlimited by default and can be bounded explicitly. A field whose current policy demonstrably adds no restriction beyond
-its object's read rule does not consume that budget. This also applies to
-standard `__based_on__` delegation when every resolved policy in the chain adds
-no field restriction. The concrete target policies and nullable fallback are
-inspected on the same permission instance used for the runtime check; declared
-relation types alone are not sufficient proof. Restrictive delegated fields and
-custom target policies still consume the budget. To avoid invoking potentially
-stateful alias metadata twice, this proof checks all captured field declarations
-on each delegated policy; an unrelated restrictive field may therefore be
-conservatively budgeted too. **Every
-runtime field check still runs**, including checks on nonmatching and off-page
-rows. Related-row checks also remain in place. Policy inspection uses the actual
-instance's Permission class at each visit; it does not reuse user/object results
-or Permission instances between field checks. This permits ordinary large lists
-without relaxing denials or increasing the additional-policy budget.
+Relation paths require permission on the relation, related row and leaf field;
+relation-ID aliases also require the canonical relation permission. Plural
+`any` predicates use the same readable child witness for their mapping. Hidden
+children are absent from `none` and grouped exclusions too. Grouped exclusions
+retain Django's independent-witness semantics: different readable children can
+satisfy different lookups in the excluded mapping. Multiple readable matching
+joins retain the backend's existing duplicate-row behavior.
 
-Search, request-backed list sources and direct calls to the operand authorizer
-account for every field/path visit, with an optional configured limit. Search shares that
-counter across its projection checks and hit batches within one resolver call;
-it never shares permission decisions. Neither budget bounds
-database materialization or preceding row authorization. Pagination does not
-reduce the operand-authorization domain. No permission cache is shared across
-requests or users.
+Only used query paths are classified. Proven ordinary native fields keep SQL
+filter/count/order/page execution, even when an unused field has extra rights.
+Exact permission plans can constrain native related rows in SQL. Unknown or
+custom executable policies retain runtime field and row checks on the same
+instances used for Python predicates. Denied Python property getters and
+annotation providers are not invoked. Callback, getter, validation, configured
+work-limit and incomplete-source errors remain errors. The builtin `matches`
+rule compares `str(value)` and retains runtime checks because typed SQL equality
+is not equivalent.
+
+Runtime field/path visits with additional or unknown restrictions consume the
+query-permission budget, unlimited by default and optionally bounded. A field
+proven covered by its current row gate does not consume it. Standard delegated
+policies inspect the concrete resolved permission through the normal field
+check; custom and restrictive delegated policies remain budgeted. Permission
+plans and passive structural metadata live within one operation. User/object
+grants and Permission instances are not shared across requests or actors.
+
+Grouping keys use authorized roots and key values before groups are built.
+Each metric has its own readable member subset: denying a member's `cost`
+does not remove that member's readable `hours`. An aggregate without non-null
+contributors returns the existing empty value (`null`). Group sorting uses the
+same authorized metric subset before group pagination.
+
+Direct low-level list-resolver calls with `group_by=[]` or `group_by=[""]`
+both invoke no-argument grouping and share the same authorization and grouped
+ordering rules. The unchanged built-in default uses zero keys. A nonempty
+source with an unproven custom default is rejected; explicit grouping keys can
+be authorized before grouping. Generated `…Groups` endpoints require explicit
+eligible keys instead of either empty form.
 
 Calculation lists first restrict the **requested constructor domain** using
 proven native scalar inputs or manager-identity input constraints. They freeze
 that exact domain before intersecting permission filters and applying row
 checks. Permission and client constraints cannot replace one another, including
-constraints on the same input. Operand checks then cover the entire row-visible
-requested domain before computed-property or related-value predicates, sorting
-and pagination. Custom getters and nonidentity relation fields are not safe
+constraints on the same input. Contributor authorization removes unreadable
+values before computed-property or related-value predicates, sorting and
+pagination. Custom getters and nonidentity relation fields are not safe
 constructor constraints; exclusions remain atomic conjunctions. This deliberately
 changes the former full-domain enumeration contract: calculations outside the
 requested native constructor scope are no longer constructed or authorized.
@@ -245,6 +256,16 @@ additional field rules or unknown/custom executable rules require the thorough
 route. Inherited rules and field-rule OR alternatives that include all manager
 row-rule alternatives are not extra restrictions. Definitions are assumed immutable until schema rebuild after
 restart. Classification stores no user or object permission results.
+
+Search's projection contract and direct `authorize_query_fields()` calls remain
+strict: a denied required operand fails the query, including denial on a
+nonmatching or off-page candidate. Fast search hits have one exception: a
+related-row denial (`QueryRelationPermissionError`) removes that hit before
+counting and pagination; other operand denials still fail the query.
+Search shares its field/path counter across
+projection checks and hit batches within one resolver call without sharing
+permission decisions. The budget does not bound preceding row authorization
+or database materialization.
 
 Only a native `DatabaseBucket` with standard `id` identification uses fast
 hit-batch source hydration. Row authorization remains enforced. Related fast
@@ -292,7 +313,7 @@ finite budgets where bounded resource use is required.
 
 | `GENERAL_MANAGER` setting | Work counted |
 | --- | --- |
-| `GRAPHQL_QUERY_PERMISSION_LIMIT` | Additional/unknown field and relation-path authorization visits (all visits for search/request sources) |
+| `GRAPHQL_QUERY_PERMISSION_LIMIT` | Additional/unknown contributor field and relation-path visits for ordinary lists, including calculation/request lists; all operand visits for strict search/direct-helper checks |
 | `GRAPHQL_SEARCH_SOURCE_AUTHORIZATION_LIMIT` | Thorough-search source candidates, including denied rows |
 | `GRAPHQL_SEARCH_TOTAL_SCAN_LIMIT` | Backend search hits scanned across selected types |
 
@@ -305,7 +326,9 @@ scan budget. Existing explicitly configured finite values remain effective.
 Invalid values (including zero, negative numbers and booleans) are rejected.
 
 Exceeding an explicitly configured budget still fails the whole operation; it
-never returns a partially authorized result. Pagination cannot reduce the
-operand authorization domain. Page-size, transport/subscription, backend-specific
-index limits and permission rules are unchanged. Search continues fetching finite
+never returns a partially authorized result. On runtime routes, pagination does
+not replace the remaining candidate checks required for correct global counts,
+ordering and pages. Safe native predicates and exact permission plans can
+reduce work earlier. Page-size, transport/subscription, backend-specific index
+limits and permission rules are unchanged. Search continues fetching finite
 batches until the backend is exhausted, even when its total scan is unlimited.
