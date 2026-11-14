@@ -5,6 +5,7 @@ import json
 from typing import ClassVar
 from unittest.mock import patch
 
+import pytest
 from asgiref.sync import sync_to_async
 from asgiref.testing import ApplicationCommunicator
 from channels.layers import InMemoryChannelLayer
@@ -310,6 +311,7 @@ class RemoteEventAuthorizationTests(GeneralManagerTransactionTestCase):
         ):
             asyncio.run(run())
 
+    @pytest.mark.perf
     def test_measured_fanout_and_native_query_cost(self):
         measurements = []
 
@@ -347,9 +349,11 @@ class RemoteEventAuthorizationTests(GeneralManagerTransactionTestCase):
             asyncio.run(run())
         assert len(measurements) == 16
         assert sum(allowed for allowed, _ in measurements) == 8
-        assert all(count == 3 for _, count in measurements)
+        # The unfilterable string-comparison rule uses the loaded instance;
+        # only the fresh principal and current instance require SQL reads.
+        assert measurements == [(True, 2)] * 8 + [(False, 2)] * 8
         print(
-            "Measured: 8 subscribers; 2 publications; 16 authorization decisions; 48 SQL queries; 8 public sends"
+            "Measured: 8 subscribers; 2 publications; 16 authorization decisions; 32 SQL queries; 8 public sends"
         )
 
     def test_lazy_remote_requires_successful_current_detail_read(self):

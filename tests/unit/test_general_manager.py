@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from contextlib import nullcontext
 import pickle
 
 from django.test import TestCase, override_settings
@@ -715,6 +716,246 @@ class GeneralManagerTestCase(TestCase):
             ("TemporaryManager", "identification", '{"id": "trusted_id"}'),
             dependencies,
         )
+
+    def test_trusted_hydration_without_context_skips_cache_identity_work(self):
+        manager_class = self._temporary_manager_class()
+        hydration_calls = []
+
+        class TrustedInterface:
+            @classmethod
+            def _from_trusted_orm_instance(cls, instance, *, search_date=None):
+                hydration_calls.append((instance, search_date))
+                interface = cls()
+                interface.identification = {"id": instance.pk}
+                interface._instance = instance
+                return interface
+
+        class Row:
+            pk = 7
+
+        manager_class.Interface = TrustedInterface
+        row = Row()
+        with patch.object(
+            general_manager_module, "id", wraps=id, create=True
+        ) as identity:
+            first = manager_class._from_trusted_orm_instance(row)
+            second = manager_class._from_trusted_orm_instance(row)
+
+        self.assertIsNot(first, second)
+        self.assertEqual(first.identification, {"id": 7})
+        self.assertEqual(second.identification, {"id": 7})
+        self.assertIs(first._interface._instance, row)
+        self.assertIs(second._interface._instance, row)
+        self.assertEqual(hydration_calls, [(row, None), (row, None)])
+        self.assertEqual(identity.call_count, 0)
+
+    def test_trusted_hydration_context_preserves_row_identity_and_dependencies(self):
+        manager_class = self._temporary_manager_class()
+        hydration_calls = []
+
+        class TrustedInterface:
+            @classmethod
+            def _from_trusted_orm_instance(cls, instance, *, search_date=None):
+                hydration_calls.append((instance, search_date))
+                interface = cls()
+                interface.identification = {"id": instance.pk}
+                interface._instance = instance
+                return interface
+
+        class Row:
+            pk = 7
+
+        manager_class.Interface = TrustedInterface
+        first_row, other_row = Row(), Row()
+        with (
+            CalculationRunContext(),
+            patch.object(
+                general_manager_module, "id", wraps=id, create=True
+            ) as identity,
+        ):
+            first = manager_class._from_trusted_orm_instance(first_row)
+            with DependencyTracker() as dependencies:
+                cached = manager_class._from_trusted_orm_instance(first_row)
+            other = manager_class._from_trusted_orm_instance(other_row)
+
+        self.assertIs(first, cached)
+        self.assertIsNot(first, other)
+        self.assertIs(first._interface._instance, first_row)
+        self.assertIs(other._interface._instance, other_row)
+        self.assertEqual(hydration_calls, [(first_row, None), (other_row, None)])
+        self.assertEqual(identity.call_count, 3)
+        self.assertEqual(
+            dependencies, {("TemporaryManager", "identification", '{"id": 7}')}
+        )
+
+    def test_trusted_hydration_preserves_primary_key_read_order(self):
+        from general_manager.cache import run_context
+        from general_manager.cache.run_context import TRUSTED_ORM_MANAGER_PREFIX
+
+        original_context = run_context.current_calculation_run_context
+        for cached in (False, True):
+            events = []
+            manager_class = self._temporary_manager_class()
+
+            class Row:
+                reads = 0
+
+                @property
+                def pk(row, events=events):
+                    events.append("pk")
+                    row.reads += 1
+                    return 10 + row.reads
+
+            class TrustedInterface:
+                @classmethod
+                def _from_trusted_orm_instance(
+                    cls, instance, *, search_date=None, events=events
+                ):
+                    events.append("interface")
+                    interface = cls()
+                    interface.identification = {"id": instance.pk}
+                    return interface
+
+            def current_context(*, events=events):
+                events.append("current_context")
+                return original_context()
+
+            def identity(instance, *, events=events):
+                events.append("identity")
+                return id(instance)
+
+            def construct(cls, *, events=events):
+                events.append("manager_new")
+                return object.__new__(cls)
+
+            def track(_cls, identification, *, events=events):
+                events.append("dependency")
+                self.assertEqual(identification, {"id": 12})
+
+            manager_class.Interface = TrustedInterface
+            row = Row()
+            with (
+                self.subTest(cached=cached),
+                CalculationRunContext() if cached else nullcontext(),
+                patch.object(
+                    run_context, "current_calculation_run_context", current_context
+                ),
+                patch.object(general_manager_module, "id", identity, create=True),
+                patch.object(manager_class, "__new__", construct),
+                patch.object(
+                    manager_class,
+                    "_track_identification_dependency",
+                    classmethod(track),
+                ),
+            ):
+                manager = manager_class._from_trusted_orm_instance(row)
+                expected = ["current_context"]
+                if cached:
+                    expected.append("identity")
+                expected.extend(["pk", "manager_new", "interface", "pk", "dependency"])
+                self.assertEqual(events, expected)
+                self.assertEqual(manager.identification, {"id": 12})
+                if cached:
+                    self.assertIs(
+                        original_context().get(
+                            (
+                                TRUSTED_ORM_MANAGER_PREFIX,
+                                manager_class,
+                                id(row),
+                                11,
+                                None,
+                            )
+                        ),
+                        manager,
+                    )
+
+    def test_trusted_hydration_preserves_primary_key_error_before_hooks(self):
+        from general_manager.cache import run_context
+
+        original_context = run_context.current_calculation_run_context
+        for cached in (False, True):
+            events = []
+            failure = RuntimeError("primary key unavailable")
+            manager_class = self._temporary_manager_class()
+
+            class Row:
+                @property
+                def pk(_row, *, events=events, failure=failure):
+                    events.append("pk")
+                    raise failure
+
+            class TrustedInterface:
+                @classmethod
+                def _from_trusted_orm_instance(cls, _instance, **_kwargs):
+                    raise AssertionError
+
+            def current_context(*, events=events):
+                events.append("current_context")
+                return original_context()
+
+            def identity(instance, *, events=events):
+                events.append("identity")
+                return id(instance)
+
+            def construct(_cls):
+                raise AssertionError
+
+            manager_class.Interface = TrustedInterface
+            with (
+                self.subTest(cached=cached),
+                CalculationRunContext() if cached else nullcontext(),
+                patch.object(
+                    run_context, "current_calculation_run_context", current_context
+                ),
+                patch.object(general_manager_module, "id", identity, create=True),
+                patch.object(manager_class, "__new__", construct),
+                self.assertRaises(RuntimeError) as caught,
+            ):
+                manager_class._from_trusted_orm_instance(Row())
+            self.assertIs(caught.exception, failure)
+            expected = ["current_context"]
+            if cached:
+                expected.append("identity")
+            expected.append("pk")
+            self.assertEqual(events, expected)
+
+    def test_trusted_hydration_preserves_custom_constructor_error(self):
+        from general_manager.cache import run_context
+
+        manager_class = self._temporary_manager_class()
+        events = []
+        failure = RuntimeError("custom constructor failed")
+
+        class Row:
+            @property
+            def pk(_row):
+                events.append("pk")
+                return 7
+
+        class TrustedInterface:
+            @classmethod
+            def _from_trusted_orm_instance(cls, _instance, **_kwargs):
+                raise AssertionError
+
+        def initialize(_manager, primary_key):
+            events.append("constructor")
+            self.assertEqual(primary_key, 7)
+            raise failure
+
+        def forbidden_context():
+            raise AssertionError
+
+        manager_class.Interface = TrustedInterface
+        with (
+            patch.object(manager_class, "__init__", initialize),
+            patch.object(
+                run_context, "current_calculation_run_context", forbidden_context
+            ),
+            self.assertRaises(RuntimeError) as caught,
+        ):
+            manager_class._from_trusted_orm_instance(Row())
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(events, ["pk", "constructor"])
 
     def test_check_permission_class_defaults_to_additive_permission(self):
         """Managers without an explicit Permission should default to AdditiveManagerPermission."""

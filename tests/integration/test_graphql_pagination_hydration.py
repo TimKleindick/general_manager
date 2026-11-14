@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import AnonymousUser
 from django.db import models
-from graphql import GraphQLError
 
 from general_manager.api import graphql_resolvers
 from general_manager.api.graphql_resolvers import create_list_resolver
@@ -67,8 +66,8 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
         self.info = SimpleNamespace(context=SimpleNamespace(user=AnonymousUser()))
         self.resolver = create_list_resolver(lambda *_: self.Record.all(), self.Record)
 
-    def test_paged_list_hydrates_operand_domain_and_page_only(self) -> None:
-        """Authorize all source rows but rehydrate only the requested page."""
+    def test_paged_public_list_hydrates_only_the_requested_page(self) -> None:
+        """Definitive native field rights keep the full matching domain lazy."""
         with (
             CalculationRunContext(),
             record_hydrations(self.model) as hydrated,
@@ -89,12 +88,10 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
             "current_page": 2,
             "total_pages": 4,
         }
-        # Proven-readable native filters narrow the operand domain before
-        # hydration. Only returned rows need a second hydration.
-        assert len(hydrated) == 10 + 3
+        assert len(hydrated) == 3
 
-    def test_denied_nonmatch_or_offpage_row_still_rejects(self) -> None:
-        """Reject denied source rows even when filtering or pagination excludes them."""
+    def test_denied_nonmatch_or_offpage_row_is_excluded_before_count(self) -> None:
+        """A matching denial changes totals before paging; a nonmatch does not."""
         for denied_rank in (0, 11):
             with self.subTest(denied_rank=denied_rank):
                 seen = []
@@ -110,9 +107,8 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
                     patch.object(
                         graphql_resolvers, "check_read_permission", side_effect=check
                     ),
-                    self.assertRaisesMessage(GraphQLError, "query field"),
                 ):
-                    self.resolver(
+                    result = self.resolver(
                         None,
                         self.info,
                         filter={"name": "match"},
@@ -120,9 +116,35 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
                         page=1,
                         page_size=3,
                     )
-                assert denied_rank in seen
+                assert set(seen) == set(range(10))
+                assert [item.rank for item in result["items"]] == [9, 8, 7]
+                assert result["pageInfo"]["total_count"] == (
+                    9 if denied_rank == 0 else 10
+                )
 
-    def test_unpaged_list_keeps_existing_materialized_count(self) -> None:
+    def test_offpage_callback_error_remains_an_error(self) -> None:
+        failure = RuntimeError("offpage callback failed")
+
+        def check(instance, _info, _field):
+            if instance.rank == 0:
+                raise failure
+            return True
+
+        with (
+            patch.object(graphql_resolvers, "check_read_permission", side_effect=check),
+            self.assertRaises(RuntimeError) as observed,
+        ):
+            self.resolver(
+                None,
+                self.info,
+                filter={"name": "match"},
+                order_by=[{"field": "rank", "direction": "DESC"}],
+                page=1,
+                page_size=3,
+            )
+        assert observed.exception is failure
+
+    def test_unpaged_list_hydrates_the_matching_domain_once(self) -> None:
         """Omitting pagination must return and hydrate the complete filtered domain."""
         with (
             CalculationRunContext(),
@@ -142,7 +164,7 @@ class TestGraphQLPaginationHydration(GeneralManagerTransactionTestCase):
             "current_page": 1,
             "total_pages": 1,
         }
-        assert len(hydrated) == 10 + 10
+        assert len(hydrated) == 10
 
     def test_custom_count_and_length_remain_authoritative(self) -> None:
         """Custom count, length, and dynamic count hooks must control page totals."""

@@ -1,6 +1,8 @@
 """Declarative permission preparation must never cache actor/object decisions."""
 
 from abc import ABCMeta
+from contextlib import contextmanager
+import sys
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
@@ -9,6 +11,26 @@ from django.contrib.auth.models import AnonymousUser, User
 from django.test import SimpleTestCase
 
 from general_manager.permission import manager_based_permission as policies
+
+
+@contextmanager
+def record_static_probes():
+    """Observe real inspection calls without replacing executable authority."""
+    code = policies.getattr_static.__code__
+    probes = []
+    previous = sys.getprofile()
+
+    def observe(frame, event, arg):
+        if event == "call" and frame.f_code is code:
+            probes.append((frame.f_locals["obj"], frame.f_locals["attr"]))
+        if previous is not None:
+            previous(frame, event, arg)
+
+    sys.setprofile(observe)
+    try:
+        yield probes
+    finally:
+        sys.setprofile(previous)
 
 
 class TestPermissionDefinitionMetadata(SimpleTestCase):
@@ -48,9 +70,7 @@ class TestPermissionDefinitionMetadata(SimpleTestCase):
             __read__: ClassVar[list[str]] = ["public"]
             secret: ClassVar[dict[str, list[str]]] = {"read": ["isAdmin"]}
 
-        with patch.object(
-            policies, "getattr_static", wraps=policies.getattr_static
-        ) as inspect_descriptor:
+        with record_static_probes() as probes:
             for _ in range(100):
                 assert (
                     policies.additional_local_read_permission(Permission, "name")
@@ -62,7 +82,15 @@ class TestPermissionDefinitionMetadata(SimpleTestCase):
                 )
 
         # Exact builtin values never need dynamic descriptor discovery.
-        assert inspect_descriptor.call_count < 30
+        assert [name for _owner, name in probes if name == "__get__"] == []
+        # Each classification still attests the inherited runtime authority.
+        assert (
+            sum(
+                owner is Permission and name == "check_permission"
+                for owner, name in probes
+            )
+            == 200
+        )
 
     def test_ordinary_mixin_changes_remain_live(self) -> None:
         class Rules:
@@ -108,9 +136,21 @@ class TestPermissionDefinitionMetadata(SimpleTestCase):
             __read__: ClassVar[list[str]] = ["public"]
             declaration = Declaration()
 
-        assert policies.additional_local_read_permission(Permission, "name") is False
-        with patch.object(Declaration, "__get__", create=True):
-            assert policies.additional_local_read_permission(Permission, "name") is None
+        declaration = vars(Permission)["declaration"]
+        with record_static_probes() as probes:
+            assert (
+                policies.additional_local_read_permission(Permission, "name") is False
+            )
+            with patch.object(Declaration, "__get__", create=True) as descriptor:
+                assert (
+                    policies.additional_local_read_permission(Permission, "name")
+                    is None
+                )
+                descriptor.assert_not_called()
+        assert (
+            sum(owner is declaration and name == "__get__" for owner, name in probes)
+            == 2
+        )
 
     def test_inherited_and_mutated_definitions_remain_live(self) -> None:
         class Parent(policies.OverrideManagerPermission):

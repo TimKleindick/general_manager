@@ -722,6 +722,15 @@ class BasePermission(ABC):
         permission_function, *config = permission.split(":")
         if permission_function not in permission_functions:
             raise PermissionNotFoundError(permission)
+        from general_manager.permission.permission_checks import (
+            _read_provider_is_authoritative,
+        )
+
+        if (
+            not _read_provider_is_authoritative(permission_function)
+            or "permission_filter" not in permission_functions[permission_function]
+        ):
+            return None
         result: object = permission_functions[permission_function]["permission_filter"](
             self.request_user,
             config,

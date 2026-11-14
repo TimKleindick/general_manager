@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from inspect import getattr_static
-from typing import TYPE_CHECKING, ClassVar, Literal, cast
+from types import FunctionType
+from typing import TYPE_CHECKING, ClassVar, Literal, cast, overload
 
 from general_manager.permission.base_permission import (
     BasePermission,
@@ -16,6 +17,10 @@ from general_manager.permission.base_permission import (
     UserLike,
 )
 from general_manager.permission.permission_checks import PermissionFilterDecision
+from general_manager.utils.executable_contract import (
+    executable_matches,
+    executable_signature,
+)
 
 if TYPE_CHECKING:
     from general_manager.permission.permission_data_manager import (
@@ -169,7 +174,9 @@ class _ConfiguredManagerPermission(BasePermission):
 
     def __init__(
         self,
-        instance: PermissionDataManager[GeneralManager] | GeneralManager,
+        instance: PermissionDataManager[GeneralManager]
+        | GeneralManager
+        | type[GeneralManager],
         request_user: UserLike | object,
     ) -> None:
         from general_manager.manager.general_manager import GeneralManager
@@ -399,9 +406,12 @@ class _ConfiguredManagerPermission(BasePermission):
             decision="conditional",
         )
 
-    def _plan_local_read_permissions(self) -> ReadPermissionPlan:
+    def _plan_local_read_permissions(
+        self, expressions: list[str] | None = None
+    ) -> ReadPermissionPlan:
         """Compose configured read expressions as authorization alternatives."""
-        if not self._read_permissions:
+        expressions = self._read_permissions if expressions is None else expressions
+        if not expressions:
             return ReadPermissionPlan(
                 filters=[],
                 requires_instance_check=False,
@@ -409,7 +419,7 @@ class _ConfiguredManagerPermission(BasePermission):
             )
 
         surviving_plans: list[ReadPermissionPlan] = []
-        for expression in self._read_permissions:
+        for expression in expressions:
             expression_plan = self._plan_permission_expression(expression)
             if expression_plan.decision == "allow_all":
                 return expression_plan
@@ -774,6 +784,12 @@ class _ConfiguredManagerPermission(BasePermission):
         with ``"<based_on>__"``. Unfilterable rules, unresolved class context,
         and filter conflicts retain an instance gate with sorted reason labels.
         """
+        if not _canonical_read_executables(type(self), row_only=True):
+            return ReadPermissionPlan(
+                [],
+                requires_instance_check=True,
+                instance_check_reasons=("unfilterable_read_rule",),
+            )
         if self._is_superuser():
             return ReadPermissionPlan(
                 filters=[],
@@ -926,6 +942,70 @@ class ManagerBasedPermission(AdditiveManagerPermission):
     """Deprecated compatibility alias for `AdditiveManagerPermission`."""
 
 
+def _permission_executable(descriptor: object) -> object:
+    if isinstance(descriptor, (classmethod, staticmethod)):
+        return descriptor.__func__
+    return descriptor.fget if isinstance(descriptor, property) else descriptor
+
+
+_READ_EXECUTABLE_NAMES = {
+    name
+    for owner in (
+        BasePermission,
+        _ConfiguredManagerPermission,
+        AdditiveManagerPermission,
+        OverrideManagerPermission,
+    )
+    for name, value in vars(owner).items()
+    if isinstance(value, (FunctionType, classmethod, staticmethod, property))
+} | {"__getattribute__", "__getattr__", "__setattr__", "__new__"}
+_READ_EXECUTABLE_BINDINGS = {
+    owner: tuple(
+        (name, original, executable_signature(_permission_executable(original)))
+        for name in _READ_EXECUTABLE_NAMES
+        for original in (getattr_static(owner, name, None),)
+    )
+    for owner in (AdditiveManagerPermission, OverrideManagerPermission)
+}
+
+
+def _canonical_read_executables(
+    permission_class: object, *, row_only: bool = False
+) -> bool:
+    """Attest the concrete policy's inherited runtime and planning methods."""
+    if not isinstance(permission_class, type) or not issubclass(
+        permission_class, (AdditiveManagerPermission, OverrideManagerPermission)
+    ):
+        return False
+    owner = (
+        OverrideManagerPermission
+        if issubclass(permission_class, OverrideManagerPermission)
+        else AdditiveManagerPermission
+    )
+    return all(
+        getattr_static(permission_class, name, None) is original
+        and (
+            not isinstance(_permission_executable(original), FunctionType)
+            or executable_matches(_permission_executable(original), signature)
+        )
+        for name, original, signature in _READ_EXECUTABLE_BINDINGS[owner]
+        if not row_only
+        or name
+        in {
+            "__init__",
+            "__getattribute__",
+            "__getattr__",
+            "instance",
+            "request_user",
+            "can_read_instance",
+            "_check_permission_list",
+            "_is_superuser",
+            "_ConfiguredManagerPermission__check_specific_permission",
+            "validate_permission_string",
+        }
+    )
+
+
 class _AttributePermissionDefinitions(Mapping[str, dict[permission_type, list[str]]]):
     """Resolve only requested fields from the constructor's declaration snapshot.
 
@@ -936,16 +1016,56 @@ class _AttributePermissionDefinitions(Mapping[str, dict[permission_type, list[st
 
     def __init__(self, permission_class: type[BasePermission]) -> None:
         """Snapshot class namespaces in MRO order without invoking descriptors."""
-        self.sources = tuple(vars(cls).copy() for cls in permission_class.__mro__)
+        mro = permission_class.__mro__
+        if type(mro) is tuple:
+            # Tuple iteration is passive, but namespace providers can still
+            # raise. Preserve the old generator's StopIteration boundary.
+            try:
+                sources = tuple([vars(cls).copy() for cls in mro])
+            except StopIteration as exc:
+                message = "generator raised StopIteration"
+                raise RuntimeError(message) from exc
+        else:
+            sources = tuple(vars(cls).copy() for cls in mro)
+        self.sources = sources
 
-    def __getitem__(self, attribute: str) -> dict[permission_type, list[str]]:
-        """Return the first dictionary declaration for a non-dunder attribute."""
+    def __lookup(self, attribute: str) -> dict[permission_type, list[str]] | None:
+        """Resolve a captured dictionary without raising for an ordinary miss."""
         if not attribute.startswith("__"):
             for source in self.sources:
                 value = source.get(attribute)
                 if isinstance(value, dict):
                     return cast(dict[permission_type, list[str]], value)
-        raise KeyError(attribute)
+        return None
+
+    def __getitem__(self, attribute: str) -> dict[permission_type, list[str]]:
+        """Return a captured declaration, retaining normal indexing errors."""
+        value = self.__lookup(attribute)
+        if value is None:
+            raise KeyError(attribute)
+        return value
+
+    @overload
+    def get(
+        self, key: str, default: None = None
+    ) -> dict[permission_type, list[str]] | None: ...
+
+    @overload
+    def get[T](self, key: str, default: T) -> dict[permission_type, list[str]] | T: ...
+
+    def get(self, key: str, default: object = None) -> object:
+        """Read optional field rules without constructing and catching KeyError."""
+        if (
+            type(self) is not _ATTRIBUTE_PERMISSION_DEFINITIONS_TYPE
+            or _ATTRIBUTE_PERMISSION_DEFINITIONS_TYPE.__getitem__
+            is not _ATTRIBUTE_PERMISSION_GETITEM
+        ):
+            return super().get(key, default)
+        try:
+            value = self.__lookup(key)
+        except KeyError:
+            return default
+        return default if value is None else value
 
     def __iter__(self) -> Iterator[str]:
         """Iterate unique dictionary declarations in base-to-derived insertion order."""
@@ -961,6 +1081,10 @@ class _AttributePermissionDefinitions(Mapping[str, dict[permission_type, list[st
     def __len__(self) -> int:
         """Count distinct non-dunder dictionary declarations across the class hierarchy."""
         return sum(1 for _ in self)
+
+
+_ATTRIBUTE_PERMISSION_DEFINITIONS_TYPE = _AttributePermissionDefinitions
+_ATTRIBUTE_PERMISSION_GETITEM = _AttributePermissionDefinitions.__getitem__
 
 
 def _attribute_permission_definitions(
@@ -1009,6 +1133,8 @@ def _can_prepare_local_read_definitions(permission_class: object) -> bool:
     """
     if permission_class is None:
         return True
+    if not _canonical_read_executables(permission_class):
+        return False
     implementations = (
         _ConfiguredManagerPermission,
         AdditiveManagerPermission,
@@ -1054,7 +1180,7 @@ def _can_prepare_local_read_definitions(permission_class: object) -> bool:
                     return False
                 if "read" in value and not plain_rules(value["read"]):
                     return False
-    return additional_local_read_permission(permission_class, "") is not None
+    return _compare_local_read_definitions(permission_class, "") is not None
 
 
 def additional_resolved_read_permission(
@@ -1130,6 +1256,18 @@ def additional_local_read_permission(
     """
     if permission_class is None:
         return False
+    if not _canonical_read_executables(permission_class):
+        return None
+    return _compare_local_read_definitions(permission_class, attribute, manager=manager)
+
+
+def _compare_local_read_definitions(
+    permission_class: object,
+    attribute: str,
+    *,
+    manager: type[GeneralManager] | None = None,
+) -> bool | None:
+    """Compare shapes after the caller attested the same executable authority."""
     implementations = (
         _ConfiguredManagerPermission,
         AdditiveManagerPermission,
@@ -1188,6 +1326,39 @@ def additional_local_read_permission(
         # that can narrow the row gate requires the runtime field check.
         additional |= bool(field) and (not base or not set(base).issubset(field))
     return additional
+
+
+def declared_field_read_plan(
+    manager: type[GeneralManager], attribute: str, user: UserLike | object
+) -> ReadPermissionPlan | None:
+    """Plan a declarative field through the existing expression/alias owner.
+
+    This is an operation-local contract, not a cached grant. Unknown executable
+    policies and delegation keep their normal instance checks. A row policy
+    with an unfilterable callback cannot certify repeated field checks away.
+    """
+    permission_class = getattr_static(manager, "Permission", None)
+    if permission_class is None:
+        return ReadPermissionPlan(
+            [], requires_instance_check=False, decision="allow_all"
+        )
+    if (
+        not _can_prepare_local_read_definitions(permission_class)
+        or getattr_static(permission_class, "__based_on__", None) is not None
+    ):
+        return None
+    permission = cast(type[_ConfiguredManagerPermission], permission_class)(
+        manager, user
+    )
+    groups = permission._get_attribute_permission_groups("read", attribute)
+    plan = permission.get_read_permission_plan()
+    if plan.requires_instance_check:
+        return None
+    for group in groups:
+        plan = permission._and_read_permission_plans(
+            plan, permission._plan_local_read_permissions(group)
+        )
+    return plan
 
 
 __all__ = [

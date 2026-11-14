@@ -57,9 +57,8 @@ class PermissionFunctionsTests(TestCase):
         self.assertTrue(
             matches["permission_method"](instance, self.user, ["status", "ok"])
         )
-        self.assertEqual(
+        self.assertIsNone(
             matches["permission_filter"](self.user, ["status", "ok"]),
-            {"filter": {"status": "ok"}},
         )
 
     def test_public_permission(self) -> None:
@@ -610,14 +609,12 @@ class PermissionFunctionsTests(TestCase):
         finally:
             permission_functions.pop("testReturnFunc", None)
 
-    def test_matches_permission_filter_format(self) -> None:
-        """Test matches permission filter returns correct format."""
+    def test_matches_permission_filter_keeps_runtime_string_comparison(self) -> None:
+        """Typed SQL equality does not prove the stringification rule."""
         matches = permission_functions["matches"]
 
         result = matches["permission_filter"](self.user, ["field", "value"])
-        self.assertIsInstance(result, dict)
-        self.assertIn("filter", result)
-        self.assertEqual(result["filter"], {"field": "value"})
+        self.assertIsNone(result)
 
     def test_is_self_permission_filter_format(self) -> None:
         """Test isSelf permission filter returns correct format."""

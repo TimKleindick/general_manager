@@ -680,11 +680,11 @@ The legacy `keys`, `sums`, `members`, and synthetic `count` wrappers are not
 generated. `pageInfo.totalCount` counts groups; query an ordinary filtered
 `…List` for original records and their count.
 
-Row and grouping-key authorization are applied before grouping. An unreadable
-grouping key fails the query with `Permission denied to read grouping key '<field>'.`.
-Each selected aggregate field is authorized against every contributing member
-before aggregation; an unreadable field fails with
-`Permission denied to read grouped field '<field>'.`.
+Row and grouping-key authorization are applied before grouping. Rows with an
+unreadable grouping key are excluded. Each aggregate field uses its own
+authorized member values; denying one metric does not erase another metric's
+readable contributors. An aggregate with no non-null authorized values returns
+`null`. Group membership uses authorized roots and grouping keys.
 Omitting the required `groupBy` argument fails GraphQL validation; `groupBy: []`
 raises `groupBy must select at least one grouping key.`. Unknown keys raise
 `'<field>' is not an eligible grouping key.`. `orderBy` accepts eligible
@@ -1343,14 +1343,12 @@ for aggregation rules, identity handling and backend restrictions.
 
 ### Native filter pushdown and field permissions
 
-For ordinary database managers, native filters and exclusions are applied before
-row traversal when a single static analysis proves that their operand fields
-have no additional read restriction. Permission declarations must remain stable
-throughout the query. An unrelated field rule does not prevent this optimization;
-a rule on the filtered field (including its canonical relation/ID alias) does.
-Row permissions, grouping/ordering permissions and returned-field permissions
-remain enforced. Nested native relation paths qualify when every traversed
-field is unrestricted and each target's row-read plan is unconditionally allowed
-for the current actor. Nullable relations and exclusions retain SQL semantics.
-Custom providers, object-dependent target permissions and policies whose field
-rules cannot be established statically retain the conservative authorization path.
+Ordinary database lists apply safe native scalar/FK predicates early. Only used
+filter, exclusion, ordering and grouping paths require contributor authorization;
+unused restricted fields do not force candidate-wide field checks. Proven
+ordinary paths and exact native permission plans retain SQL count/order/page
+execution. Unknown custom policies retain runtime checks. A denied scalar/FK
+excludes its root row before counts and filled pages. A denied plural child
+cannot act as a predicate witness or add join multiplicity. Group metrics use
+independent authorized contributor subsets. Real validation and callback errors
+still fail the operation. Search retains its separate strict projection contract.

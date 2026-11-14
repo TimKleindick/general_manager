@@ -248,10 +248,10 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
         with self._count_project_relation_id_reads() as reads:
             response = self.query(query)
 
-        self.assertResponseHasErrors(response)
-        self.assertIn(
-            "Permission denied to read grouping key",
-            response.json()["errors"][0]["message"],
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["groupingProjectGroups"],
+            {"items": [], "pageInfo": {"totalCount": 0}},
         )
         self.assertIn("commercial_id", self.project.Permission.checks)
         self.assertIn("commercial", self.project.Permission.checks)
@@ -331,7 +331,7 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
             },
         )
 
-    def test_denied_grouped_property_fails_before_property_read(self) -> None:
+    def test_denied_grouped_property_has_no_value_before_property_read(self) -> None:
         self._create_shared_projects()
         self.project.Permission.denied_fields.add("computed_amount")
 
@@ -345,15 +345,15 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
             """
         )
 
-        self.assertResponseHasErrors(response)
-        self.assertIn(
-            "Permission denied to read grouped field 'computed_amount'",
-            response.json()["errors"][0]["message"],
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["groupingProjectGroups"]["items"],
+            [{"computedAmount": None}],
         )
         self.assertEqual(self.project.property_reads, 0)
         self.assertIn("computed_amount", self.project.Permission.checks)
 
-    def test_denied_grouped_property_page_fails_before_property_read(self) -> None:
+    def test_denied_grouped_property_page_is_empty_before_property_read(self) -> None:
         self._create_shared_projects()
         self.project.Permission.denied_fields.add("secret_list")
 
@@ -367,10 +367,10 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
             """
         )
 
-        self.assertResponseHasErrors(response)
-        self.assertIn(
-            "Permission denied to read grouped field 'secret_list'",
-            response.json()["errors"][0]["message"],
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["groupingProjectGroups"]["items"],
+            [{"secretList": {"items": []}}],
         )
         self.assertEqual(self.project.secret_list_reads, 0)
 
@@ -401,7 +401,7 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
         )
         self.assertEqual(self.project.secret_list_reads, 0)
 
-    def test_denied_grouped_key_fails_before_group_key_read(self) -> None:
+    def test_denied_grouped_key_excludes_rows_before_group_key_read(self) -> None:
         self._create_shared_projects()
         self.project.Permission.denied_fields.add("name")
 
@@ -415,11 +415,8 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
             """
         )
 
-        self.assertResponseHasErrors(response)
-        self.assertIn(
-            "Permission denied to read grouping key 'name'",
-            response.json()["errors"][0]["message"],
-        )
+        self.assertResponseNoErrors(response)
+        self.assertEqual(response.json()["data"]["groupingProjectGroups"]["items"], [])
 
     def test_denied_unselected_aggregate_order_field_fails_before_read(self) -> None:
         self._create_shared_projects()
@@ -438,11 +435,14 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
             """
         )
 
-        self.assertResponseHasErrors(response)
-        self.assertIn("amount", response.json()["errors"][0]["message"])
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["groupingProjectGroups"]["items"],
+            [{"name": "Shared"}],
+        )
         self.assertIn("amount", self.project.Permission.checks)
 
-    def test_denied_grouped_relation_fails_before_relation_read(self) -> None:
+    def test_denied_grouped_relation_has_empty_page_before_relation_read(self) -> None:
         self._create_shared_projects()
         self.project.Permission.denied_fields.add("commercial")
 
@@ -456,10 +456,10 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
             """
         )
 
-        self.assertResponseHasErrors(response)
-        self.assertIn(
-            "Permission denied to read grouped field 'commercial'",
-            response.json()["errors"][0]["message"],
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["groupingProjectGroups"]["items"],
+            [{"commercialList": {"items": []}}],
         )
 
     def test_nested_relation_field_permission_is_preserved_for_grouped_items(
@@ -641,10 +641,10 @@ class TestGraphQLGroupingPermissions(GeneralManagerTransactionTestCase):
             """
         )
 
-        self.assertResponseHasErrors(response)
-        self.assertIn(
-            "Permission denied to read grouping key 'group_key'",
-            response.json()["errors"][0]["message"],
+        self.assertResponseNoErrors(response)
+        self.assertEqual(
+            response.json()["data"]["groupingProjectGroups"]["items"],
+            [{"secretGroups": {"items": []}}],
         )
 
     def test_unsupported_grouped_object_field_returns_field_error(self) -> None:

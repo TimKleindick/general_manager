@@ -319,14 +319,17 @@ class GeneralManager(metaclass=GeneralManagerMeta):
         )
 
         context = current_calculation_run_context()
-        cache_key = (
-            TRUSTED_ORM_MANAGER_PREFIX,
-            cls,
-            id(instance),
-            instance.pk,
-            search_date,
-        )
+        row_identity = id(instance) if context is not None else None
+        # Retain PK getter/error timing even when no cache key is needed.
+        primary_key = instance.pk
         if context is not None:
+            cache_key = (
+                TRUSTED_ORM_MANAGER_PREFIX,
+                cls,
+                row_identity,
+                primary_key,
+                search_date,
+            )
             cached = context.get(cache_key)
             if isinstance(cached, cls):
                 cls._track_identification_dependency(cached.identification)

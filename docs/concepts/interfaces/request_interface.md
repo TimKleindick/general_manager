@@ -355,6 +355,16 @@ plans, it compares the plan plus compiled filters/excludes; otherwise it
 materializes both sides and compares the ordered sequence of item identification
 mappings.
 
+Local filtering, exclusion, slicing, or selecting instances from an already
+loaded incomplete response keeps `response_is_complete=False`. These membership
+changes discard the source's total and page coordinates because they no longer
+describe the derived rows. A union is complete only when both input scopes are
+complete; `none()` is a complete empty scope. Supplying explicit instances to
+`with_instances()` on an unexecuted plan defines a local scope without fetching
+the original response. Lazy server-side filters still establish completeness
+from their own filtered response. A one-item incomplete result cannot establish
+global uniqueness and `get()` raises `RequestIncompleteResultError`.
+
 Pickle-restored buckets keep operation and request-plan metadata but do not
 execute a request during unpickling. Iteration after unpickling uses serialized
 items; follow-up query methods on a restored bucket with a request plan compile a

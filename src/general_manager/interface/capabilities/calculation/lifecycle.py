@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from inspect import getattr_static
 from typing import TYPE_CHECKING, ClassVar
 
 from general_manager.bucket.calculation_bucket import CalculationBucket
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
+from general_manager.utils.executable_contract import executable_signature
 
 from ..base import CapabilityName
 from ..builtin import BaseCapability
@@ -343,3 +345,16 @@ class CalculationLifecycleCapability(BaseCapability):
             payload=payload_snapshot,
             func=_perform,
         )
+
+
+# Pin the owned metadata implementation before applications install overrides.
+_NATIVE_QUERY_METADATA_METHODS = tuple(
+    (
+        name,
+        CalculationReadCapability.__dict__[name],
+        executable_signature(CalculationReadCapability.__dict__[name]),
+    )
+    for name in ("get_attribute_types", "get_attributes")
+)
+_NATIVE_QUERY_INPUT_TYPE = Input
+_NATIVE_QUERY_INPUT_DICT = getattr_static(Input, "__dict__")

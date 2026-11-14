@@ -713,31 +713,25 @@ def candidate_cache_keys_for_lookup(
         operator in `SCAN_OPERATORS` using both `{lookup}__{operator}` and the
         normalized base lookup name returned by `lookup_spec_from_key()`, which
         treats a supported operator suffix such as `status__gte` as lookup path
-        `status` plus operator `gte`.
+        `status` plus operator `gte`. Candidate shard payloads are fetched in
+        one batch; runtime dependency evaluation is unchanged.
     """
     del old_value, new_value
     candidates = set()
     candidate_lookup = _lookup_name_for_candidate(lookup)
-
-    for operator in SCAN_OPERATORS:
-        scan_lookup = f"{candidate_lookup}__{operator}"
-        candidates.update(
-            cache_set_members(
-                scan_lookup_shard_key(manager_name, action, scan_lookup, operator)
-            )
-        )
-        candidates.update(
-            cache_set_members(
-                scan_lookup_shard_key(manager_name, action, candidate_lookup, operator)
-            )
-        )
-
-    candidates.update(
-        cache_set_members(
-            composite_lookup_shard_key(manager_name, action, candidate_lookup)
+    shard_keys = [
+        scan_lookup_shard_key(manager_name, action, scan_lookup, operator)
+        for operator in SCAN_OPERATORS
+        for scan_lookup in (f"{candidate_lookup}__{operator}", candidate_lookup)
+    ]
+    shard_keys.extend(
+        (
+            composite_lookup_shard_key(manager_name, action, candidate_lookup),
+            all_records_shard_key(manager_name),
         )
     )
-    candidates.update(cache_set_members(all_records_shard_key(manager_name)))
+    for payload in _cache_get_many(shard_keys).values():
+        candidates.update(_cache_member_set(payload))
     return candidates
 
 

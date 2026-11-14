@@ -1164,6 +1164,88 @@ class TestRequestInterface(SimpleTestCase):
                     with self.assertRaises(RequestIncompleteResultError):
                         bucket.get()
 
+    def test_local_derivations_keep_snapshot_completeness_without_stale_totals(
+        self,
+    ) -> None:
+        first, second = RemoteProject(1), RemoteProject(2)
+        first.status, second.status = "active", "inactive"
+        for label, complete, total in (
+            ("complete", True, 2),
+            ("partial", False, 100),
+            ("unknown", False, None),
+        ):
+            source = RequestBucket(
+                RemoteProject,
+                RemoteProject.Interface,
+                items=(first, second),
+                response_is_complete=complete,
+                total_count=total,
+                upstream_page=2,
+                upstream_page_size=2,
+            )
+            for operation, derive in (
+                ("filter", lambda source=source: source.filter(status="active")),
+                ("exclude", lambda source=source: source.exclude(status="inactive")),
+                ("subset", lambda source=source: source.with_instances([first])),
+                ("slice", lambda source=source: source[:1]),
+            ):
+                with self.subTest(scope=label, operation=operation):
+                    derived = derive()
+                    self.assertEqual(list(derived), [first])
+                    self.assertEqual(derived.response_is_complete, complete)
+                    self.assertIsNone(derived.total_count)
+                    self.assertIsNone(derived.upstream_page)
+                    self.assertIsNone(derived.upstream_page_size)
+                    if complete:
+                        self.assertIs(derived.get(), first)
+                    else:
+                        with self.assertRaises(RequestIncompleteResultError):
+                            derived.get()
+            empty = source.none()
+            self.assertTrue(empty.response_is_complete)
+            self.assertEqual(list(empty), [])
+        self.assertEqual(RemoteProject.Interface.calls, [])
+
+    def test_request_union_cannot_upgrade_either_partial_snapshot(self) -> None:
+        first, second = RemoteProject(1), RemoteProject(2)
+        complete = RequestBucket(
+            RemoteProject,
+            RemoteProject.Interface,
+            items=(first,),
+            response_is_complete=True,
+        )
+        partial = RequestBucket(
+            RemoteProject,
+            RemoteProject.Interface,
+            items=(second,),
+            response_is_complete=False,
+            total_count=100,
+        )
+        for union in (complete | partial, partial | complete, partial | first):
+            with self.subTest(union=union):
+                self.assertFalse(union.response_is_complete)
+                self.assertIsNone(union.total_count)
+                self.assertIsNone(union.upstream_page)
+        self.assertEqual(
+            [item.identification for item in complete | partial], [{"id": 1}, {"id": 2}]
+        )
+        self.assertTrue((complete | complete).response_is_complete)
+        self.assertEqual(RemoteProject.Interface.calls, [])
+
+    def test_explicit_subset_of_unfetched_plan_does_not_fetch_its_source(self) -> None:
+        item = RemoteProject(1)
+        source = RemoteProject.filter(status="active")
+        with patch.object(
+            RemoteProject.Interface,
+            "execute_request_plan",
+            side_effect=AssertionError("must not fetch original scope"),
+        ):
+            subset = source.with_instances([item])
+            self.assertTrue(subset.response_is_complete)
+            self.assertEqual(list(subset), [item])
+            self.assertTrue(source.none().response_is_complete)
+        self.assertFalse(source._materialized)
+
     def test_noop_calls_after_sort_preserve_incomplete_response_metadata(self) -> None:
         """No-op calls keep a sorted partial or unknown response incomplete."""
         item = {

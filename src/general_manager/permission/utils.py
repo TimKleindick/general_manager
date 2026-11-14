@@ -43,7 +43,8 @@ def validate_permission_string(
     ``False`` result. A later unknown permission is therefore reported only when
     every earlier fragment grants access. Custom permission methods are expected
     to return ``bool`` and their result is normalized through ``bool(...)``.
-    They are called without exception wrapping.
+    Callback exceptions propagate. ``StopIteration`` retains the original
+    generator evaluation's conversion to ``RuntimeError``.
 
     Args:
         permission: Permission expression to evaluate.
@@ -60,20 +61,18 @@ def validate_permission_string(
             unregistered permission name.
     """
 
-    def _validate_single_permission(
-        permission: str,
-    ) -> bool:
-        permission_function, *config = permission.split(":")
-        if permission_function not in permission_functions:
-            raise PermissionNotFoundError(permission)
+    for fragment in permission.split("&"):
+        try:
+            permission_function, *config = fragment.split(":")
+            if permission_function not in permission_functions:
+                raise PermissionNotFoundError(fragment)
 
-        return bool(
-            permission_functions[permission_function]["permission_method"](
+            if not permission_functions[permission_function]["permission_method"](
                 data, request_user, config
-            )
-        )
-
-    return all(
-        _validate_single_permission(sub_permission)
-        for sub_permission in permission.split("&")
-    )
+            ):
+                return False
+        except StopIteration as exc:
+            # Preserve PEP 479 without allocating a generator on every check.
+            message = "generator raised StopIteration"
+            raise RuntimeError(message) from exc
+    return True

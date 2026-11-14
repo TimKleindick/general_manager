@@ -26,8 +26,17 @@ constraints are intersected. `CalculationBucket.filter_instances()` owns native
 input normalization and grouped predicates on these snapshots; ORM-backed
 related predicates retain their owning database's lookup semantics. No predicate
 may widen the frozen source or replace a same-key client constraint. Runtime
-field checks cover the complete row-visible requested domain before filtering
-by computed values, ordering, grouping or pagination.
+field checks remove unavailable contributors from the row-visible requested
+domain before computed predicates, ordering, grouping or pagination. Proven
+ordinary inputs may use exact static permission plans; unknown/custom callbacks
+retain runtime evaluation. Plural related-value predicates use readable
+witnesses. Search's strict all-or-error operand helper is a separate contract.
+
+The decision below records the original implementation. Ordinary database lists
+now apply safe scalar/FK predicates before contributor checks; complete remote
+operand scopes retain their provenance until authorization. Boolean denials
+exclude contributions before grouping, count and pagination, rather than failing
+the whole list. Each group metric has an independent readable member subset.
 
 ## Context
 

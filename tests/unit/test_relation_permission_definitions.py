@@ -304,6 +304,68 @@ def test_snapshots_mro_and_live_dictionary_contents_are_preserved(relation_manag
     )
 
 
+def test_optional_declaration_lookup_preserves_empty_dicts_and_defaults():
+    class Definitions(policies.OverrideManagerPermission):
+        empty: ClassVar[dict] = {}
+
+    captured = policies._attribute_permission_definitions(Definitions)
+    default = object()
+    assert captured.get("empty", default) is Definitions.empty
+    assert captured["empty"] is Definitions.empty
+    assert captured.get(key="missing", default=default) is default
+    assert captured.get("__read__", default) is default
+    with pytest.raises(KeyError) as missing:
+        captured["missing"]
+    assert missing.value.args == ("missing",)
+
+
+def test_optional_declaration_lookup_keeps_custom_indexing_hooks():
+    rule = {"read": ["isAdmin"]}
+
+    class CustomDefinitions(policies._AttributePermissionDefinitions):
+        def __getitem__(self, key):
+            if key == "custom":
+                return rule
+            return super().__getitem__(key)
+
+    declarations = CustomDefinitions(policies.OverrideManagerPermission)
+    assert declarations.get("custom") is rule
+
+
+def test_optional_declaration_lookup_keeps_mapping_key_errors_as_defaults():
+    class FailingKey(str):
+        def startswith(self, *_args):
+            raise KeyError(self)
+
+    declarations = policies._attribute_permission_definitions(
+        policies.OverrideManagerPermission
+    )
+    default = object()
+    key = FailingKey("dynamic-key")
+    assert declarations.get(key, default) is default
+    with pytest.raises(KeyError):
+        declarations[key]
+
+
+def test_optional_declaration_lookup_keeps_replaced_canonical_indexer(monkeypatch):
+    """Replacing the concrete mapping's indexing hook must still govern get."""
+    declarations = policies._attribute_permission_definitions(
+        policies.OverrideManagerPermission
+    )
+    rule = {"read": ["isAdmin"]}
+    calls = []
+
+    def indexed(self, key):
+        calls.append((self, key))
+        return rule
+
+    monkeypatch.setattr(
+        policies._AttributePermissionDefinitions, "__getitem__", indexed
+    )
+    assert declarations.get("restricted") is rule
+    assert calls == [(declarations, "restricted")]
+
+
 @pytest.mark.parametrize("schema", ["orm", "request"])
 @pytest.mark.parametrize(
     "declared,queried", [("owner", "owner_id"), ("owner_id", "owner")]
@@ -407,3 +469,246 @@ def test_plain_metadata_context_does_not_require_the_app_registry(expression):
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def _capture_declaration_namespaces(permission_class, *, original):
+    """Compare snapshot boundaries with the pre-optimization implementation."""
+    if original:
+        return tuple(vars(cls).copy() for cls in permission_class.__mro__)
+    return policies._attribute_permission_definitions(permission_class).sources
+
+
+@pytest.mark.parametrize("original", [True, False], ids=["original", "optimized"])
+def test_declaration_snapshot_mro_read_error_remains_unwrapped(original):
+    """Reading the source precedes the generator's StopIteration boundary."""
+    events = []
+    active = False
+    failure = StopIteration("MRO unavailable")
+
+    class DynamicMeta(type(policies.OverrideManagerPermission)):
+        def __getattribute__(cls, name):
+            if active and name == "__mro__":
+                events.append("mro")
+                raise failure
+            return super().__getattribute__(name)
+
+    class Permission(policies.OverrideManagerPermission, metaclass=DynamicMeta):
+        pass
+
+    active = True
+    with pytest.raises(StopIteration) as observed:
+        _capture_declaration_namespaces(Permission, original=original)
+    assert observed.value is failure
+    assert events == ["mro"]
+
+
+@pytest.mark.parametrize("original", [True, False], ids=["original", "optimized"])
+@pytest.mark.parametrize("error_type", [StopIteration, LookupError])
+@pytest.mark.parametrize("phase", ["namespace", "copy"])
+def test_declaration_snapshot_tuple_copy_error_keeps_order_and_cause(
+    original, error_type, phase
+):
+    """A failed namespace copy stops before later providers and keeps its cause."""
+    events = []
+    active = False
+    failure = error_type("namespace copy failed")
+
+    class NamespaceDict(dict):
+        def __init__(self, label):
+            super().__init__()
+            self.label = label
+
+        def copy(self):
+            events.append((self.label, "copy"))
+            if self.label == "second" and phase == "copy":
+                raise failure
+            return super().copy()
+
+    class Namespace:
+        def __init__(self, label):
+            self.label = label
+
+        @property
+        def __dict__(self):
+            events.append((self.label, "namespace"))
+            if self.label == "second" and phase == "namespace":
+                raise failure
+            return NamespaceDict(self.label)
+
+    namespaces = tuple(Namespace(label) for label in ("first", "second", "last"))
+
+    class DynamicMeta(type(policies.OverrideManagerPermission)):
+        def __getattribute__(cls, name):
+            if active and name == "__mro__":
+                events.append("mro")
+                return namespaces
+            return super().__getattribute__(name)
+
+    class Permission(policies.OverrideManagerPermission, metaclass=DynamicMeta):
+        pass
+
+    active = True
+    with pytest.raises(
+        RuntimeError if error_type is StopIteration else error_type
+    ) as seen:
+        _capture_declaration_namespaces(Permission, original=original)
+    if error_type is StopIteration:
+        assert str(seen.value) == "generator raised StopIteration"
+        assert seen.value.__cause__ is failure
+    else:
+        assert seen.value is failure
+    expected = [
+        "mro",
+        ("first", "namespace"),
+        ("first", "copy"),
+        ("second", "namespace"),
+    ]
+    if phase == "copy":
+        expected.append(("second", "copy"))
+    assert events == expected
+
+
+@pytest.mark.parametrize("original", [True, False], ids=["original", "optimized"])
+@pytest.mark.parametrize("outcome", ["complete", "iter-error", "next-error"])
+@pytest.mark.parametrize("source_kind", ["iterable", "tuple-subclass"])
+def test_declaration_snapshot_custom_mro_iteration_keeps_original_boundaries(
+    original, outcome, source_kind
+):
+    """A custom source is iterated once and retains its own exhaustion/errors."""
+    events = []
+    active = False
+    failure = (
+        StopIteration("iterator unavailable")
+        if outcome == "iter-error"
+        else (LookupError("iterator failed"))
+    )
+
+    class Namespace:
+        @property
+        def __dict__(self):
+            events.append("namespace")
+            return {"owner": {"read": ["public"]}}
+
+    namespace = Namespace()
+
+    class MroIterator:
+        def __init__(self):
+            self.visited = False
+
+        def __iter__(self):
+            events.append("iterator-iter")
+            return self
+
+        def __next__(self):
+            events.append("next")
+            if not self.visited:
+                self.visited = True
+                return namespace
+            if outcome == "next-error":
+                raise failure
+            raise StopIteration
+
+    class MroSource:
+        def __iter__(self):
+            events.append("iter")
+            if outcome == "iter-error":
+                raise failure
+            return MroIterator()
+
+    class MroTuple(tuple):
+        __iter__ = MroSource.__iter__
+
+    source = MroSource() if source_kind == "iterable" else MroTuple()
+
+    class DynamicMeta(type(policies.OverrideManagerPermission)):
+        def __getattribute__(cls, name):
+            if active and name == "__mro__":
+                events.append("mro")
+                return source
+            return super().__getattribute__(name)
+
+    class Permission(policies.OverrideManagerPermission, metaclass=DynamicMeta):
+        pass
+
+    active = True
+    if outcome == "complete":
+        assert _capture_declaration_namespaces(Permission, original=original) == (
+            {"owner": {"read": ["public"]}},
+        )
+    else:
+        with pytest.raises(type(failure)) as observed:
+            _capture_declaration_namespaces(Permission, original=original)
+        assert observed.value is failure
+    assert events == (
+        ["mro", "iter"]
+        if outcome == "iter-error"
+        else ["mro", "iter", "next", "namespace", "next"]
+    )
+
+
+@pytest.mark.parametrize("original", [True, False], ids=["original", "optimized"])
+def test_declaration_snapshots_remain_fresh_with_live_rule_references(original):
+    """Reassignment affects new snapshots; dictionary contents remain shared."""
+
+    class Permission(policies.OverrideManagerPermission):
+        owner: ClassVar[dict] = {"read": ["public"]}
+
+    first = _capture_declaration_namespaces(Permission, original=original)
+    rule = Permission.owner
+    assert first[0]["owner"] is rule
+    rule["read"][:] = ["isAdmin"]
+    assert first[0]["owner"]["read"] == ["isAdmin"]
+    Permission.owner = {"read": ["public"]}
+    second = _capture_declaration_namespaces(Permission, original=original)
+    assert first[0] is not second[0]
+    assert first[0]["owner"] is rule
+    assert first[0]["owner"]["read"] == ["isAdmin"]
+    assert second[0]["owner"] is Permission.owner
+    assert second[0]["owner"]["read"] == ["public"]
+
+
+@pytest.mark.parametrize("original", [True, False], ids=["original", "optimized"])
+@pytest.mark.parametrize("setter_kind", ["setattr", "descriptor"])
+def test_declaration_snapshot_assignment_stop_iteration_remains_unwrapped(
+    original, setter_kind
+):
+    """Assignment happens after the generator's exception-conversion boundary."""
+    failure = StopIteration("snapshot assignment failed")
+    events = []
+
+    class Permission(policies.OverrideManagerPermission):
+        owner: ClassVar[dict] = {"read": ["isAdmin"]}
+
+    class OriginalDefinitions:
+        def __init__(self, permission_class):
+            self.sources = tuple(vars(cls).copy() for cls in permission_class.__mro__)
+
+    base = OriginalDefinitions if original else policies._AttributePermissionDefinitions
+
+    def fail_assignment(value):
+        events.append((setter_kind, value[0]["owner"] is Permission.owner))
+        raise failure
+
+    if setter_kind == "setattr":
+
+        class Definitions(base):
+            def __setattr__(self, name, value):
+                if name == "sources":
+                    fail_assignment(value)
+                super().__setattr__(name, value)
+
+    else:
+
+        class Definitions(base):
+            @property
+            def sources(self):
+                raise AssertionError
+
+            @sources.setter
+            def sources(self, value):
+                fail_assignment(value)
+
+    with pytest.raises(StopIteration) as observed:
+        Definitions(Permission)
+    assert observed.value is failure
+    assert events == [(setter_kind, True)]

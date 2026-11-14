@@ -1882,6 +1882,8 @@ class CalculationBucket(Bucket[GeneralManagerType]):
         manager identity are retained; this method does not authorize reads.
         """
         snapshot = self.with_instances(instances)
+        if not self._parsed_filter_call_groups and not self._parsed_exclude_call_groups:
+            return snapshot
         return snapshot.with_instances(
             instance
             for instance in snapshot

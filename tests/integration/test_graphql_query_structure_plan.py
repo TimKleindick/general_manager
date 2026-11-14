@@ -155,6 +155,47 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         assert runs[0] == runs[1]
         assert len(runs[1]) == 12
 
+    def test_unrelated_namespace_reflection_keeps_later_error(self):
+        """Executable property discovery keeps the same per-visit failures."""
+        observations = []
+        original = graphql_resolvers.check_read_permission
+        for prepared in (False, True):
+            events = []
+
+            class ReflectionValue:
+                @property
+                def __class__(value, events=events):
+                    events.append("reflection")
+                    if events.count("reflection") == 3:
+                        message = "third namespace reflection"
+                        raise RuntimeError(message)
+                    return type(value)
+
+            def checked(instance, info, field, *, events=events, **kwargs):
+                events.append("permission")
+                return original(instance, info, field, **kwargs)
+
+            with (
+                patch.object(
+                    self.Record, "unrelated_metadata", ReflectionValue(), create=True
+                ),
+                patch.object(graphql_resolvers, "check_read_permission", checked),
+                self.assertRaisesMessage(RuntimeError, "third namespace reflection"),
+            ):
+                self.authorize([self.record] * 64, ["rank"], prepared=prepared)
+            observations.append(events)
+        assert (
+            observations[0]
+            == observations[1]
+            == [
+                "reflection",
+                "permission",
+                "reflection",
+                "permission",
+                "reflection",
+            ]
+        )
+
     def test_repeated_declarative_callback_denial_and_error_remain_live(self):
         """Repeated declarative callbacks must retain later denials and exceptions."""
         for error in (None, RuntimeError("second callback failed")):
@@ -199,8 +240,8 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
             self.authorize([self.record, self.record], ["name"])
         assert check.call_count == 2
 
-    def test_resolver_checks_denied_nonmatching_and_offpage_candidates(self):
-        """Authorization must inspect rows excluded by filters or the requested page."""
+    def test_resolver_excludes_denied_candidates_before_count_and_page(self):
+        """A matching offpage denial affects totals without rejecting the page."""
         self.Record.Factory.create(name="match", rank=2, target=self.target)
         self.Record.Factory.create(name="outside", rank=3, target=self.target)
         resolver = graphql_resolvers.create_list_resolver(
@@ -220,9 +261,8 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
                     patch.object(
                         graphql_resolvers, "check_read_permission", side_effect=check
                     ),
-                    self.assertRaisesMessage(GraphQLError, "query field 'name'"),
                 ):
-                    resolver(
+                    result = resolver(
                         None,
                         self.info,
                         filter={"name": "match"},
@@ -230,7 +270,13 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
                         page=1,
                         page_size=1,
                     )
-                assert (denied_rank, "name") in seen
+                assert {rank for rank, _field in seen} == {1, 2}
+                if denied_rank == 2:
+                    assert (denied_rank, "name") in seen
+                assert [item.rank for item in result["items"]] == [1]
+                assert result["pageInfo"]["total_count"] == (
+                    1 if denied_rank == 2 else 2
+                )
 
     def test_budget_failure_precedes_runtime_denial(self):
         with (
@@ -361,6 +407,112 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
             with patch.dict(descriptors["rank"].metadata, {"filter_lookup": "operand"}):
                 self.authorize([self.record], ["operand"])
         assert [call.args[2] for call in check.call_args_list] == ["name", "rank"]
+
+    def test_native_source_custom_metadata_is_observed_on_every_visit(self):
+        """Native search paths must not freeze an instance-specific metadata provider."""
+        visits = []
+
+        def accessors():
+            visits.append(None)
+            return {"temporary": None} if len(visits) == 1 else {}
+
+        self.record.Interface = SimpleNamespace(
+            get_attribute_types=lambda: {},
+            get_attributes=accessors,
+            get_graph_ql_properties=lambda: {},
+            input_fields={},
+        )
+        with self.assertRaisesMessage(GraphQLError, "query field 'temporary'"):
+            self.authorize([self.record] * 64, ["temporary"], native_paths=True)
+        assert len(visits) == 2
+
+    def test_native_source_callback_denial_and_error_are_not_cached(self):
+        """Sharing native metadata must retain callbacks on duplicate occurrences."""
+        for error in (None, RuntimeError("third native callback failed")):
+            calls = []
+
+            def callback(instance, _user, _config, *, calls=calls, error=error):
+                calls.append(instance)
+                if len(calls) == 3 and error is not None:
+                    raise error
+                return len(calls) < 3
+
+            with (
+                self.subTest(error=error),
+                patch.dict(
+                    permission_functions,
+                    {
+                        "nativeCallback": {
+                            "permission_method": callback,
+                            "permission_filter": lambda *_: None,
+                        }
+                    },
+                ),
+                patch.object(self.Record.Permission, "__read__", ["nativeCallback"]),
+                self.assertRaisesMessage(
+                    RuntimeError if error else GraphQLError,
+                    "third native callback failed" if error else "query field 'name'",
+                ),
+            ):
+                self.authorize([self.record] * 64, ["name"], native_paths=True)
+            assert calls == [self.record] * 3
+
+    def test_native_property_annotation_remains_dynamic(self):
+        """A custom property's type provider may fail on a repeated source visit."""
+        from general_manager.api.property import GraphQLProperty
+
+        def related(instance) -> object:
+            return instance.target
+
+        class DynamicProperty(GraphQLProperty):
+            visits = 0
+
+            @property
+            def graphql_type_hint(prop):
+                prop.visits += 1
+                if prop.visits == 3:
+                    message = "third annotation access"
+                    raise RuntimeError(message)
+                return self.Target
+
+        descriptor = DynamicProperty(related)
+        with (
+            patch.object(self.Record, "dynamic_target", descriptor, create=True),
+            self.assertRaisesMessage(RuntimeError, "third annotation access"),
+        ):
+            self.authorize(
+                [self.record] * 64, ["dynamic_target__name"], native_paths=True
+            )
+        assert descriptor.visits == 3
+
+    def test_native_input_annotation_remains_dynamic(self):
+        """Input-only metadata is not attested by ordinary ORM field descriptors."""
+
+        class DynamicInput:
+            visits = 0
+
+            @property
+            def type(input_field):
+                input_field.visits += 1
+                if input_field.visits == 3:
+                    message = "third input type access"
+                    raise RuntimeError(message)
+                return self.Target
+
+        input_field = DynamicInput()
+        self.record.dynamic_target = self.target
+        with (
+            patch.object(
+                self.Record.Interface,
+                "input_fields",
+                {**self.Record.Interface.input_fields, "dynamic_target": input_field},
+            ),
+            self.assertRaisesMessage(RuntimeError, "third input type access"),
+        ):
+            self.authorize(
+                [self.record] * 64, ["dynamic_target__name"], native_paths=True
+            )
+        assert input_field.visits == 3
 
     def test_instance_interface_override_keeps_dynamic_alias_metadata_live(self):
         """An instance interface override must resolve aliases on every candidate visit."""
@@ -672,8 +824,8 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         assert reads
         assert all("WHERE" in sql and "match" in sql for sql in reads), reads
 
-    def test_custom_hydration_cannot_hide_denied_nonmatching_candidates(self):
-        """Runtime policies installed by hydration require the full-domain check."""
+    def test_custom_hydration_policy_excludes_matching_denied_candidates(self):
+        """Policies installed by hydration still control matching contributors."""
         self.Record.Factory.create(name="outside", rank=3, target=self.target)
         original = self.Record._from_trusted_orm_instance
 
@@ -693,12 +845,13 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         with patch.object(
             self.Record, "_from_trusted_orm_instance", classmethod(hydrate)
         ):
-            for value in ("match", "missing"):
-                with (
-                    self.subTest(value=value),
-                    self.assertRaisesMessage(GraphQLError, "query field 'name'"),
-                ):
-                    resolver(None, self.info, filter={"name": value})
+            for value in ("match", "outside", "missing"):
+                with self.subTest(value=value):
+                    result = resolver(None, self.info, filter={"name": value})
+                    assert [item.id for item in result["items"]] == (
+                        [self.record.id] if value == "match" else []
+                    )
+                    assert result["pageInfo"]["total_count"] == int(value == "match")
 
     def test_unrelated_field_rule_does_not_prevent_filter_pushdown(self):
         """A rank restriction cannot make the independent name predicate secret."""
@@ -758,7 +911,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         assert reads
         assert all("WHERE" in sql and "target" in sql for sql in reads), reads
 
-    def test_nested_terminal_permission_rejects_even_empty_matches(self):
+    def test_nested_terminal_permission_excludes_hidden_values(self):
         """An unreadable target field may not influence presence or absence."""
         resolver = graphql_resolvers.create_list_resolver(
             lambda *_: self.Record.all(), self.Record
@@ -767,24 +920,22 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
             self.Target.Permission, "name", {"read": ["isAdmin"]}, create=True
         ):
             for value in ("target", "missing"):
-                with (
-                    self.subTest(value=value),
-                    self.assertRaisesMessage(GraphQLError, "query field 'name'"),
-                ):
-                    resolver(None, self.info, filter={"target__name": value})
+                with self.subTest(value=value):
+                    result = resolver(None, self.info, filter={"target__name": value})
+                    assert result["items"] == []
+                    assert result["pageInfo"]["total_count"] == 0
 
-    def test_nested_target_row_gate_rejects_hidden_target_predicates(self):
+    def test_nested_target_row_gate_excludes_hidden_target_predicates(self):
         """Hidden related rows cannot become an indirect filter oracle."""
         resolver = graphql_resolvers.create_list_resolver(
             lambda *_: self.Record.all(), self.Record
         )
         with patch.object(self.Target.Permission, "__read__", ["isAdmin"]):
             for value in ("target", "missing"):
-                with (
-                    self.subTest(value=value),
-                    self.assertRaisesMessage(GraphQLError, "traverse query relation"),
-                ):
-                    resolver(None, self.info, filter={"target__name": value})
+                with self.subTest(value=value):
+                    result = resolver(None, self.info, filter={"target__name": value})
+                    assert result["items"] == []
+                    assert result["pageInfo"]["total_count"] == 0
 
     def test_nested_exclusion_preserves_null_related_rows(self):
         """SQL exclusion preserves nullable-relation semantics after pushdown."""
@@ -799,7 +950,7 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         nulls = resolver(None, self.info, filter={"target__isnull": True})
         assert [item.name for item in nulls["items"]] == ["null"]
 
-    def test_nested_intermediate_permission_rejects_filter_and_exclusion(self):
+    def test_nested_intermediate_permission_excludes_filter_and_exclusion(self):
         """The relation field itself protects every path through it."""
         resolver = graphql_resolvers.create_list_resolver(
             lambda *_: self.Record.all(), self.Record
@@ -809,10 +960,9 @@ class TestGraphQLQueryStructurePlan(GeneralManagerTransactionTestCase):
         ):
             for operation in ("filter", "exclude"):
                 for value in ("target", "missing"):
-                    with (
-                        self.subTest(operation=operation, value=value),
-                        self.assertRaisesMessage(GraphQLError, "query field 'target'"),
-                    ):
-                        resolver(
+                    with self.subTest(operation=operation, value=value):
+                        result = resolver(
                             None, self.info, **{operation: {"target__name": value}}
                         )
+                        assert result["items"] == []
+                        assert result["pageInfo"]["total_count"] == 0
