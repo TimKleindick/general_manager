@@ -230,6 +230,13 @@ does not remove that member's readable `hours`. An aggregate without non-null
 contributors returns the existing empty value (`null`). Group sorting uses the
 same authorized metric subset before group pagination.
 
+Direct low-level list-resolver calls with `group_by=[]` or `group_by=[""]`
+both invoke no-argument grouping and share the same authorization and grouped
+ordering rules. The unchanged built-in default uses zero keys. A nonempty
+source with an unproven custom default is rejected; explicit grouping keys can
+be authorized before grouping. Generated `…Groups` endpoints require explicit
+eligible keys instead of either empty form.
+
 Calculation lists first restrict the **requested constructor domain** using
 proven native scalar inputs or manager-identity input constraints. They freeze
 that exact domain before intersecting permission filters and applying row
