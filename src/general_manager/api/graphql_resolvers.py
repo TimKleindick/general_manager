@@ -1878,9 +1878,10 @@ def create_list_resolver(
         except GraphQLOrderingInputError as exc:
             raise GraphQLError(str(exc)) from exc
         ordering_paths = {term.field for term in ordering_terms}
-        operand_paths = (
+        predicate_paths = (
             set(plan.filters) | set(plan.excludes) | set(plan.normalized_excludes)
         )
+        operand_paths = set(predicate_paths)
         operand_paths.update(ordering_paths)
         from general_manager.interface import CalculationInterface
 
@@ -2078,11 +2079,16 @@ def create_list_resolver(
                     qs,
                     info,
                     deferred_plan,
-                    ordering_paths,
+                    () if group_by is not None else ordering_paths,
                     calculation_plan=deferred,
                 )
             else:
-                qs = filter_contributors(qs, info, operand_paths, rows_authorized=True)
+                qs = filter_contributors(
+                    qs,
+                    info,
+                    predicate_paths if group_by is not None else operand_paths,
+                    rows_authorized=True,
+                )
                 if deferred is not None:
                     qs = deferred.filter_instances(qs)
         elif complete_disjunction is not None:
@@ -2205,9 +2211,19 @@ def create_list_resolver(
                 () if group_by else ordering_paths,
             )
         if group_by:
-            from general_manager.api.graphql_contributors import filter_contributors
+            from general_manager.api.graphql_contributors import (
+                _has_zero_key_grouping_default,
+                filter_contributors,
+            )
 
-            qs = filter_contributors(qs, info, group_by, rows_authorized=True)
+            grouping_paths = (
+                ()
+                if group_by == [""]
+                and _has_zero_key_grouping_default(base_queryset)
+                and _has_zero_key_grouping_default(qs)
+                else group_by
+            )
+            qs = filter_contributors(qs, info, grouping_paths, rows_authorized=True)
         if grouping_validator is not None:
             grouping_validator(qs, group_by, order_by, info)
         qs_grouped = apply_grouping(qs, group_by)

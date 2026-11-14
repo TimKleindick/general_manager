@@ -252,7 +252,10 @@ restart. Classification stores no user or object permission results.
 
 Search's projection contract and direct `authorize_query_fields()` calls remain
 strict: a denied required operand fails the query, including denial on a
-nonmatching or off-page candidate. Search shares its field/path counter across
+nonmatching or off-page candidate. Fast search hits have one exception: a
+related-row denial (`QueryRelationPermissionError`) removes that hit before
+counting and pagination; other operand denials still fail the query.
+Search shares its field/path counter across
 projection checks and hit batches within one resolver call without sharing
 permission decisions. The budget does not bound preceding row authorization
 or database materialization.

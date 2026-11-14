@@ -30,6 +30,7 @@ from general_manager.bucket.indexing import (
 )
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.run_context import ensure_calculation_run_context
+from general_manager.utils.executable_contract import executable_signature
 
 GeneralManagerType = TypeVar("GeneralManagerType", bound="GeneralManager")
 BucketLookup = Mapping[str, object]
@@ -501,3 +502,6 @@ class Bucket(ABC, Generic[GeneralManagerType]):
         from general_manager.bucket._materialized_bucket import MaterializedBucket
 
         return MaterializedBucket(self._manager_class, tuple(instances))
+
+
+_DEFAULT_GROUPING_CONTRACT = (Bucket.group_by, executable_signature(Bucket.group_by))

@@ -2095,6 +2095,12 @@ class DatabaseBucket(Bucket[GeneralManagerType]):
         )
 
 
+_DEFAULT_GROUPING_CONTRACT = (
+    DatabaseBucket.group_by,
+    executable_signature(DatabaseBucket.group_by),
+)
+
+
 class _DatabaseMaterializedBucket(MaterializedBucket[GeneralManagerType]):
     """Exact database subset that reuses ORM lookups without source membership."""
 
