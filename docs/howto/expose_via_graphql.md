@@ -895,10 +895,13 @@ manager, and nullable typed `orderBy` only when sortable fields exist.
 
 For database-backed lists, use ordinary generated filters as usual. The resolver
 may apply the whole filter/exclusion plan before row traversal when it can prove
-every operand unrestricted. An additional read rule on an operand, a restricted related
-row, or custom behavior that prevents the proof retains the conservative path;
-permissions remain enforced in either case. Keep permission declarations stable
-throughout a query. See the [filtering concept](../concepts/graphql/filters_pagination.md#query-arguments)
+every operand unrestricted. An additional read rule on an operand, or custom
+behavior that prevents the proof, retains the conservative path. A restricted
+related row also retains it for traversal lookups such as `relation__field`.
+A direct relation lookup such as `relation__isnull` can still qualify without
+proving that the target's row-read plan allows all rows; permissions remain
+enforced in either case. Keep permission declarations stable throughout a query.
+See the [filtering concept](../concepts/graphql/filters_pagination.md#query-arguments)
 and [query recipe](../examples/graphql_queries.md#filter-a-native-list).
 
 Soft-delete managers also expose nullable `includeInactive`
