@@ -29,9 +29,16 @@ from general_manager.api.graphql_relations import (
     get_graphql_manager_registry,
     resolve_general_manager_type,
 )
-from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket.base_bucket import (
+    Bucket,
+    _DEFAULT_GROUPING_CONTRACT as _BASE_GROUPING_CONTRACT,
+)
+from general_manager.bucket.calculation_bucket import (
+    _DEFAULT_GROUPING_CONTRACT as _CALCULATION_GROUPING_CONTRACT,
+)
 from general_manager.bucket.database_bucket import (
     DatabaseBucket,
+    _DEFAULT_GROUPING_CONTRACT as _DATABASE_GROUPING_CONTRACT,
     _DatabaseMaterializedBucket,
     _database_primary_key_for,
 )
@@ -56,6 +63,32 @@ if TYPE_CHECKING:
     from general_manager.api.graphql_query_permissions import _NativeQueryStructure
 
 type Domains = dict[str, set[object]]
+
+
+_DEFAULT_GROUPING_METHODS = (
+    _BASE_GROUPING_CONTRACT,
+    _DATABASE_GROUPING_CONTRACT,
+    _CALCULATION_GROUPING_CONTRACT,
+)
+
+
+def _has_zero_key_grouping_default(queryset: Bucket[GeneralManager]) -> bool:
+    """Recognize only the unchanged built-in no-argument grouping contract."""
+    if (
+        getattr_static(type(queryset), "__getattribute__")
+        is not object.__getattribute__
+    ):
+        return False
+    method = getattr_static(queryset, "group_by", None)
+    base, base_signature = _DEFAULT_GROUPING_METHODS[0]
+    return (
+        Bucket.group_by is base
+        and executable_matches(base, base_signature)
+        and any(
+            method is original and executable_matches(original, signature)
+            for original, signature in _DEFAULT_GROUPING_METHODS
+        )
+    )
 
 
 def _relation_metadata(
@@ -846,7 +879,15 @@ def apply_list_contributors(
             if not allowed:
                 available = False
                 break
-            _merge_domains(positive, domains)
+            _merge_domains(
+                positive,
+                {
+                    key: ids
+                    for key, ids in domains.items()
+                    if key.split("__", 1)[0] not in properties
+                    or properties[key.split("__", 1)[0]].query_annotation is not None
+                },
+            )
         if not available:
             continue
         for mapping in (plan.excludes, plan.normalized_excludes):
@@ -872,11 +913,8 @@ def apply_list_contributors(
             if key not in python_filters
         }
         if python_filters:
-            from general_manager.bucket._materialized_bucket import MaterializedBucket
-
-            if not MaterializedBucket(type(instance), [instance]).filter(
-                **python_filters
-            ):
+            allowed, matched = _generic_match(instance, python_filters, authorizer)
+            if not allowed or not matched:
                 continue
         multiplicity = _filtered_query(
             lookup_source, _database_primary_key_for(instance), positive, native_filters
@@ -893,17 +931,14 @@ def apply_list_contributors(
                 *,
                 instance: GeneralManager = instance,
             ) -> bool:
+                nonlocal available
                 prop = properties.get(path.split("__", 1)[0])
                 if prop is not None and prop.query_annotation is None:
-                    from general_manager.bucket._materialized_bucket import (
-                        MaterializedBucket,
+                    allowed, matched = _generic_match(
+                        instance, {path: value}, authorizer
                     )
-
-                    return bool(
-                        MaterializedBucket(type(instance), [instance]).filter(
-                            **{path: value}
-                        )
-                    )
+                    available &= allowed
+                    return matched
                 return _filtered_query(
                     lookup_source,
                     _database_primary_key_for(instance),
@@ -917,7 +952,7 @@ def apply_list_contributors(
             ):
                 excluded = True
                 break
-        if not excluded:
+        if available and not excluded:
             kept.extend([instance] * multiplicity)
     return candidates.with_instances(kept)
 
@@ -1065,9 +1100,9 @@ def _generic_match(
                 ): normalized.get(key, normalized.get("id") if not key else value)
                 for key, value in criteria.items()
             }
+        metadata = _relation_metadata(type(instance), name, attributes)
         target = resolve_general_manager_type(
-            _relation_metadata(type(instance), name, attributes).get("type"),
-            get_graphql_manager_registry(),
+            metadata.get("type"), get_graphql_manager_registry()
         )
         if (
             target is None
@@ -1127,14 +1162,34 @@ def _generic_match(
             if not matched:
                 return True, False
             continue
+        plural = isinstance(value, (Bucket, list, tuple, set))
+        relation_isnull = (
+            not plural
+            # Deferred calculation predicates retain their owning frozen
+            # lookup grammar, which has no relation-level isnull operator.
+            and authorizer.calculation_plan is None
+            and "isnull" in criteria
+            and _relation_suffix_is_lookup(
+                ("isnull",),
+                target.Interface.get_attribute_types().keys()
+                | target.Interface.get_graph_ql_properties().keys(),
+            )
+        )
+        null_matches = (
+            (value is None) is bool(criteria["isnull"]) if relation_isnull else True
+        )
+        child_criteria = (
+            {key: expected for key, expected in criteria.items() if key != "isnull"}
+            if relation_isnull
+            else criteria
+        )
         if value is None:
-            if not all(
+            if not null_matches or not all(
                 create_filter_function(lookup, expected)(None)
-                for lookup, expected in criteria.items()
+                for lookup, expected in child_criteria.items()
             ):
                 return True, False
             continue
-        plural = isinstance(value, (Bucket, list, tuple, set))
         members = value if plural else (value,)
         matched = False
         for child in members:
@@ -1145,9 +1200,25 @@ def _generic_match(
                 if not plural:
                     return False, False
                 continue
+            if relation_isnull:
+                from general_manager.api.graphql_resolvers import (
+                    relation_id_alias_target_fields,
+                )
+
+                identity_fields = (
+                    relation_id_alias_target_fields(instance.Interface, name)
+                    if name in attributes and metadata.get("relation_kind") == "direct"
+                    else tuple(child.identification)
+                )
+                if not all(
+                    authorizer.field_allowed(child, key) for key in identity_fields
+                ):
+                    return False, False
+                if not null_matches:
+                    continue
             allowed, matches = _generic_match(
                 child,
-                {key or "id": expected for key, expected in criteria.items()},
+                {key or "id": expected for key, expected in child_criteria.items()},
                 authorizer,
             )
             if allowed and matches:

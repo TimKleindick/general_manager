@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import subprocess
+import sys
+import textwrap
 from types import MappingProxyType
 from types import SimpleNamespace
 from unittest import mock
@@ -391,6 +394,56 @@ class GraphQLHelperTests(SimpleTestCase):
         grouped = apply_grouping(queryset, [""])
 
         assert grouped._group_by_keys == ()
+
+    def test_default_grouping_proof_rejects_pre_import_method_mutations(self) -> None:
+        """Consumers must not adopt a replaced or edited default as canonical."""
+        for owner in ("base", "database", "calculation"):
+            for mutation in ("replacement", "code"):
+                with self.subTest(owner=owner, mutation=mutation):
+                    script = textwrap.dedent(f"""
+                        import os
+                        import sys
+                        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tests.test_settings")
+                        import django
+                        django.setup()
+                        from general_manager.bucket.base_bucket import Bucket
+                        from general_manager.bucket.database_bucket import DatabaseBucket
+                        from general_manager.bucket.calculation_bucket import CalculationBucket
+                        from general_manager.bucket._materialized_bucket import MaterializedBucket
+                        assert "general_manager.api.graphql_contributors" not in sys.modules
+                        owner = dict(base=Bucket, database=DatabaseBucket, calculation=CalculationBucket)[{owner!r}]
+                        original = owner.group_by
+                        original_code = original.__code__
+
+                        def replacement(self, *keys):
+                            return ("secret",)
+
+                        def closed_replacement():
+                            captured = object()
+                            def changed(self, *keys):
+                                captured
+                                return ("secret",)
+                            return changed
+
+                        if {mutation!r} == "replacement":
+                            owner.group_by = replacement
+                        else:
+                            original.__code__ = closed_replacement().__code__ if original.__closure__ else replacement.__code__
+                        from general_manager.api.graphql_contributors import _has_zero_key_grouping_default
+                        bucket_type = MaterializedBucket if owner is Bucket else owner
+                        bucket = object.__new__(bucket_type)
+                        assert not _has_zero_key_grouping_default(bucket), "untrusted default admitted"
+                        owner.group_by = original
+                        original.__code__ = original_code
+                        assert _has_zero_key_grouping_default(bucket), "restored default rejected"
+                    """)
+                    result = subprocess.run(  # noqa: S603 - trusted interpreter and test probe
+                        [sys.executable, "-c", script],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    assert result.returncode == 0, result.stdout + result.stderr
 
     def test_apply_grouping_preserves_none_and_delegates_lists(self) -> None:
         """

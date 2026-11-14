@@ -639,11 +639,24 @@ def test_declaration_snapshot_custom_mro_iteration_keeps_original_boundaries(
         with pytest.raises(type(failure)) as observed:
             _capture_declaration_namespaces(Permission, original=original)
         assert observed.value is failure
-    assert events == (
-        ["mro", "iter"]
-        if outcome == "iter-error"
-        else ["mro", "iter", "next", "namespace", "next"]
-    )
+    observed_events = events[:]
+    events.clear()
+    # Generator expressions can call the iterator's __iter__ again depending on
+    # the interpreter. Preserve the original trace on this interpreter exactly,
+    # including that call, rather than assuming one compiler's event sequence.
+    if outcome == "complete":
+        assert _capture_declaration_namespaces(Permission, original=True) == (
+            {"owner": {"read": ["public"]}},
+        )
+    else:
+        with pytest.raises(type(failure)) as reference:
+            _capture_declaration_namespaces(Permission, original=True)
+        assert reference.value is failure
+    assert observed_events == events
+    assert events.count("mro") == 1
+    assert events.count("iter") == 1
+    assert events.count("namespace") == (0 if outcome == "iter-error" else 1)
+    assert events.count("next") == (0 if outcome == "iter-error" else 2)
 
 
 @pytest.mark.parametrize("original", [True, False], ids=["original", "optimized"])

@@ -22,9 +22,21 @@ from general_manager.api.graphql_contributors import (
     authorized_group,
 )
 from general_manager.bucket._materialized_bucket import MaterializedBucket
+from general_manager.bucket.base_bucket import Bucket
+from general_manager.bucket.request_bucket import RequestBucket
 from general_manager.cache.run_context import CalculationRunContext
 from general_manager.api.property import graph_ql_property
-from general_manager.interface import CalculationInterface, DatabaseInterface
+from general_manager.interface import (
+    CalculationInterface,
+    DatabaseInterface,
+    RequestInterface,
+)
+from general_manager.interface.requests import (
+    RequestField,
+    RequestFilter,
+    RequestQueryOperation,
+    RequestTransportConfig,
+)
 from general_manager.manager import GeneralManager, Input
 from general_manager.permission import OverrideManagerPermission
 from general_manager.permission.permission_checks import permission_functions
@@ -1119,3 +1131,440 @@ class TestAuthorizedContributors(GeneralManagerTransactionTestCase):
             resolver(None, self.info, filter={path: 1})
         assert observed.exception is failure
         assert self.Child.property_reads == []
+
+    def test_python_collection_property_uses_readable_witnesses_without_sql_joins(self):
+        visible = self.parent("visible")
+        self.child(visible)
+        self.child(visible)
+        hidden = self.child(visible, visible=False)
+        leaf_hidden = self.parent("leaf-hidden")
+        self.child(leaf_hidden, allow_a=False)
+        split = self.parent("split")
+        self.child(split, a=1, b=0)
+        self.child(split, a=0, b=2)
+        denied = self.parent("property-hidden", allow_secret=False)
+        self.child(denied)
+        child_type = self.Child
+        reads = []
+
+        @graph_ql_property(filterable=True)
+        def selected_list(parent) -> Bucket[child_type]:
+            assert parent.allow_secret, "denied collection getter was evaluated"
+            reads.append(parent.id)
+            return child_type.filter(parent_id=parent.id)
+
+        relation = next(
+            metadata.get("filter_lookup", name)
+            for name, metadata in self.Parent.Interface.get_attribute_types().items()
+            if metadata.get("relation_kind") == "collection"
+        )
+        with (
+            patch.object(self.Parent, "selected_list", selected_list, create=True),
+            patch.object(
+                self.Parent.Permission,
+                "selected_list",
+                {"read": ["contributorFlag:allow_secret"]},
+                create=True,
+            ),
+        ):
+            predicates = {"selected_list__a": 1, "selected_list__b": 2}
+            result = self.resolver(None, self.info, filter=predicates)
+            assert [row.id for row in result["items"]] == [visible.id]
+            assert result["pageInfo"]["total_count"] == 1
+            mixed = self.resolver(
+                None, self.info, filter={**predicates, relation + "__a": 1}
+            )
+            assert [row.id for row in mixed["items"]] == [visible.id, visible.id]
+            assert mixed["pageInfo"]["total_count"] == 2
+            source = self.Parent.filter(
+                **{"name": "visible", relation + "__a": 1, relation + "__visible": True}
+            )
+            from_source = create_list_resolver(lambda *_: source, self.Parent)
+            existing_bag = from_source(None, self.info, filter=predicates)
+            assert [row.id for row in existing_bag["items"]] == [visible.id, visible.id]
+            assert existing_bag["pageInfo"]["total_count"] == 2
+            excluded = self.resolver(None, self.info, exclude=predicates)
+            assert [row.name for row in excluded["items"]] == ["leaf-hidden"]
+            assert excluded["pageInfo"]["total_count"] == 1
+            self.Child.Interface._model.objects.filter(pk=hidden.pk).update(a=99, b=99)
+            repeated = self.resolver(
+                None, self.info, filter={**predicates, relation + "__a": 1}
+            )
+            assert [row.id for row in repeated["items"]] == [
+                row.id for row in mixed["items"]
+            ]
+            assert repeated["pageInfo"] == mixed["pageInfo"]
+            failure = RuntimeError("collection witness permission failed")
+
+            def fail_on_leaf(instance, _user, config):
+                if type(instance) is child_type and config == ["allow_a"]:
+                    raise failure
+                return bool(getattr(instance, config[0]))
+
+            with (
+                patch.dict(
+                    permission_functions,
+                    {"contributorFlag": {"permission_method": fail_on_leaf}},
+                ),
+                self.assertRaises(RuntimeError) as observed,
+            ):
+                self.resolver(None, self.info, filter=predicates)
+            assert observed.exception is failure
+        assert denied.id not in reads
+
+    def test_calculation_group_order_keeps_independent_metric_contributors(self):
+        parent = self.parent("parent")
+        self.child(parent)
+        parent_type = self.Parent
+
+        class MetricCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                entry = Input(int)
+                category = Input(str)
+                hours = Input(int)
+                cost = Input(int)
+                parent = Input(parent_type)
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+                hours: ClassVar[dict] = {"read": ["calculationMetric:hours"]}
+                cost: ClassVar[dict] = {"read": ["calculationMetric:cost"]}
+
+        rows = [
+            MetricCalculation(entry=1, category="A", hours=10, cost=100, parent=parent),
+            MetricCalculation(entry=2, category="A", hours=20, cost=200, parent=parent),
+            MetricCalculation(entry=3, category="B", hours=15, cost=300, parent=parent),
+            MetricCalculation(entry=4, category="C", hours=99, cost=400, parent=parent),
+        ]
+        source = MaterializedBucket(MetricCalculation, rows)
+        resolver = create_list_resolver(lambda *_: source, MetricCalculation)
+        relation = next(
+            metadata.get("filter_lookup", name)
+            for name, metadata in self.Parent.Interface.get_attribute_types().items()
+            if metadata.get("relation_kind") == "collection"
+        )
+
+        def readable(instance, _user, config):
+            return instance.entry in ({1, 3} if config == ["hours"] else {2, 3, 4})
+
+        with patch.dict(
+            permission_functions, {"calculationMetric": {"permission_method": readable}}
+        ):
+            for plural in (False, True):
+                with self.subTest(plural=plural):
+                    filters = {"parent__" + relation + "__a": 1} if plural else {}
+                    result = resolver(
+                        None,
+                        self.info,
+                        filter=filters,
+                        group_by=["category"],
+                        order_by=[{"field": "hours", "direction": "ASC"}],
+                    )
+                    groups = list(result["items"])
+                    assert [group.category for group in groups] == ["A", "B", "C"]
+                    assert result["pageInfo"]["total_count"] == 3
+                    assert [len(group.members) for group in groups] == [2, 1, 1]
+                    assert [
+                        create_normal_resolver("hours")(group, self.info)
+                        for group in groups
+                    ] == [10, 15, None]
+                    assert [
+                        create_normal_resolver("cost")(group, self.info)
+                        for group in groups
+                    ] == [200, 300, 400]
+                    filtered = resolver(
+                        None,
+                        self.info,
+                        filter={**filters, "hours__gte": 0},
+                        group_by=["category"],
+                        order_by=[{"field": "hours", "direction": "ASC"}],
+                    )
+                    assert [len(group.members) for group in filtered["items"]] == [1, 1]
+            for grouping in ([""], []):
+                with self.subTest(grouping=grouping):
+                    defaults = resolver(
+                        None,
+                        self.info,
+                        group_by=grouping,
+                        order_by=[{"field": "hours", "direction": "ASC"}],
+                    )
+                    default_group = next(iter(defaults["items"]))
+                    assert defaults["pageInfo"]["total_count"] == 1
+                    assert len(default_group.members) == 4
+                    assert (
+                        create_normal_resolver("hours")(default_group, self.info) == 25
+                    )
+                    assert (
+                        create_normal_resolver("cost")(default_group, self.info) == 900
+                    )
+            ordinary = resolver(
+                None,
+                self.info,
+                group_by=None,
+                order_by=[{"field": "hours", "direction": "ASC"}],
+                page=1,
+                page_size=2,
+            )
+            assert [row.entry for row in ordinary["items"]] == [1, 3]
+            assert ordinary["pageInfo"]["total_count"] == 2
+
+    def test_blank_grouping_sentinel_uses_the_native_zero_key_default(self):
+        self.parent("one", allow_secret=False)
+        self.parent("two")
+        result = self.resolver(None, self.info, group_by=[""])
+        groups = list(result["items"])
+        assert len(groups) == result["pageInfo"]["total_count"] == 1
+        assert groups[0]._group_by_value == {}
+        assert len(groups[0].members) == 2
+        explicit = self.resolver(None, self.info, group_by=["secret"])
+        assert len(next(iter(explicit["items"])).members) == 1
+        from general_manager.bucket.database_bucket import DatabaseBucket
+        from general_manager.api.graphql_query_permissions import (
+            QueryFieldPermissionError,
+        )
+
+        calls = []
+
+        class CustomDefault(DatabaseBucket):
+            def group_by(self, *keys):
+                calls.append(keys)
+                return super().group_by(*(keys or ("secret",)))
+
+        class DynamicDefault(CustomDefault):
+            def __getattribute__(self, name):
+                if name == "group_by":
+                    calls.append("dynamic dispatch")
+                return super().__getattribute__(name)
+
+        for bucket_type in (CustomDefault, DynamicDefault):
+            custom = bucket_type(
+                self.Parent.Interface._model.objects.all(), self.Parent
+            )
+            custom_resolver = create_list_resolver(
+                lambda *_, custom=custom: custom, self.Parent
+            )
+            with (
+                self.subTest(bucket_type=bucket_type),
+                self.assertRaises(QueryFieldPermissionError),
+            ):
+                custom_resolver(None, self.info, group_by=[""])
+        assert calls == []
+        self.Parent.Interface._model.objects.all().delete()
+        empty = self.resolver(None, self.info, group_by=[""])
+        assert list(empty["items"]) == []
+        assert empty["pageInfo"]["total_count"] == 0
+
+    def test_generic_request_relation_isnull_checks_the_parent_and_remaining_fields(
+        self,
+    ):
+        visible = self.parent("visible")
+        hidden = self.parent("hidden", allow_secret=False)
+        other = self.parent("other")
+        self.child(visible)
+        parent_type, child_type = self.Parent, self.Child
+        relations = {1: visible, 2: None, 3: hidden, 4: other}
+        relation_reads = []
+
+        class NullableRequest(GeneralManager):
+            class Interface(RequestInterface):
+                id = Input(int)
+                label = RequestField(str)
+
+                class Meta:
+                    filters: ClassVar[dict] = {
+                        "related__isnull": RequestFilter(
+                            value_type=bool, allow_local_fallback=True
+                        ),
+                        "related__name": RequestFilter(
+                            value_type=str, allow_local_fallback=True
+                        ),
+                        "children__a": RequestFilter(
+                            value_type=int, allow_local_fallback=True
+                        ),
+                    }
+                    query_operations: ClassVar[dict] = {
+                        "list": RequestQueryOperation(
+                            name="list", method="GET", path="/nullable"
+                        ),
+                        "detail": RequestQueryOperation(
+                            name="detail", method="GET", path="/nullable/{id}"
+                        ),
+                    }
+                    transport_config = RequestTransportConfig(
+                        base_url="https://nullable.example.test", timeout=1
+                    )
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
+            @graph_ql_property(filterable=True)
+            def related(self) -> parent_type | None:
+                relation_reads.append(self.id)
+                return relations[self.id]
+
+            @graph_ql_property(filterable=True)
+            def children(self) -> Bucket[child_type]:
+                return child_type.filter(parent_id=visible.id)
+
+        rows = tuple(NullableRequest(id=index) for index in relations)
+        source = RequestBucket(NullableRequest, NullableRequest.Interface, items=rows)
+        resolver = create_list_resolver(lambda *_: source, NullableRequest)
+        with patch.object(
+            self.Parent.Permission, "__read__", ["contributorFlag:allow_secret"]
+        ):
+            for operator, criteria, expected in (
+                ("filter", {"related__isnull": False}, [1, 4]),
+                ("filter", {"related__isnull": True}, [2]),
+                ("filter", {"related__isnull": False, "related__name": "visible"}, [1]),
+                ("filter", {"related__isnull": True, "related__name": "visible"}, []),
+                ("exclude", {"related__isnull": False}, [2]),
+                ("exclude", {"related__isnull": True}, [1, 4]),
+            ):
+                with self.subTest(operator=operator, criteria=criteria):
+                    kwargs = {"filter": {"children__a": 1}}
+                    if operator == "filter":
+                        kwargs["filter"].update(criteria)
+                    else:
+                        kwargs["exclude"] = criteria
+                    result = resolver(None, self.info, **kwargs)
+                    assert [row.id for row in result["items"]] == expected
+                    assert result["pageInfo"]["total_count"] == len(expected)
+        with patch.object(
+            self.Parent.Permission,
+            "id",
+            {"read": ["contributorFlag:allow_secret"]},
+            create=True,
+        ):
+            for operator, expected_null in (("filter", False), ("exclude", True)):
+                with self.subTest(identity_rights=True, operator=operator):
+                    kwargs = {"filter": {"children__a": 1}}
+                    if operator == "filter":
+                        kwargs["filter"]["related__isnull"] = expected_null
+                    else:
+                        kwargs["exclude"] = {"related__isnull": expected_null}
+                    result = resolver(None, self.info, **kwargs)
+                    assert [row.id for row in result["items"]] == [1, 4]
+                    assert result["pageInfo"]["total_count"] == 2
+        failure = RuntimeError("relation permission failed")
+
+        def fail(*_args):
+            raise failure
+
+        relation_reads.clear()
+        with (
+            patch.object(
+                NullableRequest.Permission,
+                "related",
+                {"read": ["relationFailure"]},
+                create=True,
+            ),
+            patch.dict(
+                permission_functions, {"relationFailure": {"permission_method": fail}}
+            ),
+            self.assertRaises(RuntimeError) as observed,
+        ):
+            resolver(
+                None, self.info, filter={"children__a": 1, "related__isnull": False}
+            )
+        assert observed.exception is failure
+        assert relation_reads == []
+
+    def test_unrelated_plural_predicate_keeps_calculation_isnull_unsupported(self):
+        from general_manager.api.graphql_query_permissions import (
+            QueryFieldPermissionError,
+        )
+        from general_manager.bucket.calculation_bucket import (
+            FrozenCalculationLookupError,
+        )
+
+        parent = self.parent("parent")
+        self.child(parent)
+        parent_type = self.Parent
+
+        class NullCalculation(GeneralManager):
+            class Interface(CalculationInterface):
+                entry = Input(int)
+                related = Input(parent_type, required=False)
+                parent = Input(parent_type)
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
+        rows = [
+            NullCalculation(entry=1, related=parent, parent=parent),
+            NullCalculation(entry=2, related=None, parent=parent),
+        ]
+        source = MaterializedBucket(NullCalculation, rows)
+        resolver = create_list_resolver(lambda *_: source, NullCalculation)
+        relation = next(
+            metadata.get("filter_lookup", name)
+            for name, metadata in self.Parent.Interface.get_attribute_types().items()
+            if metadata.get("relation_kind") == "collection"
+        )
+        for value in (False, True, "not-a-boolean"):
+            for plural in (False, True):
+                with self.subTest(value=value, plural=plural):
+                    criteria = {"related__isnull": value}
+                    if plural:
+                        criteria["parent__" + relation + "__a"] = 1
+                    # The frozen calculation grammar rejects relation-level
+                    # isnull; selecting the generic witness route must not
+                    # turn that unsupported suffix into a new operator.
+                    error = (
+                        QueryFieldPermissionError
+                        if plural
+                        else FrozenCalculationLookupError
+                    )
+                    with self.assertRaisesRegex(error, "isnull"):
+                        resolver(None, self.info, filter=criteria)
+
+    def test_generic_relation_keeps_a_real_child_field_named_isnull(self):
+        parent = self.parent("parent")
+        self.child(parent)
+        parent_type = self.Parent
+
+        class IsnullSubject(GeneralManager):
+            class Interface(CalculationInterface):
+                entry = Input(int)
+                isnull = Input(bool)
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
+        class IsnullOwner(GeneralManager):
+            class Interface(CalculationInterface):
+                entry = Input(int)
+                subject = Input(IsnullSubject, required=False)
+                parent = Input(parent_type)
+
+            class Permission(OverrideManagerPermission):
+                __read__: ClassVar[list[str]] = ["public"]
+
+        rows = [
+            IsnullOwner(
+                entry=1, subject=IsnullSubject(entry=1, isnull=True), parent=parent
+            ),
+            IsnullOwner(
+                entry=2, subject=IsnullSubject(entry=2, isnull=False), parent=parent
+            ),
+            IsnullOwner(entry=3, subject=None, parent=parent),
+        ]
+        source = MaterializedBucket(IsnullOwner, rows)
+        resolver = create_list_resolver(lambda *_: source, IsnullOwner)
+        relation = next(
+            metadata.get("filter_lookup", name)
+            for name, metadata in self.Parent.Interface.get_attribute_types().items()
+            if metadata.get("relation_kind") == "collection"
+        )
+        for key, expected, entries in (
+            ("subject__isnull", True, [1]),
+            ("subject__isnull", False, [2]),
+            ("subject__isnull__exact", True, [1]),
+        ):
+            with self.subTest(key=key, expected=expected):
+                result = resolver(
+                    None,
+                    self.info,
+                    filter={key: expected, "parent__" + relation + "__a": 1},
+                )
+                assert [row.entry for row in result["items"]] == entries
