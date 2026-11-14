@@ -192,11 +192,14 @@ paths, or other internal details.
 ### Query operands and search projections
 
 Filtering, exclusions, ordering and full-text matching can expose values without
-selecting their output fields. GraphQL therefore checks their field permissions
-against the entire row-authorized candidate set **before** applying these
-operations. Conditional field permissions use the same instance permission
-checks as output fields. If any candidate denies an operand, the query fails;
-it does not silently remove that candidate or check only matching results.
+selecting their output fields. GraphQL checks their field permissions over the
+row-authorized candidate domain before applying ordering and other deferred
+operations. On ordinary native database lists, filters and exclusions proven
+unrestricted may first narrow that domain; otherwise operand checks precede
+filtering across the row-visible source. Conditional field permissions use the
+same instance permission checks as output fields. If any candidate in the
+applicable domain denies an operand, the query fails rather than silently
+removing that candidate.
 Relation paths require permission on the relation and on the related row and
 field. Relation-ID aliases also check the canonical relation permission.
 
@@ -211,9 +214,9 @@ relation types alone are not sufficient proof. Restrictive delegated fields and
 custom target policies still consume the budget. To avoid invoking potentially
 stateful alias metadata twice, this proof checks all captured field declarations
 on each delegated policy; an unrelated restrictive field may therefore be
-conservatively budgeted too. **Every
-runtime field check still runs**, including checks on nonmatching and off-page
-rows. Related-row checks also remain in place. Policy inspection uses the actual
+conservatively budgeted too. Runtime field checks still run across the resulting
+domain, including off-page rows. When the safe native filter proof fails, this includes nonmatching rows.
+Related-row checks also remain in place. Policy inspection uses the actual
 instance's Permission class at each visit; it does not reuse user/object results
 or Permission instances between field checks. This permits ordinary large lists
 without relaxing denials or increasing the additional-policy budget.

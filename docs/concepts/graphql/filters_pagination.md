@@ -38,8 +38,11 @@ Nested relation filters are normalized before they reach the bucket. Relation
 dictionary key named `none` at any depth under `exclude`, including a top-level
 `none` key, raises
 `UnsupportedExcludeNoneRelationFilterError` because the resolver cannot invert
-that relation shape safely. For non-calculation, non-request lists, permission filters and
-any required per-instance row gate run before user filters. Calculation lists
+that relation shape safely. For ordinary database lists, a static proof can
+allow all normalized filters and exclusions to narrow the native bucket before
+row and operand authorization. When any predicate cannot be proved safe, row
+and operand authorization runs first across the row-visible source, before user
+filters are applied. Calculation lists
 first apply only proven plain constructor-input constraints that need no input
 normalization callback (apart from a native daily date range with identity
 normalization) to restrict their possible candidate domain, then apply permission
@@ -50,29 +53,27 @@ and computed-property predicates run. User input
 filters therefore cannot replace permission constraints and reintroduce
 unauthorized candidates.
 
-Native database lists authorize filter and sort operands across the row-visible
-source before applying those operands or pagination. For ordinary ORM scalar
-fields and foreign-key identity aliases, the resolver prepares field/alias
-structure and additional-rule accounting lazily once per authorization call.
-This standard path treats schema definitions and declarative permission rules
-(including their dictionaries and lists) as unchanged during that call. A new
-call reads the definitions again. Mutating those definitions from a permission
-callback is outside this static contract.
+Native filter pushdown applies only when every filter and exclusion operand
+is proven to have no additional field-read restriction. Relation paths also
+require unrestricted traversed fields and an unconditional row-read plan for
+each traversed target. Canonical relation and ID aliases share the field rule.
+An unrelated field restriction does not by itself prevent pushdown. The proof
+assumes permission declarations stay stable during the query; custom providers,
+custom hydration and unknown or object-dependent policies use the conservative
+path. Nullable relations and exclusions retain SQL semantics.
 
-Preparation stores no user/object decision and reuses no Permission instance.
-Every runtime field check and callback still executes, including repeated
-operands, nonmatching candidates and rows outside the requested page. A later
-denial or exception retains its existing effect. Custom metadata providers,
-dynamic descriptors, executable/delegated Permission implementations, custom
-rule-container subclasses and direct settings-backed policies use the general
-path, as do properties, ambiguous aliases and multi-step relationships. The
-eligibility probe does not execute these custom providers. Search, request and
-calculation paths retain their existing behavior.
+After any safe narrowing, row authorization and query-field checks still run on
+the remaining candidate domain. Sorting and pagination do not narrow that domain
+before operand checks. On the conservative path, checks include nonmatching and
+off-page row-visible candidates; a denied operand fails the query. Static
+preparation stores no user or object permission decision. See the
+[security guide](security.md#query-operands-and-search-projections) and
+[API reference](../../api/graphql.md#native-filter-pushdown-and-field-permissions).
 
-The resolver parses and normalizes all query arguments before authorization. For
-non-calculation, non-request lists, permission prefilters and the row gate run first, then
-normalized positive filter predicates, explicit excludes, and the accumulated
-relation-derived exclusions from both inputs. Calculation lists have an early
+The resolver parses and normalizes query arguments before authorization. The
+native early phase moves the complete filter and exclusion plan together; if
+its proof fails, normalized filters and exclusions run after authorization.
+Calculation lists have an early
 plain-constructor phase (including proven native daily date ranges) before authorization, followed by remaining
 declared-input predicates and then deferred computed-property predicates on the
 frozen, authorized rows. Grouping, sorting, total-count calculation, and pagination
