@@ -49,6 +49,12 @@ lookups, plus `sort()` by one or more declared fields. Bucket results are
 manager instances identified by the configured key, not copies of workbook
 rows.
 
+When a custom Excel interface marks a scalar attribute as a GraphQL ID with
+`is_identifier=True`, list filters and exclusions convert equality and
+membership operands to the declared `int`, `str`, or `UUID` type. An integer
+reference retains its full precision, and a text key such as `00017` retains
+its leading zeros.
+
 ## Writes and authority
 
 `create`, `update`, and `delete` write through to Excel and then refresh the
