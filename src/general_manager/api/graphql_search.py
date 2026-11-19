@@ -107,6 +107,10 @@ SEARCH_SOURCE_AUTHORIZATION_LIMIT_ERROR = (
 )
 SEARCH_TOTAL_MODE_ERROR = "must be one of: exact, bounded."
 _MALFORMED_NATIVE_ID = object()
+# Schema filter signatures reuse the same bound converters.
+_EXCEL_IDENTIFIER_INPUTS: dict[type, Input[Any]] = {
+    native_type: Input(native_type) for native_type in (int, str, UUID)
+}
 
 _SEARCH_SCAN_LIMIT_EXCEEDED = (
     "Exact search total cannot be established within the server scan limit; "
@@ -1028,7 +1032,8 @@ def normalize_id_filter_value(
     ``to_python`` conversion, including ``to_field`` references. Ordered lookups
     and non-list/tuple ``in`` values pass through unchanged. Declared native
     properties use their validated annotation and the standard Input cast;
-    collection operands retain the backend's existing element comparisons.
+    Excel identifiers without a constructor input use the declared scalar type.
+    Collection operands retain the backend's existing element comparisons.
     Equality lists retain production adapters' OR grammar. Constructor and
     write validation remain separate. Null operands and elements remain null.
 
@@ -1125,6 +1130,12 @@ def _identity_filter_converter(
             converter = target_field.to_python
     if input_field is not None:
         converter = input_field.cast
+    elif converter is None and getattr(interface, "_interface_type", None) == "excel":
+        native_type = metadata.get("type")
+        if isinstance(native_type, type):
+            excel_input = _EXCEL_IDENTIFIER_INPUTS.get(native_type)
+            if excel_input is not None:
+                return excel_input.cast
     return converter
 
 

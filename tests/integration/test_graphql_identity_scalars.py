@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from typing import ClassVar
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from typing import ClassVar
 from uuid import UUID, uuid4
 
 import graphene
@@ -9,16 +11,22 @@ from django.contrib.auth import get_user_model
 from django.db import models
 from django.test import override_settings
 from graphql import Undefined, get_named_type
+from openpyxl import Workbook
 
 from general_manager.api.graphql import GraphQL
 from general_manager.api.graphql_search import normalize_filter_input
 from general_manager.interface import (
     CalculationInterface,
     DatabaseInterface,
+    ExcelInterface,
     RequestInterface,
 )
+from general_manager.interface.base_interface import (
+    AttributeTypedDict,
+    InvalidInputConstraintError,
+)
+from general_manager.interface.excel import ExcelCharField, ExcelIntegerField
 from general_manager.interface.requests import RequestField, RequestQueryOperation
-from general_manager.interface.base_interface import InvalidInputConstraintError
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
 from general_manager.permission import ManagerBasedPermission
@@ -32,6 +40,80 @@ class IdentityPublicPermission(ManagerBasedPermission):
     __create__: ClassVar[list[str]] = ["public"]
     __update__: ClassVar[list[str]] = ["public"]
     __delete__: ClassVar[list[str]] = ["public"]
+
+
+class GraphQLExcelIdentityIntegrationTests(GeneralManagerTransactionTestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        directory = TemporaryDirectory()
+        cls.addClassCleanup(directory.cleanup)
+        workbook_path = Path(directory.name) / "identifiers.xlsx"
+        workbook = Workbook()
+        worksheet = workbook.active
+        assert worksheet is not None
+        worksheet.append(["sku", "reference"])
+        worksheet.append(["00017", "9007199254741009"])
+        worksheet.append(["00018", "9007199254741010"])
+        workbook.save(workbook_path)
+
+        class TypedExcelRecord(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                reference = ExcelIntegerField()
+
+                class Meta:
+                    workbook = str(workbook_path)
+                    sheet = "Sheet"
+                    header_row = 1
+                    key = "sku"
+
+                @classmethod
+                def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
+                    attributes = super().get_attribute_types()
+                    attributes["sku"]["is_identifier"] = True
+                    attributes["reference"]["is_identifier"] = True
+                    return attributes
+
+            Permission = IdentityPublicPermission
+
+        cls.general_manager_classes = [TypedExcelRecord]
+
+    def test_list_filters_use_the_declared_excel_identifier_type(self) -> None:
+        reference = "9007199254741009"
+        response = self.query(
+            """
+            query ($reference: ID!, $references: [ID!]!, $sku: ID!) {
+              exact: typedExcelRecordList(filter: {reference_Exact: $reference}) {
+                items { sku reference }
+              }
+              members: typedExcelRecordList(filter: {reference_In: $references}) {
+                items { sku reference }
+              }
+              excluded: typedExcelRecordList(exclude: {reference_In: $references}) {
+                items { sku }
+              }
+              textKey: typedExcelRecordList(filter: {sku_Exact: $sku}) {
+                items { sku }
+              }
+            }
+            """,
+            variables={
+                "reference": reference,
+                "references": [reference],
+                "sku": "00017",
+            },
+        )
+        self.assertResponseNoErrors(response)
+        match = {"items": [{"sku": "00017", "reference": reference}]}
+        self.assertEqual(
+            response.json()["data"],
+            {
+                "exact": match,
+                "members": match,
+                "excluded": {"items": [{"sku": "00018"}]},
+                "textKey": {"items": [{"sku": "00017"}]},
+            },
+        )
 
 
 class GraphQLIdentityScalarIntegrationTests(GeneralManagerTransactionTestCase):
