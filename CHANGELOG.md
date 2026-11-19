@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.91.3 (2026-11-19)
+
+### Bug Fixes
+
+- **graphql**: Normalize typed Excel identifier filters
+  ([`44c40b5`](https://github.com/TimKleindick/general_manager/commit/44c40b5ffb7367c5ba830298e5f4f4ad56b8b62d))
+
+
 ## v0.91.2 (2026-11-14)
 
 ### Bug Fixes
