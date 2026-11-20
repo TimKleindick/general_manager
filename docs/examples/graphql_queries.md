@@ -41,6 +41,38 @@ and scalar or structured input shapes. See the
 [identifier guide](../howto/expose_via_graphql.md#filter-by-identifier)
 for explicit UUID/string input configuration and the full migration steps.
 
+## Filter Excel identifiers
+
+With the `TypedExcelRecord` manager from the [Excel identifier guide](../howto/expose_via_graphql.md#filter-custom-excel-identifiers),
+and workbook rows containing text cells `("00017", "9007199254741009")` and
+`("00018", "9007199254741010")`, query the exposed schema with:
+
+```graphql
+query ExcelIdentifiers($reference: ID!, $references: [ID!]!, $sku: ID!) {
+  exact: typedExcelRecordList(filter: {reference_Exact: $reference}) {
+    items { sku reference }
+  }
+  members: typedExcelRecordList(filter: {reference_In: $references}) {
+    items { sku reference }
+  }
+  excluded: typedExcelRecordList(exclude: {reference_In: $references}) {
+    items { sku }
+  }
+  textKey: typedExcelRecordList(filter: {sku_Exact: $sku}) {
+    items { sku }
+  }
+}
+```
+
+```json
+{"reference": "9007199254741009", "references": ["9007199254741009"], "sku": "00017"}
+```
+
+The first, second, and fourth selections match `00017`; the exclusion returns
+`00018`. The reference is compared as an integer and the SKU as a string.
+Keep both variables as strings so client-side number conversion cannot lose
+precision or leading zeros.
+
 ## Project native identities
 
 Using the `Record` declaration from the
