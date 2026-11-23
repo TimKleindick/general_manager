@@ -78,7 +78,10 @@ def collect_excel_operand_rows(
     """Refresh once, then retain only exact authorized rows in that generation."""
     from filelock import Timeout
 
-    from general_manager.interface.excel import ExcelStructureError
+    from general_manager.interface.excel import (
+        ExcelStructureError,
+        ExcelWriteConflictError,
+    )
     from general_manager.interface.excel_store import DEFAULT_EXCEL_STORE
 
     try:
@@ -109,8 +112,9 @@ def collect_excel_operand_rows(
                     return None
                 index[id(manager)] = snapshot
             return index
-    except (ExcelStructureError, OSError, Timeout):
-        # Ordinary getters remain solely responsible for error presentation.
+    except (ExcelStructureError, ExcelWriteConflictError, OSError, Timeout):
+        # Ordinary getters own retry and error presentation. This refresh is
+        # optional; it does not replace or swallow the ordinary read's error.
         return None
 
 

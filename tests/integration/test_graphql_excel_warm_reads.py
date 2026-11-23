@@ -70,11 +70,20 @@ def workbook_case(
 def test_warm_filter_sort_and_paging_do_not_hash_workbook_per_row(
     workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
 ) -> None:
-    warm_schema, _, _ = workbook_case
+    warm_schema, workbook_path, _ = workbook_case
+    original_read_bytes = Path.read_bytes
+    workbook_reads = 0
+
+    def count_workbook_read(path: Path) -> bytes:
+        nonlocal workbook_reads
+        if path == workbook_path:
+            workbook_reads += 1
+        return original_read_bytes(path)
+
     with (
         patch.object(
-            excel_sync, "workbook_fingerprint", wraps=excel_sync.workbook_fingerprint
-        ) as fingerprint,
+            Path, "read_bytes", autospec=True, side_effect=count_workbook_read
+        ),
         patch.object(ExcelWorkbookAdapter, "read_rows", autospec=True) as parse,
     ):
         result = graphql_sync(
@@ -102,7 +111,7 @@ def test_warm_filter_sort_and_paging_do_not_hash_workbook_per_row(
         }
     }
     parse.assert_not_called()
-    assert fingerprint.call_count <= 12
+    assert 0 < workbook_reads <= 12
 
 
 @pytest.mark.parametrize("workbook_rows", [16])
@@ -461,3 +470,27 @@ def test_excel_operand_budget_preserves_field_policy(
     }
     assert checked == [f"{index:04d}" for index in range(16)]
     assert extra_accounting == []
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_optional_operand_refresh_conflict_is_a_snapshot_miss(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    from general_manager.interface.excel import ExcelWriteConflictError
+    from general_manager.interface.excel_workbook import workbook_fingerprint
+
+    _, path, manager = workbook_case
+    interface = manager.Interface
+    source = interface.excel_meta
+    fingerprint = workbook_fingerprint(str(path))
+    with patch.object(
+        interface,
+        "sync_from_excel",
+        side_effect=ExcelWriteConflictError.workbook_changed("read"),
+    ):
+        assert (
+            _excel_query_snapshot.collect_excel_operand_rows(
+                interface, [], source, fingerprint, frozenset({"name"})
+            )
+            is None
+        )
