@@ -62,8 +62,9 @@ one fresh workbook generation after row and operand authorization. The operation
 keeps the exact authorized manager instances and the ordinary comparison rules.
 Custom permission callbacks continue to run, and an edit that changes the
 generation while selecting rows sends the operation through ordinary reads.
-Fields selected for output, grouping, related operands, explicit sync, and
-write-conflict checks do not use this temporary snapshot.
+This specific operand shortcut does not apply to selected output fields,
+grouping, related operands, explicit sync, or write-conflict checks. A query
+may separately use a workbook-wide read snapshot as described below.
 
 Custom read capabilities are not opted in automatically. An
 `ExcelReadCapability` subclass may explicitly declare
@@ -76,6 +77,37 @@ direct scalar fields with stable metadata and getters that return precisely
 the same value from that mirror and perform no per-read validation, external
 effects, or reentrant operations. Never use this snapshot to perform a sync
 or write.
+
+## Reuse the workbook during a read
+
+GraphQL query operations use a coherent raw workbook snapshot. The first
+read checks the workbook contents and keeps an already parsed version if the
+fingerprint matches. Subsequent reads within that operation use the same raw
+rows, including permission checks and selected fields. No permission decisions
+or caller-specific results are shared by the workbook mirror. A new operation
+checks the source again; an ordinary filesystem cannot provide a current
+content hash without reading the bytes. An external edit during a read is
+visible to the next operation. Explicit sync and write conflict checks still
+use authoritative workbook reads.
+
+For a single read-only export or equivalent non-GraphQL operation:
+
+```python
+from general_manager.interface.capabilities.excel import ExcelReadCapability
+
+with ExcelReadCapability.read_snapshot_scope():
+    export_rows = [(row.code, row.name) for row in Product.all()]
+```
+
+Custom Excel readers may explicitly declare `query_read_snapshots = True` when
+their ordinary reads use identical mirror rows, and they require no extra
+per-read validation, side effects or reentrant reads. Call
+`get_query_read_snapshot(interface_instance)` before the normal read path;
+on a hit keep the same observation and defensive-copy behavior. A miss runs
+the ordinary read. A custom sync that delegates to `ExcelSyncCapability` may
+use `workbook_read_fingerprint` in its normal, non-forced freshness comparison
+to share this check with the base implementation. Keep using
+`workbook_fingerprint` for parser/preflight, force and write conflict checks.
 
 ## Writes and authority
 

@@ -46,6 +46,9 @@ from general_manager.cache.run_context import (
     _RunCacheEntry,
 )
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
+from general_manager.interface._excel_read_scope import (
+    constrain_excel_dependency_generation,
+)
 from general_manager.logging import get_logger
 from general_manager.utils._make_cache_key import make_cache_key
 
@@ -596,6 +599,9 @@ def cached(
                 _reject_awaitable_cache_result(result)
                 assert capture.snapshot is not None
                 dependencies = DependencyTracker._materialize_snapshot(capture.snapshot)
+                started_generation = constrain_excel_dependency_generation(
+                    started_generation
+                )
 
                 def record_many(
                     entries: Iterable[tuple[str, Iterable[Dependency]]],

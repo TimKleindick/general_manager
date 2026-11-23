@@ -85,6 +85,17 @@ def workbook_fingerprint(path: str) -> WorkbookFingerprint:
     return WorkbookFingerprint(stat.st_mtime_ns, stat.st_size, digest)
 
 
+def workbook_read_fingerprint(path: str) -> WorkbookFingerprint:
+    """Check contents for the normal, non-forced comparison during Excel sync.
+
+    The sync chain may share this observation in a logical read. Continue using
+    `workbook_fingerprint` for forced sync, parsing, preflight and writes.
+    """
+    from general_manager.interface._excel_read_scope import read_scope_fingerprint
+
+    return read_scope_fingerprint(path, workbook_fingerprint)
+
+
 def _translate_formula(formula: str, *, origin: str, target: str) -> str:
     """Translate a formula, replacing references moved out of bounds with #REF!."""
     translator = Translator(formula, origin=origin)

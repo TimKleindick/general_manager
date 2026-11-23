@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterable, Mapping
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from general_manager.bucket.base_bucket import Bucket, GeneralManagerType
 from general_manager.bucket._ordering import normalize_ordering, sort_items
 from general_manager.cache.cache_tracker import DependencyTracker
 from general_manager.cache.dependency_index import serialize_dependency_identifier
 from general_manager.cache.dependency_matching import lookup_spec_from_key
+from general_manager.interface._excel_read_scope import read_generation
 from general_manager.interface.excel import ExcelMeta
 from general_manager.interface.excel_store import DEFAULT_EXCEL_STORE
 from general_manager.utils.filter_parser import create_filter_function
+
+if TYPE_CHECKING:
+    from general_manager.interface.excel import ExcelRowSnapshot
+    from general_manager.interface.interfaces.excel import ExcelInterface
 
 SUPPORTED_EXCEL_LOOKUPS = frozenset(
     {
@@ -338,11 +343,17 @@ class ExcelBucket(Bucket[GeneralManagerType]):
     def _matching_rows(self) -> list[Any]:
         self._validate_constraints()
         self._track_dependencies()
-        self._interface_cls.sync_from_excel()
-        mirror = DEFAULT_EXCEL_STORE.mirror_for(cast(type, self._interface_cls))
-        rows = list(mirror.rows.values())
+        interface = cast("type[ExcelInterface]", self._interface_cls)
+        generation = read_generation(interface)
+        snapshots: Mapping[Any, ExcelRowSnapshot]
+        if generation is None:
+            self._interface_cls.sync_from_excel()
+            snapshots = DEFAULT_EXCEL_STORE.mirror_for(interface).rows
+        else:
+            snapshots = generation.rows
+        rows = list(snapshots.values())
         if self._keys is not None:
-            rows = [mirror.rows[key] for key in self._keys if key in mirror.rows]
+            rows = [snapshots[key] for key in self._keys if key in snapshots]
         for group in self._filter_groups:
             matchers = tuple(
                 create_filter_function(lookup, expected) for lookup, expected in group
