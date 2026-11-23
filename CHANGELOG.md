@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.92.0 (2026-11-23)
+
+### Features
+
+- Support upload tokens in custom GraphQL mutations
+  ([`168ad72`](https://github.com/TimKleindick/general_manager/commit/168ad72a452ed0da85dae4b4e820c7d56090e825))
+
+
 ## v0.91.3 (2026-11-19)
 
 ### Bug Fixes
