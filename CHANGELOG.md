@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.92.1 (2026-11-23)
+
+### Bug Fixes
+
+- Preserve Excel query plans and refresh fallback
+  ([`983b955`](https://github.com/TimKleindick/general_manager/commit/983b95580f793eb3df8aeeb0f9b1326dd1962771))
+
+- Restore warm Excel GraphQL list performance
+  ([`cc45135`](https://github.com/TimKleindick/general_manager/commit/cc451350fca4d04fc1c5f252157dc24cc1c82edc))
+
+
 ## v0.92.0 (2026-11-23)
 
 ### Features
