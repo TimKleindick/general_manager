@@ -366,6 +366,10 @@
       "general_manager.uploads.errors",
       "UploadObjectMissingError"
     ],
+    "UploadOperation": [
+      "general_manager.uploads.types",
+      "UploadOperation"
+    ],
     "UploadOperationInvalidError": [
       "general_manager.uploads.errors",
       "UploadOperationInvalidError"
@@ -433,6 +437,10 @@
     "graph_ql_property": [
       "general_manager.api.property",
       "graph_ql_property"
+    ],
+    "preflight_upload_tokens": [
+      "general_manager.uploads.services",
+      "preflight_upload_tokens"
     ],
     "register_upload_adapter": [
       "general_manager.uploads.public",

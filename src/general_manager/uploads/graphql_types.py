@@ -88,7 +88,7 @@ class _EmptyUploadTokenError(ValueError):
 
 
 class UploadToken(Scalar):
-    """Opaque, non-empty upload token accepted by generated mutations."""
+    """Opaque upload token accepted by generated and opted-in custom mutations."""
 
     @staticmethod
     def serialize(value: object) -> str:

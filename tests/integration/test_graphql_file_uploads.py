@@ -23,12 +23,14 @@ from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 from django.test import override_settings
+from graphql import GraphQLResolveInfo
 
 from general_manager import api
 from general_manager.api.graphql import GraphQL
 from general_manager.interface import DatabaseInterface
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.manager.input import Input
+from general_manager.permission.mutation_permission import MutationPermission
 from general_manager.uploads.adapters import (
     ExactPublicDownloadAdapter,
     ProxyUploadAdapter,
@@ -286,8 +288,61 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
                     ),
                 }
 
+        class CustomUploadProfile(GeneralManager):
+            __graphql_mutations__: ClassVar[frozenset[str]] = frozenset()
+
+            class Interface(DatabaseInterface):
+                title = CharField(max_length=100)
+                document = FileField(
+                    storage=cls.storage,
+                    upload_to="custom-documents/",
+                    blank=True,
+                )
+
+        class AuthenticatedUpload(MutationPermission):
+            __mutate__: ClassVar[list[str]] = ["isAuthenticated"]
+
+        @api.graph_ql_mutation(AuthenticatedUpload)
+        def register_upload_profile(
+            info: GraphQLResolveInfo, title: str, attachment: api.UploadToken
+        ) -> bool:
+            user = info.context.user
+            values: dict[str, object] = {"document": attachment}
+            api.preflight_upload_tokens(
+                user=user,
+                manager_class=CustomUploadProfile,
+                operation=api.UploadOperation.CREATE,
+                target_id=None,
+                file_field_names=("document",),
+                values=values,
+            )
+            CustomUploadProfile.create(creator_id=user.pk, title=title, **values)
+            return True
+
+        @api.graph_ql_mutation(AuthenticatedUpload)
+        def replace_profile_attachment(
+            info: GraphQLResolveInfo,
+            profile_id: str,
+            attachment: api.UploadToken | None = None,
+        ) -> bool:
+            if attachment is None:
+                return False
+            user = info.context.user
+            values: dict[str, object] = {"document": attachment}
+            api.preflight_upload_tokens(
+                user=user,
+                manager_class=CustomUploadProfile,
+                operation=api.UploadOperation.UPDATE,
+                target_id=profile_id,
+                file_field_names=("document",),
+                values=values,
+            )
+            CustomUploadProfile(int(profile_id)).update(creator_id=user.pk, **values)
+            return True
+
         cls.UploadProfile = UploadProfile
-        cls.general_manager_classes = [UploadProfile]
+        cls.CustomUploadProfile = CustomUploadProfile
+        cls.general_manager_classes = [UploadProfile, CustomUploadProfile]
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -403,6 +458,122 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
             **headers,
         )
         self.assertEqual(response.status_code, 204, response.content)
+
+    def test_custom_mutation_consumes_bound_token_when_generated_crud_is_off(
+        self,
+    ) -> None:
+        mutation_fields = GraphQL.get_schema().graphql_schema.mutation_type.fields
+        assert "beginFileUpload" in mutation_fields
+        assert "createCustomUploadProfile" not in mutation_fields
+        args = mutation_fields["registerUploadProfile"].args
+        assert str(args["title"].type) == "String!"
+        assert str(args["attachment"].type) == "UploadToken!"
+
+        body = b"custom mutation upload fixture"
+        begun = self._begin(
+            manager="CustomUploadProfile",
+            field="document",
+            filename="custom.txt",
+            body=body,
+            content_type="text/plain",
+        )
+        self._transfer(begun, body, content_type="text/plain")
+        mutation = """
+            mutation Register($file: UploadToken!) {
+                registerUploadProfile(title: "Custom upload", attachment: $file) {
+                    success
+                }
+            }
+        """
+        variables = {"file": begun["token"]}
+        model = self.CustomUploadProfile.Interface._model
+
+        self.client.logout()
+        not_authenticated = self.query(mutation, variables=variables).json()
+        assert not_authenticated["errors"]
+        assert begun["token"] not in str(not_authenticated)
+        assert not model.objects.exists()
+
+        other = get_user_model().objects.create_user(username="other-custom-uploader")
+        self.client.force_login(other)
+        rejected = self.query(mutation, variables=variables).json()
+        assert rejected["errors"][0]["extensions"]["code"] == "UPLOAD_TOKEN_INVALID"
+        assert begun["token"] not in str(rejected)
+        assert not model.objects.exists()
+
+        self.client.force_login(self.user)
+        raw_key = self.query(
+            mutation, variables={"file": "custom-documents/not-a-token.txt"}
+        ).json()
+        assert raw_key["errors"][0]["extensions"]["code"] == "UPLOAD_TOKEN_INVALID"
+        assert not model.objects.exists()
+
+        response = self.query(mutation, variables=variables)
+        self.assertResponseNoErrors(response)
+        assert response.json()["data"]["registerUploadProfile"]["success"] is True
+        intent = UploadIntent.objects.get(original_filename="custom.txt")
+        assert intent.state == UploadIntentState.CONSUMED.value
+        row = model.objects.get()
+        assert row.document.name == intent.final_key
+        assert row.document.name != begun["token"]
+        with row.document.open("rb") as stored:
+            assert stored.read() == body
+
+        replay = self.query(mutation, variables=variables).json()
+        assert replay["errors"][0]["extensions"]["code"] == "UPLOAD_ALREADY_CONSUMED"
+        assert model.objects.count() == 1
+
+    def test_custom_update_binds_optional_token_to_existing_record(self) -> None:
+        mutation_fields = GraphQL.get_schema().graphql_schema.mutation_type.fields
+        assert "updateCustomUploadProfile" not in mutation_fields
+        assert (
+            str(mutation_fields["replaceProfileAttachment"].args["attachment"].type)
+            == "UploadToken"
+        )
+
+        target = self.CustomUploadProfile.create(
+            creator_id=self.user.pk, title="Target"
+        )
+        other = self.CustomUploadProfile.create(creator_id=self.user.pk, title="Other")
+        body = b"replacement fixture"
+        begun = self._begin(
+            manager="CustomUploadProfile",
+            field="document",
+            filename="replacement.txt",
+            body=body,
+            content_type="text/plain",
+            operation="UPDATE",
+            object_id=str(target.id),
+        )
+        self._transfer(begun, body, content_type="text/plain")
+        mutation = """
+            mutation Replace($id: String!, $file: UploadToken) {
+                replaceProfileAttachment(profileId: $id, attachment: $file) {
+                    bool
+                }
+            }
+        """
+        rejected = self.query(
+            mutation, variables={"id": str(other.id), "file": begun["token"]}
+        ).json()
+        assert rejected["errors"][0]["extensions"]["code"] == "UPLOAD_BINDING_MISMATCH"
+        intent = UploadIntent.objects.get(original_filename="replacement.txt")
+        assert intent.state == UploadIntentState.UPLOADED.value
+
+        response = self.query(
+            mutation, variables={"id": str(target.id), "file": begun["token"]}
+        )
+        self.assertResponseNoErrors(response)
+        assert response.json()["data"]["replaceProfileAttachment"]["bool"] is True
+        intent.refresh_from_db()
+        assert intent.state == UploadIntentState.CONSUMED.value
+
+        omitted = self.query(mutation, variables={"id": str(target.id)})
+        self.assertResponseNoErrors(omitted)
+        assert omitted.json()["data"]["replaceProfileAttachment"]["bool"] is False
+        model = self.CustomUploadProfile.Interface._model
+        assert model.objects.get(pk=target.id).document.name == intent.final_key
+        assert not model.objects.get(pk=other.id).document
 
     def _create_with_file_constructor_input(self, value, *, user=None):
         """Exercise the generated schema with an optional ORM constructor input."""

@@ -38,6 +38,7 @@ from general_manager.api.graphql_output import (
 from general_manager.api.graphql_type import GraphQLType, get_registered_graphql_types
 from general_manager.manager.general_manager import GeneralManager
 from general_manager.measurement.measurement import Measurement
+from general_manager.uploads.graphql_types import UploadToken
 
 from general_manager.utils.format_string import snake_to_camel
 from general_manager.utils.type_checks import safe_issubclass
@@ -312,6 +313,8 @@ def _mutation_input_type(annotation: object) -> object:
     if safe_issubclass(concrete, GraphQLType):
         declaration = cast(type[GraphQLType], concrete)
         return lambda: _get_or_create_value_input_type(declaration)
+    if concrete is UploadToken:
+        return UploadToken
     return GraphQL._map_field_to_graphene_base_type(cast(type, concrete))
 
 
@@ -582,6 +585,9 @@ def graph_ql_mutation(
     Python values and passed to the dataclass constructor. Manager references
     inside the input use the same normalization as direct manager arguments.
     Conversion completes before permission checks and resolver calls.
+    An ``UploadToken`` argument uses the file-upload scalar. It reaches the
+    resolver as a string, not a verified file. Explicitly bind and preflight
+    it before passing the result to a manager write.
     Other supported Python annotations are mapped through
     ``GraphQL._map_field_to_graphene_base_type``.
 

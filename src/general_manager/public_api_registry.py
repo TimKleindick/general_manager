@@ -226,6 +226,11 @@ API_EXPORTS: LazyExportMap = {
     "ClaimedObject": ("general_manager.uploads.adapters", "ClaimedObject"),
     "ObjectVersion": ("general_manager.uploads.types", "ObjectVersion"),
     "UploadTransport": ("general_manager.uploads.types", "UploadTransport"),
+    "UploadOperation": ("general_manager.uploads.types", "UploadOperation"),
+    "preflight_upload_tokens": (
+        "general_manager.uploads.services",
+        "preflight_upload_tokens",
+    ),
     "StoredFileStatus": ("general_manager.uploads.types", "StoredFileStatus"),
     "UploadToken": ("general_manager.uploads.graphql_types", "UploadToken"),
     "StoredFile": ("general_manager.uploads.graphql_types", "StoredFile"),
