@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.92.3 (2026-11-23)
+
+### Bug Fixes
+
+- Isolate stock Excel read values from workbook snapshots
+  ([`a600ce5`](https://github.com/TimKleindick/general_manager/commit/a600ce5ea14ec54d74ae8f324e4422b61998148c))
+
+
 ## v0.92.2 (2026-11-23)
 
 ### Bug Fixes
