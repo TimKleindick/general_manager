@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.92.2 (2026-11-23)
+
+### Bug Fixes
+
+- Keep shared calculations coherent with Excel read snapshots
+  ([`578e84f`](https://github.com/TimKleindick/general_manager/commit/578e84f93ff0558d3b474eda9ba07bb6dfd78a08))
+
+- Reuse verified Excel mirrors throughout read operations
+  ([`2960d55`](https://github.com/TimKleindick/general_manager/commit/2960d559115ea7c1e7730912bcd72526f3ab370c))
+
+- Validate retained calculations against pinned workbook reads
+  ([`21fb8a1`](https://github.com/TimKleindick/general_manager/commit/21fb8a13f72918f19d4987f488a9f1dd5ac80d1a))
+
+
 ## v0.92.1 (2026-11-23)
 
 ### Bug Fixes
