@@ -1354,3 +1354,155 @@ class ExcelMutationTests(TempPathMixin, SimpleTestCase):
         self.assertEqual(product_workbook_key_count(path, "SKU-1"), 0)
         self.assertNotIn(1, DEFAULT_EXCEL_STORE.mirror_for(Product.Interface).rows)
         self.assertEqual(Product.all().count(), 0)
+
+
+class ExcelPublicReadOwnershipTests(TempPathMixin, SimpleTestCase):
+    def test_structured_fields_and_full_rows_do_not_alias_the_mirror(self) -> None:
+        import json
+        from typing import cast
+
+        from general_manager.interface.capabilities.excel import ExcelReadCapability
+
+        path = self.temp_path("structured.xlsx")
+
+        class Product(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                name = ExcelField(dict, parser=json.loads)
+
+                class Meta:
+                    workbook = str(path)
+                    sheet = "Products"
+                    header_row = 1
+                    key = "sku"
+
+        expected = {"months": [{"name": "January", "quantity": 11}]}
+        write_product_workbook(path, [["SKU-1", json.dumps(expected)]])
+        Product.sync_excel()
+
+        with ExcelReadCapability.read_snapshot_scope():
+            row = Product(sku="SKU-1")
+            attribute_value = row.name
+            self.assertEqual(json.loads(json.dumps(attribute_value)), expected)
+            attribute_value["months"][0]["quantity"] = 99
+            self.assertEqual(row.name, expected)
+
+            interface = row._interface
+            data = cast(dict, interface.get_data())
+            self.assertIs(type(data), dict)
+            data["name"]["months"][0]["quantity"] = 27
+            data["sku"] = "CLIENT-ONLY"
+            self.assertEqual(row.name, expected)
+            self.assertEqual(row.sku, "SKU-1")
+        self.assertEqual(Product(sku="SKU-1").name, expected)
+
+    def test_scalar_accessor_does_not_copy_the_entire_warm_row(self) -> None:
+        from general_manager.interface.capabilities.excel import ExcelReadCapability
+        from general_manager.interface.excel import ExcelRowSnapshot
+
+        path = self.temp_path("warm-scalar.xlsx")
+        write_product_workbook(path, [["SKU-1", "Plain value"]])
+        Product = build_product_manager(path)
+        Product.sync_excel()
+        mirror = DEFAULT_EXCEL_STORE.mirror_for(Product.Interface)
+        snapshot = mirror.rows["SKU-1"]
+        full_copies = 0
+
+        class TrackedValues(dict):
+            def __iter__(self):
+                return super().__iter__()
+
+            def keys(self):
+                nonlocal full_copies
+                full_copies += 1
+                return super().keys()
+
+        mirror.rows["SKU-1"] = ExcelRowSnapshot(
+            snapshot.key, TrackedValues(snapshot.values), snapshot.fingerprint
+        )
+        with ExcelReadCapability.read_snapshot_scope():
+            row = Product(sku="SKU-1")
+            self.assertEqual(row.name, "Plain value")
+            self.assertEqual(row.sku, "SKU-1")
+        self.assertEqual(full_copies, 0)
+
+    def test_stock_field_reader_respects_custom_interface_get_data(self) -> None:
+        from typing import cast
+
+        path = self.temp_path("custom-reader.xlsx")
+
+        class Product(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                name = ExcelCharField()
+
+                class Meta:
+                    workbook = str(path)
+                    sheet = "Products"
+                    header_row = 1
+                    key = "sku"
+
+                def get_data(self) -> object:
+                    values = cast(dict, super().get_data())
+                    values["name"] = f"Custom: {values['name']}"
+                    return values
+
+        write_product_workbook(path, [["SKU-1", "Plain value"]])
+        self.assertEqual(Product(sku="SKU-1").name, "Custom: Plain value")
+
+    def test_stock_generation_owns_nested_parser_values_once(self) -> None:
+        from general_manager.interface.excel_store import ExcelWorkbookStore
+
+        path = self.temp_path("owned-parser.xlsx")
+        source = {"months": [{"quantity": 11}]}
+
+        class Product(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                name = ExcelField(dict, parser=lambda _: source)
+
+                class Meta:
+                    workbook = str(path)
+                    sheet = "Products"
+                    header_row = 1
+                    key = "sku"
+
+        write_product_workbook(path, [["SKU-1", "parsed"]])
+        Product.sync_excel()
+        source["months"][0]["quantity"] = 99
+
+        expected = {"months": [{"quantity": 11}]}
+        self.assertEqual(Product(sku="SKU-1").name, expected)
+        # LocMem serializes cache entries, like a shared backend. A different
+        # worker's mirror can hydrate the same nested shape after publication.
+        hydrated = ExcelWorkbookStore().mirror_for(Product.Interface)
+        self.assertEqual(hydrated.rows["SKU-1"].values["name"], expected)
+
+    def test_managed_write_replaces_nested_value_in_scope(self) -> None:
+        import json
+
+        from general_manager.interface.capabilities.excel import ExcelReadCapability
+
+        path = self.temp_path("nested-write.xlsx")
+
+        class Product(GeneralManager):
+            class Interface(ExcelInterface):
+                sku = ExcelCharField(unique=True)
+                name = ExcelField(dict, parser=json.loads, dumper=json.dumps)
+
+                class Meta:
+                    workbook = str(path)
+                    sheet = "Products"
+                    header_row = 1
+                    key = "sku"
+
+        old = {"months": [{"quantity": 11}]}
+        new = {"months": [{"quantity": 44}]}
+        write_product_workbook(path, [["SKU-1", json.dumps(old)]])
+        with ExcelReadCapability.read_snapshot_scope():
+            row = Product(sku="SKU-1")
+            detached = row.name
+            detached["months"].clear()
+            row.update(name=json.dumps(new), ignore_permission=True)
+            self.assertEqual(Product(sku="SKU-1").name, new)
+        self.assertEqual(json.loads(read_product_workbook(path)[0]["name"]), new)

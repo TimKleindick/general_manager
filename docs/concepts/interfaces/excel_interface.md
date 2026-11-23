@@ -109,6 +109,22 @@ use `workbook_read_fingerprint` in its normal, non-forced freshness comparison
 to share this check with the base implementation. Keep using
 `workbook_fingerprint` for parser/preflight, force and write conflict checks.
 
+### Scope of ownership
+
+The stock reader keeps the parsed generation separate from caller-owned
+results. A normal field access reads only that field: stock immutable scalar
+values are reused, and a mutable result (for example, a nested list or
+dictionary from a custom cell parser) is detached before being returned.
+This keeps ordinary Python and JSON value types unchanged. An explicit
+`get_data()` still returns a mutable dictionary, with mutable values detached
+from the cached row.
+
+The optional snapshot helpers for custom readers are lower-level: they borrow
+the cache-owned row, not a copy or a recursively immutable object. Never modify
+that row or any nested object in it. Return detached copies of mutable values,
+or arrange for your parser to produce immutable values you can safely reuse.
+Custom readers and interface dispatch overrides retain their own read behavior.
+
 ## Writes and authority
 
 `create`, `update`, and `delete` write through to Excel and then refresh the
