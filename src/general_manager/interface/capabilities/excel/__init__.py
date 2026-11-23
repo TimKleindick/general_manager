@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.core.checks import Warning
@@ -16,6 +17,13 @@ from general_manager.cache.dependency_index import (
     invalidate_manager_cache_for_value_changes,
     invalidate_manager_cache,
     record_invalidated_cache_keys_for_graphql_rewarm,
+)
+from general_manager.interface._excel_read_scope import (
+    discard_read_generation,
+    read_generation,
+    read_scope_fingerprint,
+    read_snapshot_scope,
+    remember_read_generation,
 )
 from general_manager.interface.capabilities.base import CapabilityName
 from general_manager.interface.capabilities.builtin import BaseCapability
@@ -55,6 +63,29 @@ EXCEL_SYSTEM_CHECK_ID = "general_manager.excel.W001"
 class ExcelReadCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "read"
     query_operand_snapshot_fields: ClassVar[frozenset[str]] = frozenset()
+    query_read_snapshots: ClassVar[bool] = False
+
+    @staticmethod
+    def read_snapshot_scope() -> AbstractContextManager[None]:
+        """Open a coherent read-only scope, without caching authorization."""
+        return read_snapshot_scope()
+
+    @staticmethod
+    def get_query_read_snapshot(
+        interface_instance: "ExcelInterface",
+    ) -> ExcelRowSnapshot | None:
+        """Get the row from a scoped raw generation, if this reader supports it.
+
+        Opt-in readers must use the same mirror rows, retain defensive copying
+        and observation, and must not require validation/effects for every field.
+        A miss must use the normal read path. Never use this to make write choices.
+        """
+        generation = read_generation(type(interface_instance))
+        if generation is None:
+            return None
+        return generation.rows.get(
+            interface_instance.identification[generation.source.key]
+        )
 
     @staticmethod
     def get_query_operand_snapshot(
@@ -70,6 +101,12 @@ class ExcelReadCapability(BaseCapability):
     def get_data(self, interface_instance: "ExcelInterface") -> dict[str, Any]:
         """Return the mirrored Excel row for an interface instance."""
         snapshot = self.get_query_operand_snapshot(interface_instance)
+        if snapshot is None:
+            try:
+                snapshot = self.get_query_read_snapshot(interface_instance)
+            except ExcelStructureError:
+                # Use the ordinary reader's existing last-good-row behavior.
+                pass
         if snapshot is not None:
             _set_observed_snapshot(interface_instance, snapshot)
             return dict(snapshot.values)
@@ -196,6 +233,8 @@ class ExcelSyncCapability(BaseCapability):
         force: bool = False,
     ) -> ExcelSyncDelta:
         """Refresh the shared mirror and invalidate dependencies for changes."""
+        if force:
+            discard_read_generation(interface_cls.excel_meta.workbook)
         lock = DEFAULT_EXCEL_STORE.lock_for(interface_cls.excel_meta.workbook)
         with lock:
             adapter = ExcelWorkbookAdapter(interface_cls.excel_meta)
@@ -208,9 +247,14 @@ class ExcelSyncCapability(BaseCapability):
                 if (
                     not force
                     and mirror.fingerprint
-                    == workbook_fingerprint(interface_cls.excel_meta.workbook)
+                    == read_scope_fingerprint(
+                        interface_cls.excel_meta.workbook, workbook_fingerprint
+                    )
                     and mirror.structure_error is None
                 ):
+                    remember_read_generation(
+                        interface_cls, mirror.rows, mirror.fingerprint
+                    )
                     return ExcelSyncDelta(created=(), updated=(), deleted=())
                 rows = adapter.read_rows()
                 _validate_declared_read_headers(interface_cls, rows.headers)
@@ -265,6 +309,8 @@ class ExcelSyncCapability(BaseCapability):
                 _enqueue_graphql_rewarm_for_invalidated_keys(
                     drain_invalidated_cache_keys_for_graphql_rewarm()
                 )
+            if not force:
+                remember_read_generation(interface_cls, mirror.rows, mirror.fingerprint)
             return delta
 
     def validate_workbook_structure(

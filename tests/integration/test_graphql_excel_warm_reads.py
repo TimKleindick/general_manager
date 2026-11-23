@@ -494,3 +494,264 @@ def test_optional_operand_refresh_conflict_is_a_snapshot_miss(
             )
             is None
         )
+
+
+@pytest.mark.parametrize("workbook_rows", [160])
+def test_full_excel_pages_reuse_raw_generation_without_rehashing_each_output(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    schema, workbook_path, _ = workbook_case
+    original_read_bytes = Path.read_bytes
+    workbook_reads = 0
+
+    def count_workbook_read(path: Path) -> bytes:
+        nonlocal workbook_reads
+        if path == workbook_path:
+            workbook_reads += 1
+        return original_read_bytes(path)
+
+    query = """
+        { warmExcelProjectList(
+            filter: {groupNumber_Exact: 2} page: 1 pageSize: 100
+          ) {
+            items { code name groupNumber }
+            pageInfo { totalCount }
+          }
+        }
+    """
+    with (
+        patch.object(
+            Path, "read_bytes", autospec=True, side_effect=count_workbook_read
+        ),
+        patch.object(ExcelWorkbookAdapter, "read_rows", autospec=True) as parse,
+    ):
+        for index in (1, 2):
+            with excel_sync.ExcelReadCapability.read_snapshot_scope():
+                result = graphql_sync(
+                    schema, query, context_value=SimpleNamespace(user=AnonymousUser())
+                )
+            assert result.errors is None
+            assert result.data == {
+                "warmExcelProjectList": {
+                    "items": [
+                        {
+                            "code": f"{row:04d}",
+                            "name": f"Project {row:04d}",
+                            "groupNumber": 2,
+                        }
+                        for row in range(3, 103)
+                    ],
+                    "pageInfo": {"totalCount": 157},
+                }
+            }
+            assert workbook_reads == index
+    parse.assert_not_called()
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_scope_detects_content_change_at_same_size_and_mtime(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    import os
+    from zipfile import ZIP_STORED, ZipFile
+
+    _, path, manager = workbook_case
+
+    def stored_workbook(name: bytes) -> bytes:
+        from io import BytesIO
+
+        result = BytesIO()
+        with ZipFile(path) as source, ZipFile(result, "w", ZIP_STORED) as target:
+            for entry in source.namelist():
+                payload = source.read(entry)
+                if entry == "xl/worksheets/sheet1.xml":
+                    assert b"Project 0000" in payload
+                    payload = payload.replace(b"Project 0000", name)
+                target.writestr(entry, payload)
+        return result.getvalue()
+
+    first = stored_workbook(b"Project 0000")
+    second = stored_workbook(b"Renamed 0000")
+    assert len(first) == len(second)
+    path.write_bytes(first)
+    stamp = path.stat()
+    with excel_sync.ExcelReadCapability.read_snapshot_scope():
+        assert manager(code="0000").name == "Project 0000"
+        path.write_bytes(second)
+        os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        assert manager(code="0000").name == "Project 0000"
+    with excel_sync.ExcelReadCapability.read_snapshot_scope():
+        assert manager(code="0000").name == "Renamed 0000"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_managed_write_invalidates_scoped_raw_generation(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    _, _, manager = workbook_case
+    with excel_sync.ExcelReadCapability.read_snapshot_scope():
+        row = manager(code="0000")
+        assert row.name == "Project 0000"
+        with excel_sync.ExcelReadCapability.read_snapshot_scope():
+            row.update(name="Changed by GM", ignore_permission=True)
+            assert manager(code="0000").name == "Changed by GM"
+        assert manager(code="0000").name == "Changed by GM"
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_failed_structure_refresh_keeps_stock_detail_behavior(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    from openpyxl import load_workbook
+
+    _, path, manager = workbook_case
+    workbook = load_workbook(path)
+    workbook["Projects"]["A1"] = "bad_header"
+    workbook.save(path)
+    workbook.close()
+
+    # Stock detail has always retained the last good raw row; bucket refresh
+    # must still report invalid source structure instead of pinning stale data.
+    with excel_sync.ExcelReadCapability.read_snapshot_scope():
+        assert manager(code="0000").name == "Project 0000"
+        with pytest.raises(excel_sync.ExcelStructureError):
+            list(manager.all())
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_opt_in_reader_and_sync_share_one_verified_observation(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    from general_manager.interface.excel_workbook import workbook_read_fingerprint
+
+    _, path, manager = workbook_case
+    calls = 0
+    original = Path.read_bytes
+
+    def count_read(file: Path) -> bytes:
+        nonlocal calls
+        if file == path:
+            calls += 1
+        return original(file)
+
+    class CustomReader(excel_sync.ExcelReadCapability):
+        query_read_snapshots: ClassVar[bool] = True
+
+        def get_data(self, interface_instance):
+            row = self.get_query_read_snapshot(interface_instance)
+            if row is None:
+                return super().get_data(interface_instance)
+            interface_instance._excel_observed_snapshot = row
+            return dict(row.values)
+
+    class CustomSync(excel_sync.ExcelSyncCapability):
+        def sync_from_excel(self, interface_cls, *, force=False):
+            if not force:
+                workbook_read_fingerprint(interface_cls.excel_meta.workbook)
+            return super().sync_from_excel(interface_cls, force=force)
+
+    with (
+        patch.dict(
+            manager.Interface._capability_handlers,
+            {"read": CustomReader(), "excel_sync": CustomSync()},
+        ),
+        patch.object(Path, "read_bytes", autospec=True, side_effect=count_read),
+        excel_sync.ExcelReadCapability.read_snapshot_scope(),
+    ):
+        rows = list(manager.filter(group_number=1))
+        assert [row.name for row in rows] == [f"Project 000{i}" for i in range(3)]
+        assert calls == 1
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_snapshot_read_runs_field_permissions_for_each_actor(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    schema, _, _ = workbook_case
+    original_permission = graphql_resolvers.check_read_permission
+    query = """
+        { warmExcelProjectList(
+            filter: {groupNumber_Exact: 1} orderBy: [{field: name, direction: ASC}]
+          ) {
+            items { code name }
+            pageInfo { totalCount }
+          }
+        }
+    """
+
+    def permission(instance, info, name, **kwargs):
+        if name == "name" and instance.identification["code"] != info.context.allowed:
+            return False
+        return original_permission(instance, info, name, **kwargs)
+
+    with patch.object(graphql_resolvers, "check_read_permission", permission):
+        for allowed in ("0000", "0001", "0000"):
+            with excel_sync.ExcelReadCapability.read_snapshot_scope():
+                result = graphql_sync(
+                    schema,
+                    query,
+                    context_value=SimpleNamespace(
+                        user=AnonymousUser(), allowed=allowed
+                    ),
+                )
+            assert result.errors is None
+            assert result.data == {
+                "warmExcelProjectList": {
+                    "items": [{"code": allowed, "name": f"Project {allowed}"}],
+                    "pageInfo": {"totalCount": 1},
+                }
+            }
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_graphql_query_scope_survives_async_view_completion(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    from graphql import ExecutionResult
+
+    from general_manager.api.graphql_view import GeneralManagerGraphQLView
+
+    _, path, manager = workbook_case
+    view = GeneralManagerGraphQLView(schema=GraphQL.get_schema())
+    original = Path.read_bytes
+    reads = 0
+
+    def count_read(file: Path) -> bytes:
+        nonlocal reads
+        if file == path:
+            reads += 1
+        return original(file)
+
+    async def run_query() -> ExecutionResult:
+        return ExecutionResult(data={"name": manager(code="0000").name})
+
+    def execute_query(*_args: object) -> object:
+        assert manager(code="0000").name == "Project 0000"
+        return run_query()
+
+    with (
+        patch.object(view, "execute_graphql_request", side_effect=execute_query),
+        patch.object(Path, "read_bytes", autospec=True, side_effect=count_read),
+    ):
+        result = view._execute_and_complete(
+            object(), {}, "{ warmExcelProjectList { items { name } } }", {}, None, False
+        )
+    assert result is not None and result.data == {"name": "Project 0000"}
+    assert reads == 1
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_custom_sync_dispatch_is_not_implicitly_opted_in(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    _, _, manager = workbook_case
+    original = manager.Interface.sync_from_excel
+    with (
+        patch.object(manager.Interface, "sync_from_excel", wraps=original) as sync,
+        excel_sync.ExcelReadCapability.read_snapshot_scope(),
+    ):
+        row = manager(code="0000")
+        assert row.name == "Project 0000"
+        assert row.group_number == 1
+        assert sync.call_count == 2

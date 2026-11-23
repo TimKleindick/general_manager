@@ -65,9 +65,13 @@ class ExcelInterface(InterfaceBase):
         self._excel_observed_snapshot = self._initial_excel_observed_snapshot()
 
     def _initial_excel_observed_snapshot(self) -> ExcelRowSnapshot | None:
+        from general_manager.interface._excel_read_scope import peek_read_generation
         from general_manager.interface.excel_store import DEFAULT_EXCEL_STORE
 
         key = self.identification[self.excel_meta.key]
+        generation = peek_read_generation(type(self))
+        if generation is not None:
+            return generation.rows.get(key)
         lock = DEFAULT_EXCEL_STORE.lock_for(self.excel_meta.workbook)
         with lock:
             mirror = DEFAULT_EXCEL_STORE.mirror_for(type(self))

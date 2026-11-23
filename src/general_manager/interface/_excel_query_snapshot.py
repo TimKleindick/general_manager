@@ -78,6 +78,7 @@ def collect_excel_operand_rows(
     """Refresh once, then retain only exact authorized rows in that generation."""
     from filelock import Timeout
 
+    from general_manager.interface._excel_read_scope import peek_read_generation
     from general_manager.interface.excel import (
         ExcelStructureError,
         ExcelWriteConflictError,
@@ -85,37 +86,48 @@ def collect_excel_operand_rows(
     from general_manager.interface.excel_store import DEFAULT_EXCEL_STORE
 
     try:
-        # Respect the installed sync's ordering/locking contract. Do not nest a
-        # custom sync under a lock not owned by that implementation.
-        interface.sync_from_excel()
-        with DEFAULT_EXCEL_STORE.lock_for(source.workbook):
-            if interface.excel_meta is not source:
+        generation = peek_read_generation(interface)
+        if generation is not None:
+            if generation.source is not source or generation.fingerprint != fingerprint:
                 return None
-            mirror = DEFAULT_EXCEL_STORE.mirror_for(interface)
-            if mirror.structure_error is not None or mirror.fingerprint != fingerprint:
-                return None
-            rows = mirror.rows
-            index = {}
-            for manager in instances:
-                instance = manager._interface
-                if type(instance) is not interface:
+            rows = generation.rows
+        else:
+            # Respect the installed sync's ordering/locking contract. Do not nest
+            # custom sync under a lock not owned by that implementation.
+            interface.sync_from_excel()
+            with DEFAULT_EXCEL_STORE.lock_for(source.workbook):
+                if interface.excel_meta is not source:
                     return None
-                key = instance.identification[interface.excel_meta.key]
-                if key not in rows:
-                    return None
-                snapshot = rows[key]
-                if any(
-                    field not in snapshot.values
-                    or id(type(snapshot.values[field])) not in _PASSIVE_VALUES
-                    for field in fields
+                mirror = DEFAULT_EXCEL_STORE.mirror_for(interface)
+                if (
+                    mirror.structure_error is not None
+                    or mirror.fingerprint != fingerprint
                 ):
                     return None
-                index[id(manager)] = snapshot
-            return index
+                rows = mirror.rows
+
+        index = {}
+        for manager in instances:
+            instance = manager._interface
+            if type(instance) is not interface:
+                return None
+            key = instance.identification[interface.excel_meta.key]
+            if key not in rows:
+                return None
+            snapshot = rows[key]
+            if any(
+                field not in snapshot.values
+                or id(type(snapshot.values[field])) not in _PASSIVE_VALUES
+                for field in fields
+            ):
+                return None
+            index[id(manager)] = snapshot
     except (ExcelStructureError, ExcelWriteConflictError, OSError, Timeout):
         # Ordinary getters own retry and error presentation. This refresh is
         # optional; it does not replace or swallow the ordinary read's error.
         return None
+    else:
+        return index
 
 
 _PASSIVE_VALUES = frozenset(map(id, (str, int, bool, float, type(None))))
@@ -125,8 +137,12 @@ def excel_operand_revision_is_current(
     interface: type[ExcelInterface], source: ExcelMeta, fingerprint: WorkbookFingerprint
 ) -> bool:
     """Detect external edits during local predicate execution before using it."""
+    from general_manager.interface._excel_read_scope import peek_read_generation
     from general_manager.interface.excel_workbook import workbook_fingerprint
 
+    generation = peek_read_generation(interface)
+    if generation is not None:
+        return generation.source is source and generation.fingerprint == fingerprint
     try:
         return (
             interface.excel_meta is source

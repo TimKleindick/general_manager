@@ -80,6 +80,10 @@ else:
     from graphene_django.views import GraphQLView
     from graphene_django.settings import graphene_settings
 
+from general_manager.interface._excel_read_scope import (
+    continue_read_snapshot_scope,
+    read_snapshot_scope,
+)
 from general_manager.cache.run_context import ensure_calculation_run_context
 from general_manager.as_of import HistoricalContextConflictError, as_of
 from general_manager.api.graphql_as_of import extract_as_of_search_date
@@ -115,9 +119,10 @@ class _GraphQLExecutionResult(Protocol):
     def errors(self) -> Sequence[Exception] | None: ...
 
 
-async def _await_execution_result(result: object) -> object:
+async def _await_execution_result(result: object, *, query: bool) -> object:
     """Await an async GraphQL execution while its request contexts are active."""
-    return await result  # type: ignore[misc]
+    with continue_read_snapshot_scope() if query else nullcontext():
+        return await result  # type: ignore[misc]
 
 
 def _close_awaitable(result: object) -> None:
@@ -412,7 +417,8 @@ class GeneralManagerGraphQLView(GraphQLView):
         """Await async queries and reject async mutations before their body runs."""
         if not inspect.isawaitable(execution_result):
             return cast(_GraphQLExecutionResult | None, execution_result)
-        if resolve_operation_type(query, operation_name) == "mutation":
+        operation_type = resolve_operation_type(query, operation_name)
+        if operation_type == "mutation":
             _close_awaitable(execution_result)
             return ExecutionResult(
                 data=None,
@@ -425,7 +431,9 @@ class GeneralManagerGraphQLView(GraphQLView):
             )
         return cast(
             _GraphQLExecutionResult | None,
-            async_to_sync(_await_execution_result)(execution_result),
+            async_to_sync(_await_execution_result)(
+                execution_result, query=operation_type == "query"
+            ),
         )
 
     def _execute_and_complete(
@@ -438,9 +446,8 @@ class GeneralManagerGraphQLView(GraphQLView):
         show_graphiql: bool,
     ) -> _GraphQLExecutionResult | None:
         """Execute with Graphene-compatible atomic mutation ownership."""
-        atomic_mutation = resolve_operation_type(
-            query, operation_name
-        ) == "mutation" and (
+        operation_type = resolve_operation_type(query, operation_name)
+        atomic_mutation = operation_type == "mutation" and (
             graphene_settings.ATOMIC_MUTATIONS is True
             or connection.settings_dict.get("ATOMIC_MUTATIONS", False) is True
         )
@@ -457,12 +464,16 @@ class GeneralManagerGraphQLView(GraphQLView):
             return result, inspect.isawaitable(result)
 
         if not atomic_mutation:
-            result, _is_awaitable = execute()
-            return self._complete_execution_result(
-                result,
-                query=query,
-                operation_name=operation_name,
+            excel_scope = (
+                read_snapshot_scope() if operation_type == "query" else nullcontext()
             )
+            with excel_scope:
+                result, _is_awaitable = execute()
+                return self._complete_execution_result(
+                    result,
+                    query=query,
+                    operation_name=operation_name,
+                )
 
         database_alias = connection.alias
         # Graphene retains its own inner atomic block. ``savepoint=False`` avoids
