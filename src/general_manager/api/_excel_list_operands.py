@@ -61,22 +61,25 @@ def _passive_expected(value: object) -> bool:
     return False
 
 
-def _passive_operand_paths(
-    plan: QueryParameterPlan, ordering: tuple[SortTerm, ...]
-) -> set[str] | None:
-    """Return the operand names only when comparison options are passive."""
-    paths: set[str] = set()
+def _copy_eligible_plan(plan: QueryParameterPlan) -> QueryParameterPlan | None:
+    """Own the approved plain options before application callbacks run."""
+    from general_manager.api.graphql_resolvers import QueryParameterPlan
+
+    copied: list[dict[str, object]] = []
     for predicates in (plan.filters, plan.excludes, plan.normalized_excludes):
-        # A revision mismatch can repeat the pure selection through ordinary
-        # getters. A custom normalizer's executable values must run only there.
-        if type(predicates) is not dict or not all(
-            type(path) is str and _passive_expected(value)
-            for path, value in predicates.items()
-        ):
+        # The selection can be retried through regular getters. Arbitrary
+        # comparison behavior stays on the ordinary path and is not copied.
+        if type(predicates) is not dict:
             return None
-        paths.update(predicates)
-    paths.update(term.field for term in ordering)
-    return paths
+        owned: dict[str, object] = {}
+        for path, value in predicates.copy().items():
+            if type(value) is list or type(value) is set:
+                value = value.copy()
+            if type(path) is not str or not _passive_expected(value):
+                return None
+            owned[path] = value
+        copied.append(owned)
+    return QueryParameterPlan(*copied)
 
 
 def apply_excel_list_operands(
@@ -91,7 +94,15 @@ def apply_excel_list_operands(
     from general_manager.api.graphql_contributors import filter_contributors
     from general_manager.api.graphql_resolvers import apply_query_parameter_plan
 
-    paths = _passive_operand_paths(plan, ordering)
+    owned_plan = _copy_eligible_plan(plan)
+    if owned_plan is None:
+        return None
+    paths = (
+        set(owned_plan.filters)
+        | set(owned_plan.excludes)
+        | set(owned_plan.normalized_excludes)
+    )
+    paths.update(term.field for term in ordering)
     if not paths:
         return None
     interface = getattr_static(candidates._manager_class, "Interface", None)
@@ -119,7 +130,7 @@ def apply_excel_list_operands(
     )
 
     def apply() -> Bucket[GeneralManager]:
-        filtered = apply_query_parameter_plan(authorized, plan, None)
+        filtered = apply_query_parameter_plan(authorized, owned_plan, None)
         return (
             filtered.sort(*(term.signed_field for term in ordering))
             if ordering
@@ -135,12 +146,10 @@ def apply_excel_list_operands(
     rows = collect_excel_operand_rows(
         interface, authorized, source, fingerprint, operand_fields
     )
-    # An ordinary policy or sync callback can hold and edit a normalizer's
-    # containers, so reattest the same paths and current values after callbacks.
-    if rows is None or _passive_operand_paths(plan, ordering) != paths:
+    if rows is None:
         return apply()
 
-    selected = _apply_snapshot_operands(authorized, plan, ordering, rows)
+    selected = _apply_snapshot_operands(authorized, owned_plan, ordering, rows)
     return (
         selected
         if excel_operand_revision_is_current(interface, source, fingerprint)
