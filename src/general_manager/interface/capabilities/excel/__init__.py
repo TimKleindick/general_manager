@@ -54,9 +54,26 @@ EXCEL_SYSTEM_CHECK_ID = "general_manager.excel.W001"
 
 class ExcelReadCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "read"
+    query_operand_snapshot_fields: ClassVar[frozenset[str]] = frozenset()
+
+    @staticmethod
+    def get_query_operand_snapshot(
+        interface_instance: "ExcelInterface",
+    ) -> ExcelRowSnapshot | None:
+        """Get the temporary snapshot for a single authorized scalar operand."""
+        from general_manager.interface._excel_query_snapshot import (
+            snapshot_for_excel_query_operand,
+        )
+
+        return snapshot_for_excel_query_operand(interface_instance)
 
     def get_data(self, interface_instance: "ExcelInterface") -> dict[str, Any]:
         """Return the mirrored Excel row for an interface instance."""
+        snapshot = self.get_query_operand_snapshot(interface_instance)
+        if snapshot is not None:
+            _set_observed_snapshot(interface_instance, snapshot)
+            return dict(snapshot.values)
+
         interface_cls = type(interface_instance)
         key = interface_instance.identification[interface_cls.excel_meta.key]
         mirror = DEFAULT_EXCEL_STORE.mirror_for(interface_cls)

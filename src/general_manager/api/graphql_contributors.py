@@ -127,9 +127,12 @@ class ContributorAuthorization:
         self,
         info: ResolveInfo,
         calculation_plan: CalculationBucket[GeneralManager] | None = None,
+        *,
+        skip_unbounded_accounting: bool = False,
     ) -> None:
         self.info = info
         self.budget = QueryFieldAuthorizationBudget()
+        self.skip_unbounded_accounting = skip_unbounded_accounting
         self.plans: dict[
             tuple[type[GeneralManager], str], ReadPermissionPlan | None
         ] = {}
@@ -211,6 +214,11 @@ class ContributorAuthorization:
             if plan.decision == "deny_all":
                 return False
         try:
+            if self.skip_unbounded_accounting and self.budget.limit is None:
+                # There is no accounting to enforce. Keep the actual runtime
+                # permission check and its invalidation, without reflecting on
+                # the policy just to decide whether to charge an unlimited budget.
+                return check_read_permission(instance, self.info, name)
 
             def charge() -> None:
                 if charged is None or not charged[0]:
@@ -728,9 +736,12 @@ def filter_contributors(
     paths: Iterable[str],
     *,
     rows_authorized: bool = False,
+    skip_unbounded_accounting: bool = False,
 ) -> Bucket[GeneralManager]:
     """Exclude unavailable scalar/FK contributors without changing search."""
-    authorizer = ContributorAuthorization(info)
+    authorizer = ContributorAuthorization(
+        info, skip_unbounded_accounting=skip_unbounded_accounting
+    )
     paths = tuple(sorted(set(paths)))
     if not paths and rows_authorized:
         return candidates
