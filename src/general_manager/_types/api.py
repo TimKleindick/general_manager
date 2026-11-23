@@ -48,6 +48,7 @@ __all__ = [
     "UploadInstructions",
     "UploadManagerInvalidError",
     "UploadObjectMissingError",
+    "UploadOperation",
     "UploadOperationInvalidError",
     "UploadQuotaExceededError",
     "UploadRateLimitExceededError",
@@ -65,6 +66,7 @@ __all__ = [
     "current_as_of_date",
     "graph_ql_mutation",
     "graph_ql_property",
+    "preflight_upload_tokens",
     "register_upload_adapter",
 ]
 
@@ -113,6 +115,7 @@ from general_manager.uploads.errors import UploadIncompleteError
 from general_manager.uploads.adapters import UploadInstructions
 from general_manager.uploads.errors import UploadManagerInvalidError
 from general_manager.uploads.errors import UploadObjectMissingError
+from general_manager.uploads.types import UploadOperation
 from general_manager.uploads.errors import UploadOperationInvalidError
 from general_manager.uploads.errors import UploadQuotaExceededError
 from general_manager.uploads.errors import UploadRateLimitExceededError
@@ -130,4 +133,5 @@ from general_manager.api.notification_batching import bulk_data_change_notificat
 from general_manager.as_of import current_as_of_date
 from general_manager.api.mutation import graph_ql_mutation
 from general_manager.api.property import graph_ql_property
+from general_manager.uploads.services import preflight_upload_tokens
 from general_manager.uploads.public import register_upload_adapter

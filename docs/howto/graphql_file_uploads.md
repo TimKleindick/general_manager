@@ -157,6 +157,70 @@ For `blank=True`, `avatar: null` clears the field and omitting `avatar` leaves i
 unchanged. For `blank=False`, generated create input is required when the Django
 field has no default and explicit null is rejected.
 
+## Use a token in a custom mutation
+
+Declare the argument as `UploadToken` to use the same GraphQL scalar as
+generated mutations. Clients pass it as a GraphQL variable. The resolver
+receives a string; scalar coercion alone does not verify or consume a token.
+Use `preflight_upload_tokens` before passing a file value to the manager's
+ordinary write method:
+
+```python
+from typing import ClassVar
+
+from graphql import GraphQLResolveInfo
+
+from general_manager.api import (
+    UploadOperation,
+    UploadToken,
+    graph_ql_mutation,
+    preflight_upload_tokens,
+)
+from general_manager.permission.mutation_permission import MutationPermission
+
+
+class CreateProfilePermission(MutationPermission):
+    __mutate__: ClassVar[list[str]] = ["isAuthenticated"]
+
+
+@graph_ql_mutation(CreateProfilePermission)
+def register_profile(
+    info: GraphQLResolveInfo, account_slug: str, attachment: UploadToken
+) -> bool:
+    user = info.context.user
+    values: dict[str, object] = {"resume": attachment}
+    preflight_upload_tokens(
+        user=user,
+        manager_class=Profile,
+        operation=UploadOperation.CREATE,
+        target_id=None,
+        file_field_names=("resume",),
+        values=values,
+    )
+    Profile.create(creator_id=user.pk, account_slug=account_slug, **values)
+    return True
+```
+
+Here the client begins an upload for `Profile.resume` and supplies its token as
+`attachment`. The argument name does not control the destination. The helper
+validates the explicitly selected model field and replaces the token in
+`values` with a verified candidate. Only forward that mapping to the write;
+never pass the raw token to a manager write or log it. A custom mutation's
+permission check runs before its resolver and sees the raw argument, so
+permission code must not include it in logs or errors either. The ordinary
+manager permissions and upload finalization still apply.
+
+For an update, use `UploadOperation.UPDATE` and the ID of the same target
+instance that you will update. An optional annotation (`UploadToken | None`)
+allows omission or null; the custom resolver chooses what those inputs mean.
+To keep an existing file, omit that field from the write mapping. Include
+`None` to clear an optional file field. A resolver that needs both actions
+can expose a separate clear flag.
+
+This flow also works with generated CRUD disabled, as long as file uploads
+are enabled and the manager supports the underlying Python write. Existing
+`str` annotations continue to generate GraphQL `String` arguments.
+
 ## Browser workflow
 
 The following uses Web Crypto for SHA-256 and preserves every script-settable
