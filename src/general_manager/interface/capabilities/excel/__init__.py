@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractContextManager
+from copy import deepcopy
+from datetime import date, timedelta
+from decimal import Decimal
+from types import MethodType
+from uuid import UUID
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.core.checks import Warning
@@ -60,6 +65,37 @@ logger = get_logger("interface.excel")
 EXCEL_SYSTEM_CHECK_ID = "general_manager.excel.W001"
 
 
+_IMMUTABLE_READ_VALUES = frozenset(
+    map(
+        id,
+        (
+            type(None),
+            bool,
+            int,
+            float,
+            complex,
+            str,
+            bytes,
+            Decimal,
+            date,
+            timedelta,
+            UUID,
+        ),
+    )
+)
+
+
+def _detach_value(value: Any, memo: dict[int, Any] | None = None) -> Any:
+    if id(type(value)) in _IMMUTABLE_READ_VALUES:
+        return value
+    return deepcopy(value, memo)
+
+
+def _detach_row(values: Mapping[str, Any]) -> dict[str, Any]:
+    memo: dict[int, Any] = {}
+    return {name: _detach_value(value, memo) for name, value in values.items()}
+
+
 class ExcelReadCapability(BaseCapability):
     name: ClassVar[CapabilityName] = "read"
     query_operand_snapshot_fields: ClassVar[frozenset[str]] = frozenset()
@@ -76,8 +112,9 @@ class ExcelReadCapability(BaseCapability):
     ) -> ExcelRowSnapshot | None:
         """Get the row from a scoped raw generation, if this reader supports it.
 
-        Opt-in readers must use the same mirror rows, retain defensive copying
-        and observation, and must not require validation/effects for every field.
+        This is a borrowed cache-owned row, including nested values. Opt-in
+        readers must not mutate it, must preserve defensive copying and
+        observation, and must not require validation/effects for every field.
         A miss must use the normal read path. Never use this to make write choices.
         """
         generation = read_generation(type(interface_instance))
@@ -91,7 +128,7 @@ class ExcelReadCapability(BaseCapability):
     def get_query_operand_snapshot(
         interface_instance: "ExcelInterface",
     ) -> ExcelRowSnapshot | None:
-        """Get the temporary snapshot for a single authorized scalar operand."""
+        """Borrow the cache-owned row for a single authorized scalar operand."""
         from general_manager.interface._excel_query_snapshot import (
             snapshot_for_excel_query_operand,
         )
@@ -99,7 +136,13 @@ class ExcelReadCapability(BaseCapability):
         return snapshot_for_excel_query_operand(interface_instance)
 
     def get_data(self, interface_instance: "ExcelInterface") -> dict[str, Any]:
-        """Return the mirrored Excel row for an interface instance."""
+        """Return a caller-owned row, including any mutable parsed field values."""
+        snapshot = self._read_row_snapshot(interface_instance)
+        return _detach_row(snapshot.values)
+
+    def _read_row_snapshot(
+        self, interface_instance: "ExcelInterface"
+    ) -> ExcelRowSnapshot:
         snapshot = self.get_query_operand_snapshot(interface_instance)
         if snapshot is None:
             try:
@@ -107,21 +150,49 @@ class ExcelReadCapability(BaseCapability):
             except ExcelStructureError:
                 # Use the ordinary reader's existing last-good-row behavior.
                 pass
-        if snapshot is not None:
-            _set_observed_snapshot(interface_instance, snapshot)
-            return dict(snapshot.values)
-
-        interface_cls = type(interface_instance)
-        key = interface_instance.identification[interface_cls.excel_meta.key]
-        mirror = DEFAULT_EXCEL_STORE.mirror_for(interface_cls)
-        try:
-            interface_cls.sync_from_excel()
-        except ExcelStructureError:
-            if key not in mirror.rows:
-                raise
-        snapshot = mirror.rows[key]
+        if snapshot is None:
+            interface_cls = type(interface_instance)
+            key = interface_instance.identification[interface_cls.excel_meta.key]
+            mirror = DEFAULT_EXCEL_STORE.mirror_for(interface_cls)
+            try:
+                interface_cls.sync_from_excel()
+            except ExcelStructureError:
+                if key not in mirror.rows:
+                    raise
+            snapshot = mirror.rows[key]
         _set_observed_snapshot(interface_instance, snapshot)
-        return dict(snapshot.values)
+        return snapshot
+
+    def _read_declared_field(
+        self, interface_instance: "ExcelInterface", name: str
+    ) -> object:
+        from general_manager.interface.base_interface import InterfaceBase
+
+        get_data = interface_instance.get_data
+        interface_cls = type(interface_instance)
+        if (
+            interface_cls.__getattribute__ is object.__getattribute__
+            and type(get_data) is MethodType
+            and get_data.__func__ is InterfaceBase.get_data
+            and interface_instance._execute_with_observability
+            is InterfaceBase._execute_with_observability
+            and interface_cls._require_capability is InterfaceBase._require_capability
+            and "_require_capability" not in vars(interface_instance)
+            and getattr(interface_cls.get_capability_handler, "__func__", None)
+            is getattr(InterfaceBase.get_capability_handler, "__func__", None)
+            and getattr(interface_cls.require_capability, "__func__", None)
+            is getattr(InterfaceBase.require_capability, "__func__", None)
+            and "get_capability_handler" not in vars(interface_instance)
+            and interface_instance.get_capability_handler("observability") is None
+            and interface_instance._require_capability("read") is self
+            and type(self) is ExcelReadCapability
+            and type(self.get_data) is MethodType
+            and self.get_data.__func__ is _STOCK_GET_DATA
+        ):
+            return _detach_value(
+                self._read_row_snapshot(interface_instance).values[name]
+            )
+        return cast(Mapping[str, object], get_data())[name]
 
     def get_attribute_types(
         self,
@@ -141,6 +212,13 @@ class ExcelReadCapability(BaseCapability):
 
     def get_attributes(self, interface_cls: type["ExcelInterface"]) -> dict[str, Any]:
         """Build lazy attribute readers for the declared Excel fields."""
+        if type(self) is ExcelReadCapability:
+            return {
+                name: lambda interface_instance, name=name: self._read_declared_field(
+                    interface_instance, name
+                )
+                for name in interface_cls.excel_fields
+            }
         return {
             name: lambda interface_instance, name=name: interface_instance.get_data()[
                 name
@@ -155,6 +233,9 @@ class ExcelReadCapability(BaseCapability):
     ) -> type:
         """Return the Python type declared for an Excel field."""
         return interface_cls.excel_fields[field_name].python_type
+
+
+_STOCK_GET_DATA = ExcelReadCapability.get_data
 
 
 class ExcelQueryCapability(BaseCapability):
@@ -334,15 +415,21 @@ class ExcelSyncCapability(BaseCapability):
         records: Iterable[ExcelWorkbookRecord],
     ) -> dict[Any, ExcelRowSnapshot]:
         parsed_rows: dict[Any, ExcelRowSnapshot] = {}
+        stock_reader = (
+            type(interface_cls.get_capability_handler("read")) is ExcelReadCapability
+        )
         for record in records:
             parsed = self._parse_record(interface_cls, record.values)
             key = parsed[interface_cls.excel_meta.key]
             if key in parsed_rows:
                 raise ExcelStructureError.duplicate_key(key)
+            fingerprint = row_fingerprint(parsed)
+            # A custom parser may retain or reuse values it returned.
+            # The packed stock generation must be independent of those aliases.
             parsed_rows[key] = ExcelRowSnapshot(
                 key=key,
-                values=parsed,
-                fingerprint=row_fingerprint(parsed),
+                values=_detach_row(parsed) if stock_reader else parsed,
+                fingerprint=fingerprint,
             )
         return parsed_rows
 
