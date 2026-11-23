@@ -55,6 +55,28 @@ membership operands to the declared `int`, `str`, or `UUID` type. An integer
 reference retains its full precision, and a text key such as `00017` retains
 its leading zeros.
 
+## GraphQL list operands
+
+A flat scalar GraphQL list can evaluate filters, exclusions and ordering using
+one fresh workbook generation after row and operand authorization. The operation
+keeps the exact authorized manager instances and the ordinary comparison rules.
+Custom permission callbacks continue to run, and an edit that changes the
+generation while selecting rows sends the operation through ordinary reads.
+Fields selected for output, grouping, related operands, explicit sync, and
+write-conflict checks do not use this temporary snapshot.
+
+Custom read capabilities are not opted in automatically. An
+`ExcelReadCapability` subclass may explicitly declare
+`query_operand_snapshot_fields = frozenset({...})` and use
+`self.get_query_operand_snapshot(interface_instance)` before its normal
+synchronization. When it returns a row, use that same row as the read
+capability normally would, including observation state and defensive copying.
+When it returns `None`, follow the existing read path. Only opt in for passive,
+direct scalar fields with stable metadata and getters that return precisely
+the same value from that mirror and perform no per-read validation, external
+effects, or reentrant operations. Never use this snapshot to perform a sync
+or write.
+
 ## Writes and authority
 
 `create`, `update`, and `delete` write through to Excel and then refresh the

@@ -1888,6 +1888,7 @@ def create_list_resolver(
         interface = getattr(manager_class, "Interface", None)
         is_request_source = isinstance(base_queryset, RequestBucket)
         remote_ordering_forwarded = False
+        excel_sorted = False
         request_provenance: RequestPaginationProvenance | None = None
         authorization_result: ReadAuthorizationResult[GeneralManager]
         complete_disjunction: ReadAuthorizationPreparation[GeneralManager] | None = None
@@ -2219,12 +2220,27 @@ def create_list_resolver(
                 info,
                 source="list",
             )
-            qs = apply_list_contributors(
-                authorization_result.queryset,
-                info,
-                plan,
-                () if group_by is not None else ordering_paths,
+            from general_manager.api._excel_list_operands import (
+                apply_excel_list_operands,
             )
+
+            excel_result = (
+                apply_excel_list_operands(
+                    authorization_result.queryset, info, plan, ordering_terms
+                )
+                if group_by is None and grouping_validator is None
+                else None
+            )
+            if excel_result is not None:
+                qs = excel_result
+                excel_sorted = True
+            else:
+                qs = apply_list_contributors(
+                    authorization_result.queryset,
+                    info,
+                    plan,
+                    () if group_by is not None else ordering_paths,
+                )
         if group_by is not None:
             from general_manager.api.graphql_contributors import (
                 _has_zero_key_grouping_default,
@@ -2244,7 +2260,9 @@ def create_list_resolver(
         if grouping_validator is not None:
             grouping_validator(qs, group_by, order_by, info)
         qs_grouped = apply_grouping(qs, group_by)
-        effective_ordering = None if remote_ordering_forwarded else order_by
+        effective_ordering = (
+            None if remote_ordering_forwarded or excel_sorted else order_by
+        )
         qs_sorted: Bucket[GeneralManager] | GroupBucket[GeneralManager]
         if isinstance(qs_grouped, GroupBucket):
             if group_sorter is None or group_sorter is apply_grouped_projection_sorting:
