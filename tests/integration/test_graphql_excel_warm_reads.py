@@ -708,6 +708,7 @@ def test_snapshot_read_runs_field_permissions_for_each_actor(
 def test_graphql_query_scope_survives_async_view_completion(
     workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
 ) -> None:
+    from asgiref.sync import sync_to_async
     from graphql import ExecutionResult
 
     from general_manager.api.graphql_view import GeneralManagerGraphQLView
@@ -723,8 +724,13 @@ def test_graphql_query_scope_survives_async_view_completion(
             reads += 1
         return original(file)
 
+    def read_name() -> object:
+        return manager(code="0000").name
+
     async def run_query() -> ExecutionResult:
-        return ExecutionResult(data={"name": manager(code="0000").name})
+        name = manager(code="0000").name
+        callback_name = await sync_to_async(read_name, thread_sensitive=True)()
+        return ExecutionResult(data={"name": name, "callbackName": callback_name})
 
     def execute_query(*_args: object) -> object:
         assert manager(code="0000").name == "Project 0000"
@@ -737,7 +743,10 @@ def test_graphql_query_scope_survives_async_view_completion(
         result = view._execute_and_complete(
             object(), {}, "{ warmExcelProjectList { items { name } } }", {}, None, False
         )
-    assert result is not None and result.data == {"name": "Project 0000"}
+    assert result is not None and result.data == {
+        "name": "Project 0000",
+        "callbackName": "Project 0000",
+    }
     assert reads == 1
 
 
@@ -755,3 +764,148 @@ def test_custom_sync_dispatch_is_not_implicitly_opted_in(
         assert row.name == "Project 0000"
         assert row.group_number == 1
         assert sync.call_count == 2
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_pinned_read_does_not_take_a_newer_shared_derived_value(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    from contextvars import Context
+
+    from openpyxl import load_workbook
+
+    from general_manager.cache.cache_decorator import cached
+
+    _, path, manager = workbook_case
+    calculations = 0
+
+    @cached(cache="dependency")
+    def project_display_name() -> str:
+        nonlocal calculations
+        calculations += 1
+        return str(manager(code="0000").name)
+
+    with excel_sync.ExcelReadCapability.read_snapshot_scope():
+        assert manager(code="0000").name == "Project 0000"
+        assert project_display_name() == "Project 0000"
+        assert project_display_name() == "Project 0000"
+        # Matching generations still use the ordinary shared cache.
+        assert calculations == 1
+
+        def refresh_from_another_read() -> None:
+            workbook = load_workbook(path)
+            workbook["Projects"]["B2"] = "Revised project"
+            workbook.save(path)
+            workbook.close()
+            manager.Interface.sync_from_excel()
+            assert project_display_name() == "Revised project"
+
+        # Separate request context, with the same shared workbook and result caches.
+        Context().run(refresh_from_another_read)
+        assert project_display_name() == "Project 0000"
+
+    assert project_display_name() == "Revised project"
+    assert calculations == 3
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_unrelated_worker_cannot_borrow_read_scope(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+
+    _, path, manager = workbook_case
+    original = Path.read_bytes
+    reads = 0
+
+    def count_read(file: Path) -> bytes:
+        nonlocal reads
+        if file == path:
+            reads += 1
+        return original(file)
+
+    def read_name() -> object:
+        return manager(code="0000").name
+
+    with (
+        patch.object(Path, "read_bytes", autospec=True, side_effect=count_read),
+        excel_sync.ExcelReadCapability.read_snapshot_scope(),
+        ThreadPoolExecutor(max_workers=1) as worker,
+    ):
+        assert read_name() == "Project 0000"
+        assert worker.submit(copy_context().run, read_name).result() == "Project 0000"
+        assert read_name() == "Project 0000"
+        assert reads == 2
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_workbook_io_does_not_hold_operation_state_mutex(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from general_manager.interface._excel_read_scope import _scope
+
+    _, path, manager = workbook_case
+    original = Path.read_bytes
+
+    def read_workbook_bytes(file: Path) -> bytes:
+        if file == path:
+            scope = _scope()
+            assert scope is not None
+
+            def acquire_state() -> bool:
+                acquired = scope.lock.acquire(blocking=False)
+                if acquired:
+                    scope.lock.release()
+                return acquired
+
+            # FileLock is already held here. The operation state lock must not
+            # be held against a force/write arriving in the other view thread.
+            assert worker.submit(acquire_state).result()
+        return original(file)
+
+    with (
+        patch.object(
+            Path, "read_bytes", autospec=True, side_effect=read_workbook_bytes
+        ),
+        ThreadPoolExecutor(max_workers=1) as worker,
+        excel_sync.ExcelReadCapability.read_snapshot_scope(),
+    ):
+        assert manager(code="0000").name == "Project 0000"
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+def test_force_refresh_discards_an_inflight_scope_reservation(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+) -> None:
+    from typing import cast
+
+    from general_manager.interface._excel_read_scope import (
+        peek_read_generation,
+        read_generation,
+    )
+
+    _, path, manager = workbook_case
+    interface = cast(type[ExcelInterface], manager.Interface)
+    original = Path.read_bytes
+    forced = False
+
+    def force_during_first_check(file: Path) -> bytes:
+        nonlocal forced
+        if file == path and not forced:
+            forced = True
+            interface.sync_from_excel(force=True)
+        return original(file)
+
+    with (
+        patch.object(
+            Path, "read_bytes", autospec=True, side_effect=force_during_first_check
+        ),
+        excel_sync.ExcelReadCapability.read_snapshot_scope(),
+    ):
+        assert read_generation(interface) is None
+        assert forced and peek_read_generation(interface) is None
+        # The next read is fresh and can pin normally.
+        assert read_generation(interface) is not None
