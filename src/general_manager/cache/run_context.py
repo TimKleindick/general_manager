@@ -505,6 +505,12 @@ class CalculationRunContext:
             self._touch_run_cache_entry("dependency_hits", key)
         return hit
 
+    def _get_pending_dependency_cache_publication(
+        self, key: str
+    ) -> PendingDependencyCachePublication | None:
+        """Return the same-run pending result, with its epoch and compute lease."""
+        return self._dependency_cache_pending_publications.get(key)
+
     def buffer_dependency_cache_publication(
         self,
         entry: PendingDependencyCachePublication,
