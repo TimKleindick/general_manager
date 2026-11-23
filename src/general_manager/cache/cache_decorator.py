@@ -48,6 +48,7 @@ from general_manager.cache.run_context import (
 from general_manager.cache.model_dependency_collector import ModelDependencyCollector
 from general_manager.interface._excel_read_scope import (
     constrain_excel_dependency_generation,
+    excel_dependency_cache_conflicts,
 )
 from general_manager.logging import get_logger
 from general_manager.utils._make_cache_key import make_cache_key
@@ -506,7 +507,16 @@ def cached(
                 )
                 return result
 
+            def compute_without_shared_cache() -> R:
+                with DependencyTracker._capture() as capture:
+                    result = decorated_func(*args, **kwargs)
+                    _track_model_arguments(args, kwargs, capture)
+                _reject_awaitable_cache_result(result)
+                return result
+
             def return_cached_hit(hit: DependencyCacheHit, message: str) -> R:
+                if excel_dependency_cache_conflicts():
+                    return compute_without_shared_cache()
                 replay_dependency_cache_hit(hit)
                 logger.debug(
                     message,
@@ -530,11 +540,16 @@ def cached(
                     _SENTINEL,
                 )
 
+            def return_prefetched_value(value: object) -> R:
+                if excel_dependency_cache_conflicts():
+                    return compute_without_shared_cache()
+                return cast(R, value)
+
             prefetch_context = current_calculation_run_context()
             if prefetch_context is not None:
                 prefetched_value = prefetched_value_from_context(prefetch_context)
                 if prefetched_value is not _SENTINEL:
-                    return cast(R, prefetched_value)
+                    return return_prefetched_value(prefetched_value)
                 prefetched_hit = prefetch_context.get_dependency_cache_hit(
                     key, _SENTINEL
                 )
@@ -550,7 +565,7 @@ def cached(
                     )
                     prefetched_value = prefetched_value_from_context(prefetch_context)
                     if prefetched_value is not _SENTINEL:
-                        return cast(R, prefetched_value)
+                        return return_prefetched_value(prefetched_value)
                     prefetched_hit = prefetch_context.get_dependency_cache_hit(
                         key, _SENTINEL
                     )
@@ -568,8 +583,12 @@ def cached(
             if isinstance(cached_hit, DependencyCacheHit):
                 return return_cached_hit(cached_hit, "cache hit")
 
+            if excel_dependency_cache_conflicts():
+                return compute_without_shared_cache()
             lease = acquire_compute_lease(key)
             while lease is None:
+                if excel_dependency_cache_conflicts():
+                    return compute_without_shared_cache()
                 cached_hit = wait_for_cached_dependency_hit(
                     cache_backend,
                     key,
@@ -593,6 +612,11 @@ def cached(
                     return return_cached_hit(cached_hit, "cache hit")
 
                 started_generation = get_dependency_generation()
+                if (
+                    constrain_excel_dependency_generation(started_generation)
+                    != started_generation
+                ):
+                    return compute_without_shared_cache()
                 with DependencyTracker._capture() as capture:
                     result = decorated_func(*args, **kwargs)
                     _track_model_arguments(args, kwargs, capture)
