@@ -909,3 +909,75 @@ def test_force_refresh_discards_an_inflight_scope_reservation(
         assert forced and peek_read_generation(interface) is None
         # The next read is fresh and can pin normally.
         assert read_generation(interface) is not None
+
+
+@pytest.mark.parametrize("workbook_rows", [16])
+@pytest.mark.parametrize("retention", ["tracked", "primitive", "pending"])
+def test_retained_calculation_respects_a_newer_excel_read_generation(
+    workbook_case: tuple[GraphQLSchema, Path, type[GeneralManager]],
+    retention: str,
+) -> None:
+    from contextvars import Context
+
+    from django.core.cache import cache
+    from openpyxl import load_workbook
+
+    from general_manager.cache.cache_decorator import (
+        _DEPENDENCY_CACHE_PREFETCH_VALUE_PREFIX,
+        cached,
+        make_cache_key,
+    )
+    from general_manager.cache.dependency_cache import DependencyCacheHit
+    from general_manager.cache.run_context import CalculationRunContext
+
+    _, path, manager = workbook_case
+    calculations = 0
+
+    @cached(cache="dependency")
+    def retained_display_name() -> str:
+        nonlocal calculations
+        calculations += 1
+        return str(manager(code="0000").name)
+
+    def refresh_from_another_read() -> None:
+        workbook = load_workbook(path)
+        workbook["Projects"]["B2"] = "Revised project"
+        workbook.save(path)
+        workbook.close()
+        manager.Interface.sync_from_excel()
+
+    with CalculationRunContext(dependency_cache_publish_batch_size=20) as context:
+        key = make_cache_key(retained_display_name, (), {})
+        if retention == "tracked":
+            context.set_dependency_cache_hits(
+                {
+                    key: DependencyCacheHit(
+                        value="Project 0000", dependencies=frozenset()
+                    )
+                }
+            )
+        elif retention == "primitive":
+            context.set(
+                (_DEPENDENCY_CACHE_PREFETCH_VALUE_PREFIX, id(cache), key),
+                "Project 0000",
+            )
+        else:
+            # A pending result owns its key's compute lease until flush.
+            assert retained_display_name() == "Project 0000"
+            with excel_sync.ExcelReadCapability.read_snapshot_scope():
+                assert manager(code="0000").name == "Project 0000"
+                assert retained_display_name() == "Project 0000"
+            assert calculations == 1
+
+        Context().run(refresh_from_another_read)
+        if retention != "pending":
+            # An ordinary fresh shared value is available despite old run retention.
+            assert Context().run(retained_display_name) == "Revised project"
+
+        with excel_sync.ExcelReadCapability.read_snapshot_scope():
+            assert manager(code="0000").name == "Revised project"
+            assert retained_display_name() == "Revised project"
+
+    assert retained_display_name() == "Revised project"
+    if retention != "pending":
+        assert calculations == 1  # Compatible live shared hit, not a cache bypass.

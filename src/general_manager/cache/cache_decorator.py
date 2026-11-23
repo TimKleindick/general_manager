@@ -14,6 +14,7 @@ from general_manager.cache.cache_tracker import (
 )
 from general_manager.cache.dependency_cache import (
     DependencyCacheHit,
+    _trusted_dependency_cache_hit,
     dependency_cache_prefetch_bundle_key,
     dependency_cache_prefetch_segment_bundle_key,
     dependency_cache_prefetch_segment_index_key,
@@ -49,6 +50,7 @@ from general_manager.cache.model_dependency_collector import ModelDependencyColl
 from general_manager.interface._excel_read_scope import (
     constrain_excel_dependency_generation,
     excel_dependency_cache_conflicts,
+    excel_dependency_generation,
 )
 from general_manager.logging import get_logger
 from general_manager.utils._make_cache_key import make_cache_key
@@ -540,16 +542,32 @@ def cached(
                     _SENTINEL,
                 )
 
-            def return_prefetched_value(value: object) -> R:
-                if excel_dependency_cache_conflicts():
-                    return compute_without_shared_cache()
-                return cast(R, value)
-
             prefetch_context = current_calculation_run_context()
-            if prefetch_context is not None:
+            excel_generation = excel_dependency_generation()
+            if prefetch_context is not None and excel_generation is not None:
+                # An unversioned run-local prefetch can predate the workbook
+                # pin even if the current backend epoch matches the pin. Use
+                # live reads, except for our own stamped pending publication.
+                pending = prefetch_context._get_pending_dependency_cache_publication(
+                    key
+                )
+                if pending is not None:
+                    if pending.started_generation != excel_generation:
+                        # This run already owns the key's lease. Do not wait
+                        # on it or overwrite a publication from another epoch.
+                        return compute_without_shared_cache()
+                    hit = (
+                        _trusted_dependency_cache_hit(
+                            pending.result, pending.dependencies
+                        )
+                        if pending.dependencies_trusted
+                        else DependencyCacheHit(pending.result, pending.dependencies)
+                    )
+                    return return_cached_hit(hit, "cache hit from pending publication")
+            elif prefetch_context is not None:
                 prefetched_value = prefetched_value_from_context(prefetch_context)
                 if prefetched_value is not _SENTINEL:
-                    return return_prefetched_value(prefetched_value)
+                    return cast(R, prefetched_value)
                 prefetched_hit = prefetch_context.get_dependency_cache_hit(
                     key, _SENTINEL
                 )
@@ -565,7 +583,7 @@ def cached(
                     )
                     prefetched_value = prefetched_value_from_context(prefetch_context)
                     if prefetched_value is not _SENTINEL:
-                        return return_prefetched_value(prefetched_value)
+                        return cast(R, prefetched_value)
                     prefetched_hit = prefetch_context.get_dependency_cache_hit(
                         key, _SENTINEL
                     )

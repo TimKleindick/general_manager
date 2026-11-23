@@ -88,10 +88,15 @@ def continue_read_snapshot_scope() -> Iterator[None]:
         scope.continuation_owner = previous
 
 
+def excel_dependency_generation() -> int | None:
+    """Return the dependency epoch established by a scoped workbook read."""
+    scope = _scope()
+    return scope.dependency_generation if scope is not None else None
+
+
 def constrain_excel_dependency_generation(computation_generation: int) -> int:
     """Prevent a derived result from persisting stale pinned workbook inputs."""
-    scope = _scope()
-    generation = scope.dependency_generation if scope is not None else None
+    generation = excel_dependency_generation()
     return (
         computation_generation
         if generation is None
@@ -101,8 +106,7 @@ def constrain_excel_dependency_generation(computation_generation: int) -> int:
 
 def excel_dependency_cache_conflicts() -> bool:
     """Check that a shared-cache hit belongs to the pinned operation's epoch."""
-    scope = _scope()
-    generation = scope.dependency_generation if scope is not None else None
+    generation = excel_dependency_generation()
     if generation is None:
         return False
     from general_manager.cache.dependency_index import get_dependency_generation
