@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.92.4 (2026-11-24)
+
+### Bug Fixes
+
+- Use PascalCase names for custom GraphQL mutation payloads
+  ([`357c4eb`](https://github.com/TimKleindick/general_manager/commit/357c4ebf9df16d9df60d32526d9c21162524c829))
+
+
 ## v0.92.3 (2026-11-23)
 
 ### Bug Fixes
