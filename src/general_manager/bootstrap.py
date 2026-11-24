@@ -41,6 +41,9 @@ from graphql import (
     specified_directives,
 )
 
+from general_manager.api._custom_mutation_payload import (
+    build_schema_with_custom_payload_names,
+)
 from general_manager.api.graphql_as_of import build_as_of_directive
 from general_manager.api.graphql_view import GeneralManagerGraphQLView
 from general_manager.api.graphql import GraphQL
@@ -607,7 +610,9 @@ def handle_graph_ql(
     custom_directives = _get_configured_graphql_directives()
     if custom_directives:
         schema_kwargs["directives"] = _build_schema_directives(custom_directives)
-    schema = graphene.Schema(**schema_kwargs)
+    schema = build_schema_with_custom_payload_names(
+        GraphQL._mutations.values(), **schema_kwargs
+    )
     _attach_as_of_directive(schema)
     from general_manager.api.graphql_units import attach_unit_contracts
 

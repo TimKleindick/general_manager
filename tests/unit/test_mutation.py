@@ -1620,3 +1620,96 @@ def test_mutation_permission_inherits_and_overrides_field_permissions() -> None:
     assert child_permission._MutationPermission__attribute_permissions["field"] == [
         "isAuthenticated"
     ]
+
+
+class CustomMutationPayloadNamingTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        GraphQL.reset_registry()
+        self.addCleanup(GraphQL.reset_registry)
+        self.enterContext(mock.patch("general_manager.bootstrap.add_graphql_url"))
+        self.enterContext(
+            mock.patch("general_manager.uploads.urls.add_file_upload_urls")
+        )
+        GraphQL._query_fields["ping"] = graphene.String()
+
+    def test_payload_type_is_pascalcase_without_changing_root_field(self):
+        from django.test import override_settings
+        from graphql import get_named_type
+
+        from general_manager.bootstrap import handle_graph_ql
+
+        with override_settings(GENERAL_MANAGER={}):
+
+            @graph_ql_mutation
+            def publish_project(value: int) -> int:
+                return value
+
+            @graph_ql_mutation
+            def syncAPI(value: int) -> int:
+                return value
+
+            handle_graph_ql([])
+        schema = GraphQL.get_schema()
+        root = schema.graphql_schema.mutation_type
+        self.assertEqual(
+            get_named_type(root.fields["publishProject"].type).name, "PublishProject"
+        )
+        self.assertEqual(get_named_type(root.fields["syncAPI"].type).name, "SyncAPI")
+        result = schema.execute(
+            """
+            mutation {
+                publishProject(value: 3) { ...Payload }
+            }
+            fragment Payload on PublishProject { __typename int success }
+            """
+        )
+        self.assertIsNone(result.errors)
+        self.assertEqual(
+            result.data,
+            {
+                "publishProject": {
+                    "__typename": "PublishProject",
+                    "int": 3,
+                    "success": True,
+                }
+            },
+        )
+
+    def test_legacy_payload_type_fragment_reports_schema_migration(self):
+        from django.test import override_settings
+
+        from general_manager.bootstrap import handle_graph_ql
+
+        with override_settings(GENERAL_MANAGER={}):
+
+            @graph_ql_mutation
+            def publish_project(value: int) -> int:
+                return value
+
+            handle_graph_ql([])
+        result = GraphQL.get_schema().execute(
+            "mutation { publishProject(value: 3) { ... on publishProject { __typename } } }"
+        )
+        self.assertIsNone(result.data)
+        self.assertIn("Unknown type 'publishProject'", result.errors[0].message)
+
+    def test_rejects_collision_instead_of_binding_the_wrong_payload(self):
+        from django.test import override_settings
+
+        from general_manager.bootstrap import handle_graph_ql
+
+        class PublishProject(graphene.ObjectType):
+            other = graphene.String()
+
+        with override_settings(GENERAL_MANAGER={}):
+
+            @graph_ql_mutation
+            def publish_project(value: int) -> int:
+                return value
+
+            GraphQL.graphql_output_type_registry[PublishProject.__name__] = (
+                PublishProject
+            )
+            with self.assertRaisesRegex((TypeError, ValueError), "PublishProject"):
+                handle_graph_ql([])

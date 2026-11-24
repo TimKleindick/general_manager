@@ -34,10 +34,25 @@ title-cased. In this example, `publish_project` is exposed as `publishProject`.
 The decorated module must be imported before GeneralManager builds the GraphQL
 schema. Define mutations in an application module that Django imports during
 startup, or import that module from your application setup.
-Registration is first-writer-wins for the generated mutation class name: if
+Registration is first-writer-wins for the GraphQL root mutation field: if
 another custom mutation has already registered the same camel-case name, the
 later decorator still returns the original function but leaves the existing
 GraphQL mutation in the registry.
+
+## Payload type names
+
+Custom mutation payloads use PascalCase, just like generated CRUD payloads.
+For example, the root field `publishProject(...)` returns `PublishProject`,
+while `createProject(...)` returns `CreateProject`. Mutation field names,
+arguments, payload fields, resolvers, permissions, and upload-token inputs
+are unaffected by this naming rule.
+
+When upgrading from versions that return `publishProject` as a **type** name,
+change named and inline fragments to use `PublishProject`, regenerate typed
+clients, and update persisted queries and clients that compare `__typename`.
+Ordinary field selections without typed fragments do not need to change.
+If a new PascalCase payload name is already used by another GraphQL type,
+schema startup rejects the collision rather than exposing the wrong type.
 
 ## Resolver contract
 

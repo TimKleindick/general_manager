@@ -565,8 +565,9 @@ def graph_ql_mutation(
     ``graphene.Mutation`` subclass is stored in ``GraphQL._mutations`` under
     the decorated function name converted by ``snake_to_camel``: the first
     underscore-delimited segment is kept unchanged and later segments are
-    title-cased. The original function object is returned so it remains
-    directly callable.
+    title-cased. The payload type capitalizes the first character of that name
+    without changing the registry key or the GraphQL root field. The original
+    function object is returned so it remains directly callable.
 
     The decorated function must provide type hints for all parameters except
     the parameter named ``info``; ``info`` is skipped by name and may appear in
@@ -645,8 +646,8 @@ def graph_ql_mutation(
         sig = inspect.signature(fn)
         hints = get_type_hints(fn)
 
-        # Mutation name in PascalCase
-        mutation_name = snake_to_camel(fn.__name__)
+        mutation_field_name = snake_to_camel(fn.__name__)
+        payload_name = mutation_field_name[:1].upper() + mutation_field_name[1:]
 
         # Build Arguments inner class dynamically
         arg_fields: GrapheneFieldMap = {}
@@ -789,10 +790,11 @@ def graph_ql_mutation(
         class_dict.update(output_resolvers)
 
         # Create Mutation class
-        mutation_class = type(mutation_name, (graphene.Mutation,), class_dict)
+        class_dict["_gm_renamed_custom_payload"] = payload_name != mutation_field_name
+        mutation_class = type(payload_name, (graphene.Mutation,), class_dict)
 
-        if mutation_class.__name__ not in GraphQL._mutations:
-            GraphQL._mutations[mutation_class.__name__] = mutation_class
+        if mutation_field_name not in GraphQL._mutations:
+            GraphQL._mutations[mutation_field_name] = mutation_class
 
         return fn
 
