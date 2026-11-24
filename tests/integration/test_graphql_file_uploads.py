@@ -224,7 +224,7 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
                     "MAX_BEGIN_ATTEMPTS_GLOBAL": 1000,
                     "MAX_TRANSFER_ATTEMPTS_PER_USER": 100,
                     "MAX_TRANSFER_ATTEMPTS_GLOBAL": 1000,
-                }
+                },
             }
         )
         cls._upload_settings_override.enable()
@@ -465,7 +465,10 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
         mutation_fields = GraphQL.get_schema().graphql_schema.mutation_type.fields
         assert "beginFileUpload" in mutation_fields
         assert "createCustomUploadProfile" not in mutation_fields
-        args = mutation_fields["registerUploadProfile"].args
+        register = mutation_fields["registerUploadProfile"]
+        assert str(register.type) == "RegisterUploadProfile"
+        assert str(mutation_fields["createUploadProfile"].type) == "CreateUploadProfile"
+        args = register.args
         assert str(args["title"].type) == "String!"
         assert str(args["attachment"].type) == "UploadToken!"
 
@@ -481,9 +484,10 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
         mutation = """
             mutation Register($file: UploadToken!) {
                 registerUploadProfile(title: "Custom upload", attachment: $file) {
-                    success
+                    ...UploadResult
                 }
             }
+            fragment UploadResult on RegisterUploadProfile { __typename success }
         """
         variables = {"file": begun["token"]}
         model = self.CustomUploadProfile.Interface._model
@@ -510,7 +514,10 @@ class GraphQLFileUploadIntegrationTests(GeneralManagerTransactionTestCase):
 
         response = self.query(mutation, variables=variables)
         self.assertResponseNoErrors(response)
-        assert response.json()["data"]["registerUploadProfile"]["success"] is True
+        assert response.json()["data"]["registerUploadProfile"] == {
+            "__typename": "RegisterUploadProfile",
+            "success": True,
+        }
         intent = UploadIntent.objects.get(original_filename="custom.txt")
         assert intent.state == UploadIntentState.CONSUMED.value
         row = model.objects.get()
