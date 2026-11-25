@@ -930,6 +930,11 @@ The same contract applies to
 generated groups. They include nullable
 `filter` and `exclude` only when a filter input type can be generated for the
 manager, and nullable typed `orderBy` only when sortable fields exist.
+For a database-backed list, pass predicates through the generated filter input.
+Native execution is an optimization and does not bypass row or field permissions.
+See the [native list example](../examples/graphql_queries.md#filter-a-native-list)
+and [filter evaluation order](../concepts/graphql/filters_pagination.md#evaluation-order).
+
 Soft-delete managers also expose nullable `includeInactive`
 on top-level list queries, which defaults to `false` and switches fallback list
 loading from `Manager.all()` to `Manager.filter(include_inactive=True)` when

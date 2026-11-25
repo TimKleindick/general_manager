@@ -140,6 +140,25 @@ server check. Use `types` to select manager classes. Synthetic `type` filter
 keys retain backend matching semantics and are excluded from operand permission
 checks unless the selected manager actually exposes a field named `type`.
 
+## Filter a native list
+
+With a database-backed `Project` exposing a filterable `name` field, use the
+generated filter input:
+
+```graphql
+query ProjectsNamedApollo {
+  projectList(filter: {name: "Apollo"}) {
+    items { id name }
+  }
+}
+```
+
+Database-backed lists can apply safe predicates in SQL. The response includes
+only authorized matches: an unreadable filter operand cannot supply a match,
+and count and pagination use the visible result. See
+[filter evaluation order](../concepts/graphql/filters_pagination.md#evaluation-order)
+for the distinction between ordinary lists and search.
+
 ## Paginated listings
 
 ```graphql
