@@ -490,6 +490,44 @@ structured inputs when the referenced manager has composite constructor
 inputs. Ordered comparisons such as `id_Gt` retain the native scalar and its
 hints, including `BigIntScalar` where configured.
 
+### Filter custom Excel identifiers
+
+For a custom Excel interface, mark the scalar attributes that represent IDs in
+its metadata. For example, with a workbook containing `sku` and `reference`
+columns on `Sheet`:
+
+```python
+from general_manager.interface import ExcelInterface
+from general_manager.interface.base_interface import AttributeTypedDict
+from general_manager.interface.excel import ExcelCharField, ExcelIntegerField
+from general_manager.manager import GeneralManager
+
+
+class TypedExcelRecord(GeneralManager):
+    class Interface(ExcelInterface):
+        sku = ExcelCharField(unique=True)
+        reference = ExcelIntegerField()
+
+        class Meta:
+            workbook = "data/identifiers.xlsx"
+            sheet = "Sheet"
+            header_row = 1
+            key = "sku"
+
+        @classmethod
+        def get_attribute_types(cls) -> dict[str, AttributeTypedDict]:
+            attributes = super().get_attribute_types()
+            attributes["sku"]["is_identifier"] = True
+            attributes["reference"]["is_identifier"] = True
+            return attributes
+```
+
+Expose the manager in the GraphQL schema and configure read permissions as for
+other managers. Equality and membership filters and exclusions use `ID` values;
+without an applicable constructor input, Excel converts them to the declared
+`int`, `str`, or `UUID` type. Keep client values as strings to preserve large
+integers and leading zeros. See the [query recipe](../examples/graphql_queries.md#filter-excel-identifiers).
+
 ### Configure UUID and string primary keys
 
 The GraphQL scalar does not change the Python/database type or configure the
