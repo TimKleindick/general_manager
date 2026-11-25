@@ -1106,9 +1106,11 @@ shapes are returned unchanged.
 For Excel attributes whose metadata declares `is_identifier=True`, an
 applicable constructor input's `cast` takes precedence. Otherwise the declared
 `int`, `str`, or `UUID` type supplies the converter for equality and
-list/tuple membership operands in `filter` and `exclude`. Null values remain
-null; conversion errors propagate. Ordered lookups and non-list/tuple `in`
-operands are unchanged, as are constructor and write validation. GraphQL `ID`
+list/tuple membership operands in `filter` and `exclude`. The standard
+converters preserve null operands and null list elements. A custom constructor
+input's `cast` receives these values and determines how to handle them.
+Conversion errors propagate. Ordered lookups and non-list/tuple `in` operands
+are unchanged, as are constructor and write validation. GraphQL `ID`
 values are returned as strings: preserve them as strings in clients to avoid
 losing integer precision or leading zeros. See the [configuration](../howto/expose_via_graphql.md#filter-custom-excel-identifiers)
 and [query recipe](../examples/graphql_queries.md#filter-excel-identifiers).
