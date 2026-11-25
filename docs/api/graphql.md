@@ -944,10 +944,23 @@ uses null totals until the authorized total is exact.
 import time and returns the original function unchanged. Supported decorator
 forms are bare usage, call usage, positional `MutationPermission`, and
 `permission=...`; if both permission forms are supplied, the positional class is
-used. The generated mutation name is the function name converted by
+used. The root mutation field is the function name converted by
 `snake_to_camel`: the first underscore-delimited segment is kept unchanged and
-later segments are title-cased. Duplicate generated names are first-writer-wins
-in `GraphQL._mutations`.
+later segments are title-cased. Duplicate root field names are first-writer-wins
+in `GraphQL._mutations`. The payload type capitalizes the first character of
+the root field name: `publish_project` produces the field `publishProject` and
+the type `PublishProject`. If a renamed custom payload conflicts with another
+GraphQL type, schema construction rejects the collision. Depending on where
+Graphene encounters it, the underlying `TypeError` may be wrapped in a
+`TypeError` or `ValueError`.
+
+Earlier versions used the camel-case root field name as the payload type. On
+upgrade, update named and inline fragment type conditions, persisted queries,
+typed clients, and comparisons against `__typename`. Field selections without
+typed fragments do not need to change. See the
+[custom mutation concept](../concepts/graphql/custom_mutations.md#payload-type-names)
+and [cookbook example](../examples/graphql_queries.md#custom-mutation-with-measurement-input).
+
 Every non-`info` parameter needs a type annotation. Optional annotations make an
 argument nullable, defaults become Graphene defaults, list annotations become
 GraphQL lists, manager arguments with no declared inputs or only one `id` input

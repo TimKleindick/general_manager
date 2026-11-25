@@ -629,17 +629,27 @@ separate from the generated `updateInventoryItem` mutation and its capitalized
 ```graphql
 mutation SetInventoryPrice($id: Int!, $price: MeasurementScalar!) {
   setInventoryPrice(id: $id, price: $price) {
-    success
-    inventoryItem {
-      id
-      price { value unit }
-    }
+    ...InventoryPriceResult
+  }
+}
+
+fragment InventoryPriceResult on SetInventoryPrice {
+  __typename
+  success
+  inventoryItem {
+    id
+    price { value unit }
   }
 }
 ```
 
 Pass variables such as `{"id": 1, "price": "210 EUR"}` using an authenticated
-client. The decorator and manager enforce their respective write policies.
+client. The root field remains `setInventoryPrice`, while the fragment's type
+condition and returned `__typename` use the payload type `SetInventoryPrice`.
+For older schemas that used `setInventoryPrice` as the type name, update
+fragment conditions and persisted queries and regenerate typed clients when
+upgrading. See [payload type names](../concepts/graphql/custom_mutations.md#payload-type-names).
+The decorator and manager enforce their respective write policies.
 Failures use GraphQL's top-level `errors`; the mutation payload does not expose
 an `errors` field.
 
