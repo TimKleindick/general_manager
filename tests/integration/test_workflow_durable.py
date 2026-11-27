@@ -8,13 +8,14 @@ from django.utils import timezone
 from general_manager.workflow import (
     WorkflowDefinition,
     WorkflowInvalidStateError,
+    WorkflowSignalError,
     WorkflowStep,
     WorkflowStepContext,
 )
 from general_manager.workflow.backends.celery import CeleryWorkflowEngine
 from general_manager.workflow.durable import claim_step, complete_step, due_step_ids
 from general_manager.workflow.models import WorkflowStepRecord
-from general_manager.workflow.tasks import execute_workflow_step
+from general_manager.workflow.tasks import cancel_execution_task, execute_workflow_step
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -114,9 +115,54 @@ def test_cancel_fences_an_active_claim():
     assert engine.status(run.execution_id).output_data is None
 
 
-def test_two_versions_keep_their_own_handler_and_resume_uses_a_single_decision():
-    from general_manager.workflow import WorkflowSignalError
+def test_celery_task_cancellation_does_not_starve_later_work():
+    engine = CeleryWorkflowEngine()
+    signal = {"step": "approve", "id": "decision-1"}
+    cancelled = start_workflow()
+    engine.resume(cancelled.execution_id, signal)
+    cancelled_pk = step_id(cancelled.execution_id)
+    claim = claim_step(cancelled_pk)
+    assert claim is not None
+    assert cancel_execution_task(cancelled.execution_id, "no longer needed")
+    assert not cancel_execution_task(cancelled.execution_id)
+    assert not complete_step(claim, {"too_late": True})
+    later = start_workflow()
+    engine.resume(later.execution_id, signal)
+    later_pk = step_id(later.execution_id)
+    expired = timezone.now() - timedelta(seconds=1)
+    WorkflowStepRecord.objects.filter(pk__in=(cancelled_pk, later_pk)).update(
+        claim_until=expired, dispatch_until=expired
+    )
+    assert due_step_ids(batch_size=1) == [later_pk]
+    assert WorkflowStepRecord.objects.get(pk=cancelled_pk).state == "cancelled"
 
+
+def test_postgres_signal_replay_preserves_submitted_number():
+    from django.db import connection
+
+    if connection.vendor != "postgresql":
+        pytest.skip("requires PostgreSQL JSONB normalization")
+    engine = CeleryWorkflowEngine()
+    run = start_workflow()
+    signal = {"step": "approve", "id": "one", "data": {"amount": 1e20}}
+    assert engine.resume(run.execution_id, signal).state == "pending"
+    assert engine.resume(run.execution_id, signal).state == "pending"
+
+
+@pytest.mark.parametrize(
+    "payload", [{"nested": [{"value": "\x00"}]}, {"nested": {"\x00": True}}]
+)
+def test_signal_rejects_nested_null_characters_without_losing_wait(payload):
+    engine = CeleryWorkflowEngine()
+    run = start_workflow()
+    signal = {"step": "approve", "id": "one", "data": payload}
+    with pytest.raises(WorkflowSignalError):
+        engine.resume(run.execution_id, signal)
+    assert engine.status(run.execution_id).state == "waiting"
+    assert engine.resume(run.execution_id, {**signal, "data": {}}).state == "pending"
+
+
+def test_two_versions_keep_their_own_handler_and_resume_uses_a_single_decision():
     engine = CeleryWorkflowEngine()
     old = start_workflow()
 

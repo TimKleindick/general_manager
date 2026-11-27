@@ -304,3 +304,7 @@ covers the opt-in Celery backend, `WorkflowDefinition.steps`,
 `WorkflowStep`, `WorkflowStepContext` and the step-scoped `resume()` signal.
 A durable `WorkflowExecution` exposes its pinned `version`; existing
 single-handler executions return `None` for this added field.
+
+Durable resume signals accept JSON data. Step names, signal IDs, and strings
+within the payload (including object keys) must not contain U+0000. An invalid
+signal leaves the workflow waiting.
