@@ -213,3 +213,83 @@ preserve or clamp them before recording.
 The telemetry helpers do not catch exceptions raised by the installed metrics
 backend. If a custom Prometheus registry or collector fails, that exception
 propagates to the workflow operation that attempted to record the metric.
+
+## Run versioned approval workflows
+
+Versioned steps are opt-in. Apply GeneralManager's migrations, keep
+`WORKFLOW_MODE="production"`, and set
+`GENERAL_MANAGER["WORKFLOW_DURABLE_STEPS_ENABLED"] = True`. Run Celery Beat and
+workers listening on `workflow.events` and `workflow.executions`. Do not enable
+this setting before the migration or disable the recovery schedule while
+durable runs are active. Use a database with row locking, such as PostgreSQL,
+for concurrent production workers.
+
+Declare a sequence of trusted, importable module-level handlers. An approval
+gate belongs to a named step. Once the transaction commits, a ready step can be
+picked up by a worker. The next step receives the prior step's output; the
+first receives the start input. Each step receives its own optional signal.
+A signal releases the gate; it does not authorize the side effect by itself.
+In this example the review handler persists the decision in its output,
+and the publish handler must check for an explicit approval before publishing.
+
+```python
+from general_manager.workflow import WorkflowDefinition, WorkflowStep, get_workflow_engine
+
+drawing_release = WorkflowDefinition(
+    workflow_id="drawing-release",
+    version="1",
+    steps=(
+        WorkflowStep("review", "my_app.drawings.workflow_v1.review", wait_for_signal=True),
+        WorkflowStep("publish", "my_app.drawings.workflow_v1.publish"),
+    ),
+)
+engine = get_workflow_engine()
+run = engine.start(drawing_release, {"drawing_id": 42}, correlation_id="drawing-42-r7")
+# Authenticate and authorize the reviewer in the application first. Use
+# the same stable decision ID when retrying the same request.
+engine.resume(run.execution_id, {
+    "step": "review",
+    "id": "review-42-r7",
+    "data": {"approved": True},
+})
+```
+
+Handlers accept a `WorkflowStepContext` and return a JSON mapping or `None`.
+They receive a stable `idempotency_key` for the step across attempts. Pass it
+to providers that enforce idempotency, or commit a database effect and its
+uniqueness record atomically. For an email provider that has no idempotency
+contract, use your own durable delivery record and define how to reconcile a
+send whose result is unknown. The workflow cannot promise exactly-once remote
+effects. Make external calls bounded; set a claim lease longer than the
+expected maximum handler runtime. A retry may overlap an earlier attempt if
+that attempt keeps running after its lease. A replaced or cancelled worker
+cannot commit a stale transition, but an already started external action cannot
+be recalled.
+
+A send failure leaves the step in the database. Beat resends due work and
+reclaims expired worker leases. `max_attempts` counts claimed attempts
+(including worker loss); `retry_seconds` delays failures before another claim.
+When attempts are exhausted the run fails and later steps are not dispatched.
+Inspect the run and `WorkflowStepRecord` rows for the accepted decision,
+attempt count, lease, step inputs and outputs, and failure state. Treat these
+columns as sensitive application data; do not include approval contents in
+routine logs. Reconcile potentially completed external effects before starting
+a new run. Never clear leases or edit step rows to bypass an approval.
+
+The definition's version, order, step keys, and handler paths are captured when
+the run starts. For an incompatible change, declare a new version with new
+handler import paths and retain the old handlers until all their runs are
+terminal. Do not allow users to submit workflow definitions or import paths.
+The local backend and one-shot Celery handlers keep their existing contract;
+only the versioned step path enables this recovery policy.
+
+For test deployments, validate a duplicate approval with the same decision ID,
+a conflicting decision, recovery after an abrupt worker exit, and resuming an
+old run after deploying newer handlers. The opt-in broker smoke requires an
+isolated Redis URL in `GM_WORKFLOW_TEST_REDIS_URL` and a PostgreSQL-configured
+test database:
+
+```bash
+python -m pytest -q tests/integration/test_workflow_durable.py \
+  tests/integration/test_workflow_live_recovery.py
+```

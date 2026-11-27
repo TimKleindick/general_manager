@@ -21,6 +21,7 @@ from general_manager.workflow.models import (
     WorkflowEventRecord,
     WorkflowExecutionRecord,
     WorkflowOutbox,
+    WorkflowStepRecord,
 )
 
 __all__: tuple[str, ...] = (
@@ -33,4 +34,5 @@ __all__: tuple[str, ...] = (
     "WorkflowEventRecord",
     "WorkflowExecutionRecord",
     "WorkflowOutbox",
+    "WorkflowStepRecord",
 )

@@ -15,6 +15,7 @@ from general_manager.workflow.models import (
     WorkflowEventRecord,
     WorkflowExecutionRecord,
     WorkflowOutbox,
+    WorkflowStepRecord,
 )
 
 
@@ -30,6 +31,7 @@ def test_root_models_module_exports_canonical_django_models() -> None:
         "WorkflowEventRecord",
         "WorkflowExecutionRecord",
         "WorkflowOutbox",
+        "WorkflowStepRecord",
     )
     assert root_models.ChatConversation is ChatConversation
     assert root_models.ChatMessage is ChatMessage
@@ -40,3 +42,4 @@ def test_root_models_module_exports_canonical_django_models() -> None:
     assert root_models.WorkflowEventRecord is WorkflowEventRecord
     assert root_models.WorkflowExecutionRecord is WorkflowExecutionRecord
     assert root_models.WorkflowOutbox is WorkflowOutbox
+    assert root_models.WorkflowStepRecord is WorkflowStepRecord

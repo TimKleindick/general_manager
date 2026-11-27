@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Protocol, cast
 from uuid import uuid4
@@ -10,7 +11,10 @@ from uuid import uuid4
 from django.db import IntegrityError, transaction
 from django.utils.module_loading import import_string
 
-from general_manager.workflow.config import workflow_async_enabled
+from general_manager.workflow.config import (
+    workflow_async_enabled,
+    workflow_durable_steps_enabled,
+)
 from general_manager.workflow.engine import (
     ACTIVE_PLUS_COMPLETED_WORKFLOW_STATES,
     ACTIVE_WORKFLOW_STATES,
@@ -20,6 +24,7 @@ from general_manager.workflow.engine import (
     WorkflowExecutionNotFoundError,
     WorkflowInvalidStateError,
     WorkflowState,
+    WorkflowStepConfigurationError,
 )
 from general_manager.workflow.tasks import CELERY_AVAILABLE, execute_workflow_handler
 from general_manager.workflow.telemetry import increment_execution_state
@@ -34,6 +39,7 @@ class _WorkflowExecutionRecord(Protocol):
 
     execution_id: str
     workflow_id: str
+    durable_version: str | None
     state: str
     input_data: Mapping[str, object]
     output_data: Mapping[str, object] | None
@@ -72,6 +78,7 @@ def _to_execution(record: _WorkflowExecutionRecord) -> WorkflowExecution:
         ended_at=record.ended_at,
         error=record.error,
         metadata=dict(record.metadata),
+        version=record.durable_version,
     )
 
 
@@ -192,6 +199,46 @@ class CeleryWorkflowEngine:
                 )
                 if existing is not None:
                     return existing
+
+            if workflow.steps:
+                from general_manager.workflow.durable import (
+                    create_steps,
+                    validate_definition,
+                )
+
+                if (
+                    not workflow_async_enabled()
+                    or not workflow_durable_steps_enabled()
+                    or not CELERY_AVAILABLE
+                ):
+                    raise WorkflowStepConfigurationError("backend")
+                validate_definition(workflow)
+                try:
+                    with transaction.atomic():
+                        record = WorkflowExecutionRecord.objects.create(
+                            execution_id=str(uuid4()),
+                            workflow_id=workflow.workflow_id,
+                            durable_version=workflow.version,
+                            state="waiting"
+                            if workflow.steps[0].wait_for_signal
+                            else "pending",
+                            input_data=deepcopy(input_data or {}),
+                            correlation_id=correlation_id,
+                            started_at=self._utcnow(),
+                            metadata=deepcopy(metadata or {}),
+                        )
+                        create_steps(record, workflow)
+                except IntegrityError:
+                    if not correlation_id:
+                        raise
+                    existing = self._get_existing_correlation_execution(
+                        workflow.workflow_id, correlation_id
+                    )
+                    if existing is None:
+                        raise
+                    return existing
+                increment_execution_state(cast(WorkflowState, record.state))
+                return _to_execution(record)
 
             execution_id = str(uuid4())
             started_at = self._utcnow()
@@ -317,28 +364,21 @@ class CeleryWorkflowEngine:
         signal: WorkflowPayload | None = None,
     ) -> WorkflowExecution:
         """
-        Complete a waiting workflow execution with an optional resume signal.
+        Continue a durable waiting step, or complete a legacy waiting execution.
 
-        Parameters:
-            execution_id: Durable execution id.
-            signal: Optional JSON-like payload copied into execution metadata
-                under `resume_signal`.
+        Durable runs take a step key, caller-generated signal ID and optional
+        JSON data, and queue the pinned handler after commit. Replays with an
+        identical signal ID and payload return the current execution snapshot.
+        A different signal cannot advance an already approved step.
 
-        Returns:
-            WorkflowExecution: The completed execution record.
-
-        The update is applied inline and immediately changes the persisted state
-        from `waiting` to `completed`; it does not enqueue a Celery task. A
-        ``signal=None`` leaves metadata unchanged. Any explicit mapping,
-        including an empty one, is copied into ``metadata["resume_signal"]``.
-        Output data is not changed.
+        Legacy runs still complete inline. An explicit mapping is copied into
+        metadata under the `resume_signal` key; `None` leaves metadata unchanged.
 
         Raises:
-            WorkflowExecutionNotFoundError: If `execution_id` is unknown.
-            WorkflowCancelledError: If the execution is already `cancelled`.
-            WorkflowInvalidStateError: If the execution is `pending`, `running`,
-                `completed`, or `failed`.
-            Exception: Propagates unexpected database or transaction errors.
+            WorkflowExecutionNotFoundError: The execution does not exist.
+            WorkflowCancelledError: The workflow was cancelled.
+            WorkflowInvalidStateError: The requested step cannot be resumed.
+            WorkflowSignalError: A durable signal is malformed or conflicts.
         """
         from general_manager.workflow.models import WorkflowExecutionRecord
 
@@ -352,6 +392,11 @@ class CeleryWorkflowEngine:
                 raise WorkflowExecutionNotFoundError(execution_id)
             if record.state == "cancelled":
                 raise WorkflowCancelledError(execution_id)
+            if record.durable_version is not None:
+                from general_manager.workflow.durable import resume_steps
+
+                resume_steps(record, signal)
+                return _to_execution(record)
             if record.state != "waiting":
                 raise WorkflowInvalidStateError(
                     execution_id,
@@ -411,6 +456,10 @@ class CeleryWorkflowEngine:
                     state=cast(WorkflowState, record.state),
                     expected_states=ACTIVE_WORKFLOW_STATES,
                 )
+            if record.durable_version is not None:
+                from general_manager.workflow.durable import cancel_steps
+
+                cancel_steps(record)
             record.state = "cancelled"
             record.error = reason
             record.ended_at = self._utcnow()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from json import dumps
 from secrets import randbelow
 from typing import NoReturn, ParamSpec, Protocol, TypeVar, cast, overload
 
@@ -13,7 +14,9 @@ from django.utils.module_loading import import_string
 
 from general_manager.logging import get_logger
 from general_manager.workflow.config import (
+    workflow_async_enabled,
     workflow_beat_enabled,
+    workflow_durable_steps_enabled,
     workflow_beat_max_jitter_seconds,
     workflow_beat_outbox_interval_seconds,
     workflow_outbox_process_chunk_size,
@@ -106,6 +109,7 @@ except ImportError:  # pragma: no cover - optional dependency boundary
 
 
 WORKFLOW_BEAT_SCHEDULE_KEY = "general_manager.workflow.publish_outbox_batch"
+WORKFLOW_DURABLE_BEAT_SCHEDULE_KEY = "general_manager.workflow.publish_durable_steps"
 
 
 def configure_workflow_beat_schedule_from_settings(
@@ -133,6 +137,9 @@ def configure_workflow_beat_schedule_from_settings(
     `{"queue": "workflow.events"}`. Jitter is sampled once when this function
     configures the entry, not on each Beat tick.
 
+    When durable steps and async execution are both enabled, a second task on
+    the same queue dispatches due steps and recovers expired claims.
+
     Celery task-layer retry behavior is not configured here; exceptions from
     Celery app access or schedule assignment propagate.
     """
@@ -157,6 +164,16 @@ def configure_workflow_beat_schedule_from_settings(
         "schedule": interval_seconds,
         "options": {"queue": "workflow.events"},
     }
+    if workflow_async_enabled(django_settings) and workflow_durable_steps_enabled(
+        django_settings
+    ):
+        schedule[WORKFLOW_DURABLE_BEAT_SCHEDULE_KEY] = {
+            "task": "general_manager.workflow.tasks.publish_durable_steps",
+            "schedule": interval_seconds,
+            "options": {"queue": "workflow.events"},
+        }
+    else:
+        schedule.pop(WORKFLOW_DURABLE_BEAT_SCHEDULE_KEY, None)
     current_app.conf.beat_schedule = schedule
     logger.info(
         "workflow beat schedule configured",
@@ -460,3 +477,68 @@ def cancel_execution_task(execution_id: str, reason: str | None = None) -> bool:
         execution.save(update_fields=["state", "error", "ended_at", "updated_at"])
     increment_execution_state("cancelled")
     return True
+
+
+def dispatch_workflow_step(step_id: int) -> bool:
+    """Publish a due step from durable state; a failed publish remains recoverable."""
+    from general_manager.workflow.durable import reserve_dispatch
+
+    if not reserve_dispatch(step_id):
+        return False
+    try:
+        execute_workflow_step.delay(step_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "workflow step publication failed; Beat will retry",
+            context={"step_id": step_id, "error_type": type(exc).__name__},
+        )
+        return False
+    return True
+
+
+@shared_task(queue="workflow.events")
+def publish_durable_steps() -> int:
+    """Dispatch a bounded batch of due or abandoned steps."""
+    from general_manager.workflow.durable import due_step_ids
+
+    return sum(
+        dispatch_workflow_step(step_id)
+        for step_id in due_step_ids(workflow_outbox_process_chunk_size())
+    )
+
+
+@shared_task(queue="workflow.executions", acks_late=True)
+def execute_workflow_step(step_id: int) -> None:
+    """Claim a durable step, run its handler, and checkpoint the result."""
+    from general_manager.workflow.durable import claim_step, complete_step
+
+    claim = claim_step(step_id)
+    if claim is None:
+        return
+    try:
+        handler = import_string(claim.handler_path)
+        result = handler(claim.context)
+        output = _normalize_step_output(result)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "workflow step execution failed",
+            context={"step_id": step_id, "error_type": type(exc).__name__},
+        )
+        complete_step(claim, failed=True)
+    else:
+        complete_step(claim, output)
+
+
+class _WorkflowStepOutputError(TypeError):
+    """A durable action returned an unsupported result."""
+
+
+def _normalize_step_output(result: object) -> dict[str, object]:
+    if result is not None and (
+        not isinstance(result, Mapping)
+        or not all(isinstance(key, str) for key in result)
+    ):
+        raise _WorkflowStepOutputError
+    output = dict(result) if result is not None else {}
+    dumps(output, allow_nan=False)
+    return output

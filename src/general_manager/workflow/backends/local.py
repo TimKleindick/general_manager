@@ -15,6 +15,7 @@ from general_manager.workflow.engine import (
     WorkflowInvalidStateError,
     WorkflowExecutionNotFoundError,
     WorkflowState,
+    WorkflowStepConfigurationError,
 )
 
 type WorkflowPayload = dict[str, object]
@@ -55,6 +56,8 @@ class LocalWorkflowEngine:
         wait for the in-flight start to finish and then return that snapshot.
         Failed or cancelled snapshots do not block a fresh start.
         """
+        if workflow.steps:
+            raise WorkflowStepConfigurationError("backend")
         started_at = self._utcnow()
         execution_id = str(uuid4())
         source_input = {} if input_data is None else dict(input_data)
