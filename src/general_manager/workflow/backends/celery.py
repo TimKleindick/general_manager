@@ -159,9 +159,13 @@ class CeleryWorkflowEngine:
             telemetry, and in async mode schedules the Celery handler task after
             transaction commit. In sync mode, handler output is stored inline.
 
-        In async mode, handlers must resolve to importable top-level callables.
-        A workflow with neither `workflow.handler` nor `metadata["handler_path"]`
-        is intentionally handlerless and completes immediately with `{}` output.
+        With durable steps enabled in Celery async mode, a step-based definition
+        starts in `pending`, or `waiting` if its first step awaits a signal.
+        Step-based definitions do not use a legacy handler.
+
+        In async mode, legacy handlers must resolve to importable top-level
+        callables. A legacy definition with no steps, `workflow.handler`, or
+        `metadata["handler_path"]` completes immediately with `{}` output.
         A workflow with an inline/local handler that cannot be represented as a
         handler path is malformed for async mode and is recorded as failed.
         Non-callable imports, import failures, and missing Celery support also
