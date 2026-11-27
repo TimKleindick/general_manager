@@ -39,6 +39,10 @@ class Migration(migrations.Migration):
                 ("output_data", models.JSONField(blank=True, null=True)),
                 ("signal_id", models.CharField(blank=True, max_length=128, null=True)),
                 ("signal_data", models.JSONField(blank=True, null=True)),
+                (
+                    "signal_digest",
+                    models.CharField(blank=True, max_length=64, null=True),
+                ),
                 ("signalled_at", models.DateTimeField(blank=True, null=True)),
                 ("attempts", models.PositiveSmallIntegerField(default=0)),
                 ("available_at", models.DateTimeField(blank=True, null=True)),

@@ -6,7 +6,8 @@ from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timedelta
-from json import dumps
+from hashlib import sha256
+from json import dumps, loads
 from typing import cast
 from uuid import uuid4
 
@@ -104,6 +105,19 @@ def _kick_after_commit(step_id: int) -> None:
     transaction.on_commit(lambda: dispatch_workflow_step(step_id), robust=True)
 
 
+def _contains_null_character(value: object) -> bool:
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, list):
+        return any(_contains_null_character(item) for item in value)
+    if isinstance(value, dict):
+        return any(
+            _contains_null_character(key) or _contains_null_character(item)
+            for key, item in value.items()
+        )
+    return False
+
+
 def resume_steps(
     record: WorkflowExecutionRecord, signal: WorkflowPayload | None
 ) -> None:
@@ -114,8 +128,10 @@ def resume_steps(
     if (
         not isinstance(key, str)
         or not key.strip()
+        or "\x00" in key
         or not isinstance(signal_id, str)
         or not signal_id.strip()
+        or "\x00" in signal_id
         or len(signal_id) > 128
         or not isinstance(payload, Mapping)
         or not all(isinstance(k, str) for k in payload)
@@ -123,14 +139,16 @@ def resume_steps(
         raise WorkflowSignalError()
     try:
         canonical_payload = dumps(dict(payload), sort_keys=True, allow_nan=False)
-    except (TypeError, ValueError) as exc:
+        if _contains_null_character(loads(canonical_payload)):
+            raise WorkflowSignalError()
+    except (TypeError, ValueError, RecursionError) as exc:
         raise WorkflowSignalError() from exc
+    # JSONB can normalize numbers when reading them back. Compare the accepted
+    # representation rather than re-serializing the database-decoded value.
+    payload_digest = sha256(canonical_payload.encode()).hexdigest()
     step = WorkflowStepRecord.objects.filter(execution=record, key=key).first()
     if step is not None and step.signal_id == signal_id:
-        if (
-            dumps(step.signal_data, sort_keys=True, allow_nan=False)
-            != canonical_payload
-        ):
+        if step.signal_digest != payload_digest:
             raise WorkflowSignalError(conflict=True)
         return
     if record.state != "waiting" or step is None or step.state != "waiting":
@@ -143,6 +161,7 @@ def resume_steps(
     now = timezone.now()
     step.signal_id = signal_id
     step.signal_data = dict(payload)
+    step.signal_digest = payload_digest
     step.signalled_at = now
     step.state = "pending"
     step.available_at = now
@@ -150,6 +169,7 @@ def resume_steps(
         update_fields=[
             "signal_id",
             "signal_data",
+            "signal_digest",
             "signalled_at",
             "state",
             "available_at",

@@ -459,6 +459,7 @@ def cancel_execution_task(execution_id: str, reason: str | None = None) -> bool:
     Celery retries, so unexpected persistence errors propagate to the
     caller/worker.
     """
+    from general_manager.workflow.durable import cancel_steps
     from general_manager.workflow.models import WorkflowExecutionRecord
 
     with transaction.atomic():
@@ -471,6 +472,8 @@ def cancel_execution_task(execution_id: str, reason: str | None = None) -> bool:
             raise WorkflowExecutionNotFoundError(execution_id)
         if execution.state not in ACTIVE_WORKFLOW_STATES:
             return False
+        if execution.durable_version is not None:
+            cancel_steps(execution)
         execution.state = "cancelled"
         execution.error = reason
         execution.ended_at = datetime.now(UTC)

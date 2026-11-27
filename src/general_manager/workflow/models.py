@@ -241,6 +241,7 @@ class WorkflowStepRecord(models.Model):
     signal_data: models.JSONField[WorkflowJSONPayload | None] = models.JSONField(
         null=True, blank=True
     )
+    signal_digest = models.CharField(max_length=64, null=True, blank=True)
     signalled_at = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
     available_at = models.DateTimeField(null=True, blank=True)
