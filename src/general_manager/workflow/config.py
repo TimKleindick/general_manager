@@ -76,6 +76,13 @@ def workflow_async_enabled(django_settings: SettingsLike = settings) -> bool:
     return workflow_mode(django_settings) == "production"
 
 
+def workflow_durable_steps_enabled(django_settings: SettingsLike = settings) -> bool:
+    """Opt into persisted steps after applying the workflow migration."""
+    return bool(
+        _config_or_setting(django_settings, "WORKFLOW_DURABLE_STEPS_ENABLED", False)
+    )
+
+
 def workflow_beat_enabled(django_settings: SettingsLike = settings) -> bool:
     """Return whether workflow Celery Beat scheduling is enabled.
 

@@ -51,6 +51,15 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
+      workflow-broker:
+        image: ${{ inputs.database-selector == 'postgresql' && 'redis:7.2-alpine' || '' }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
       meilisearch:
         image: getmeili/meilisearch:v1.30.0
         ports:
@@ -81,6 +90,9 @@ jobs:
           pip install pytest pytest-django meilisearch==0.40.0
           pip install -r requirements/chat-eval.txt
           pip install "${{ inputs.database-driver }}"
+      - name: Install Redis client for the workflow recovery smoke
+        if: inputs.database-selector == 'postgresql'
+        run: pip install "celery[redis]"
 
       - name: Run ${{ inputs.database-label }} backend test suite
         env:
@@ -92,4 +104,5 @@ jobs:
           GENERAL_MANAGER_TEST_DATABASE_HOST: 127.0.0.1
           GENERAL_MANAGER_TEST_DATABASE_PORT: ${{ inputs.database-port }}
           MEILISEARCH_URL: http://127.0.0.1:7700
+          GM_WORKFLOW_TEST_REDIS_URL: ${{ inputs.database-selector == 'postgresql' && 'redis://127.0.0.1:6379/12' || '' }}
         run: python -m pytest -m "not perf"

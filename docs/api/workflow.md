@@ -296,3 +296,11 @@ The constructor stores `base_url` and optional `api_key`, but `start(...)`,
 `resume(...)`, `cancel(...)`, and `status(...)` are not implemented and raise
 `N8nOperationNotImplementedError`. The current adapter performs no network
 requests.
+
+## Versioned durable execution
+
+[Versioned approvals and operations](../howto/workflow_ops.md#run-versioned-approval-workflows)
+covers the opt-in Celery backend, `WorkflowDefinition.steps`,
+`WorkflowStep`, `WorkflowStepContext` and the step-scoped `resume()` signal.
+A durable `WorkflowExecution` exposes its pinned `version`; existing
+single-handler executions return `None` for this added field.

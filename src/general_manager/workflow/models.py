@@ -124,6 +124,7 @@ class WorkflowExecutionRecord(models.Model):
     execution_id: models.CharField[str] = models.CharField(max_length=128, unique=True)
     workflow_id: models.CharField[str] = models.CharField(max_length=255)
     state: models.CharField[str] = models.CharField(max_length=32)
+    durable_version = models.CharField(max_length=128, null=True, blank=True)
     input_data: models.JSONField[WorkflowJSONPayload] = models.JSONField(default=dict)
     output_data: models.JSONField[WorkflowJSONPayload | None] = models.JSONField(
         null=True, blank=True
@@ -217,4 +218,47 @@ class WorkflowDeliveryAttempt(models.Model):
                 fields=["handler_registration_id"],
                 name="general_man_handler_f8368f_idx",
             ),
+        )
+
+
+class WorkflowStepRecord(models.Model):
+    """Pinned plan, transition history and durable dispatch state for one step."""
+
+    execution = models.ForeignKey(WorkflowExecutionRecord, on_delete=models.CASCADE)
+    position = models.PositiveIntegerField()
+    key = models.CharField(max_length=128)
+    handler_path = models.CharField(max_length=512)
+    wait_for_signal = models.BooleanField(default=False)
+    max_attempts = models.PositiveSmallIntegerField()
+    claim_seconds = models.PositiveIntegerField()
+    retry_seconds = models.PositiveIntegerField()
+    state = models.CharField(max_length=16, default="blocked")
+    input_data: models.JSONField[WorkflowJSONPayload] = models.JSONField(default=dict)
+    output_data: models.JSONField[WorkflowJSONPayload | None] = models.JSONField(
+        null=True, blank=True
+    )
+    signal_id = models.CharField(max_length=128, null=True, blank=True)
+    signal_data: models.JSONField[WorkflowJSONPayload | None] = models.JSONField(
+        null=True, blank=True
+    )
+    signalled_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    available_at = models.DateTimeField(null=True, blank=True)
+    claim_token = models.CharField(max_length=36, null=True, blank=True)
+    claim_until = models.DateTimeField(null=True, blank=True)
+    dispatch_until = models.DateTimeField(null=True, blank=True)
+    first_claimed_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+
+    class Meta:
+        constraints = (
+            models.UniqueConstraint(
+                fields=["execution", "position"], name="gm_wf_step_position"
+            ),
+            models.UniqueConstraint(fields=["execution", "key"], name="gm_wf_step_key"),
+        )
+        indexes = (
+            models.Index(fields=["state", "available_at"], name="gm_wf_step_ready"),
+            models.Index(fields=["state", "claim_until"], name="gm_wf_step_claim"),
         )

@@ -199,6 +199,14 @@ def test_database_backend_runner_preserves_services_and_test_contract() -> None:
             "--health-interval=5s --health-timeout=5s --health-retries=20"
         ),
     }
+    assert job["services"]["workflow-broker"] == {
+        "image": "${{ inputs.database-selector == 'postgresql' && 'redis:7.2-alpine' || '' }}",
+        "ports": ["6379:6379"],
+        "options": (
+            '--health-cmd="redis-cli ping" '
+            "--health-interval=5s --health-timeout=5s --health-retries=10"
+        ),
+    }
     assert job["services"]["meilisearch"] == {
         "image": "getmeili/meilisearch:v1.30.0",
         "ports": ["7700:7700"],
@@ -220,6 +228,17 @@ def test_database_backend_runner_preserves_services_and_test_contract() -> None:
     assert "pip install pytest pytest-django meilisearch==0.40.0" in commands
     assert 'pip install "${{ inputs.database-driver }}"' in commands
 
+    broker_install = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Install Redis client for the workflow recovery smoke"
+    )
+    assert broker_install == {
+        "name": "Install Redis client for the workflow recovery smoke",
+        "if": "inputs.database-selector == 'postgresql'",
+        "run": 'pip install "celery[redis]"',
+    }
+
     test_step = next(
         step
         for step in job["steps"]
@@ -235,6 +254,9 @@ def test_database_backend_runner_preserves_services_and_test_contract() -> None:
         "GENERAL_MANAGER_TEST_DATABASE_HOST": "127.0.0.1",
         "GENERAL_MANAGER_TEST_DATABASE_PORT": "${{ inputs.database-port }}",
         "MEILISEARCH_URL": "http://127.0.0.1:7700",
+        "GM_WORKFLOW_TEST_REDIS_URL": (
+            "${{ inputs.database-selector == 'postgresql' && 'redis://127.0.0.1:6379/12' || '' }}"
+        ),
     }
 
 
