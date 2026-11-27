@@ -10,12 +10,17 @@ from general_manager.workflow import (
     WorkflowInvalidStateError,
     WorkflowSignalError,
     WorkflowStep,
+    WorkflowStepConfigurationError,
     WorkflowStepContext,
 )
 from general_manager.workflow.backends.celery import CeleryWorkflowEngine
 from general_manager.workflow.durable import claim_step, complete_step, due_step_ids
 from general_manager.workflow.models import WorkflowStepRecord
-from general_manager.workflow.tasks import cancel_execution_task, execute_workflow_step
+from general_manager.workflow.tasks import (
+    cancel_execution_task,
+    execute_workflow_step,
+    publish_durable_steps,
+)
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -299,3 +304,54 @@ def test_start_transaction_rollback_leaves_no_durable_dispatch(monkeypatch):
         execution_id=run.execution_id
     ).exists()
     assert due_step_ids() == []
+
+
+def test_failed_broker_publish_is_recovered_after_dispatch_window(monkeypatch):
+    published: list[int] = []
+
+    def unavailable(_step_id):
+        raise ConnectionError
+
+    engine = CeleryWorkflowEngine()
+    monkeypatch.setattr(execute_workflow_step, "delay", unavailable)
+    run = engine.start(
+        WorkflowDefinition("broker-outage", steps=(WorkflowStep("work", HANDLER_PATH),))
+    )
+    pk = step_id(run.execution_id)
+    assert run.state == "pending"
+    assert WorkflowStepRecord.objects.get(pk=pk).attempts == 0
+    assert publish_durable_steps() == 0
+
+    monkeypatch.setattr(execute_workflow_step, "delay", published.append)
+    WorkflowStepRecord.objects.filter(pk=pk).update(
+        dispatch_until=timezone.now() - timedelta(seconds=1)
+    )
+    assert publish_durable_steps() == 1
+    assert published == [pk]
+    assert publish_durable_steps() == 0
+    execute_workflow_step(pk)
+    execute_workflow_step(pk)  # Duplicate broker delivery is a no-op.
+    assert engine.status(run.execution_id).state == "completed"
+    assert WorkflowStepRecord.objects.get(pk=pk).attempts == 1
+
+
+def test_step_plan_requires_opt_in_celery_and_valid_handler(monkeypatch):
+    from general_manager.workflow.backends.local import LocalWorkflowEngine
+
+    definition = WorkflowDefinition(
+        "invalid-definition", steps=(WorkflowStep("work", "tests.missing.handler"),)
+    )
+    with pytest.raises(WorkflowStepConfigurationError, match="require Celery async"):
+        LocalWorkflowEngine().start(definition)
+
+    engine = CeleryWorkflowEngine()
+    with pytest.raises(WorkflowStepConfigurationError, match="importable, callable"):
+        engine.start(definition)
+
+    monkeypatch.setattr(
+        "general_manager.workflow.backends.celery.workflow_durable_steps_enabled",
+        lambda: False,
+    )
+    with pytest.raises(WorkflowStepConfigurationError, match="require Celery async"):
+        start_workflow()
+    assert not WorkflowStepRecord.objects.exists()
