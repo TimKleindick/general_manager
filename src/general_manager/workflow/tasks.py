@@ -432,7 +432,7 @@ def resume_execution_task(
         if execution.durable_version is not None:
             from general_manager.workflow.durable import resume_steps
 
-            resume_steps(execution, signal)
+            resume_steps(execution, None if signal is None else dict(signal))
             return True
         metadata = dict(execution.metadata)
         if signal is not None:
