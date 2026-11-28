@@ -2,6 +2,50 @@
 
 <!-- version list -->
 
+## v0.93.0 (2026-11-28)
+
+### Bug Fixes
+
+- **workflow**: Adapt task signal to durable payload type
+  ([`ab1ebdf`](https://github.com/TimKleindick/general_manager/commit/ab1ebdf4852e1628fa4a43ca0db41c52cd797c25))
+
+- **workflow**: Fence cancellations and stabilize signal replay
+  ([`aebffe7`](https://github.com/TimKleindick/general_manager/commit/aebffe791afff1996946cfc2e9aee2f6e3c2faec))
+
+- **workflow**: Resume durable steps through the Celery task
+  ([`8c83df8`](https://github.com/TimKleindick/general_manager/commit/8c83df8a4554a06100386d59f8b7be9ade523e45))
+
+- **workflow**: Validate durable JSON text before checkpointing
+  ([`ab744c9`](https://github.com/TimKleindick/general_manager/commit/ab744c937a5194356322dad2e8b366bb72f45822))
+
+### Documentation
+
+- Clarify native GraphQL list filtering
+  ([`410989e`](https://github.com/TimKleindick/general_manager/commit/410989ec8f1901f97f057000ef5544603ebfe047))
+
+- Clarify null handling in custom identifier casts
+  ([`dbbe788`](https://github.com/TimKleindick/general_manager/commit/dbbe788af8f9e11b4e444718bf17b3c107e479aa))
+
+- Explain custom mutation payload names
+  ([`63f8b3c`](https://github.com/TimKleindick/general_manager/commit/63f8b3c9a2d41848f7eeea91433f6ed7ba349b6f))
+
+- Explain Excel GraphQL identifier filters
+  ([`23be88d`](https://github.com/TimKleindick/general_manager/commit/23be88dbd33bc89dadee61d874d913f1fb5de482))
+
+- **workflow**: Clarify initial durable execution states
+  ([`c7cffdc`](https://github.com/TimKleindick/general_manager/commit/c7cffdcd73f8230d2f21e6fe70a51a6058cf6a22))
+
+### Features
+
+- **workflow**: Add durable step execution and recovery
+  ([`e4e537e`](https://github.com/TimKleindick/general_manager/commit/e4e537e594f7d5cf39e2534e2dc7acc12e09d394))
+
+### Testing
+
+- **workflow**: Cover rejected plans and broker recovery
+  ([`dbb1ff0`](https://github.com/TimKleindick/general_manager/commit/dbb1ff0d7009919c7ca81fe4b6fd896542e70f0c))
+
+
 ## v0.92.4 (2026-11-24)
 
 ### Bug Fixes
