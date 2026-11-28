@@ -269,12 +269,13 @@ and metadata. Returned `WorkflowExecution` objects are snapshots, not live ORM
 objects; async workers may update the database immediately after `start()`
 returns.
 
-When creating a new execution, `CeleryWorkflowEngine.start(...)` shallow-copies
+For a legacy single-handler execution, `CeleryWorkflowEngine.start(...)` shallow-copies
 the top level of `input_data` before persisting it. Async dispatch uses another
 top-level copy of that snapshot after the surrounding transaction commits, so
 later additions, updates, or removals on the caller's mapping do not change the
 stored execution or the task payload. Nested mappings and sequences are not
-deep-copied or JSON-normalized. Each new execution gets its own top-level snapshot; rolling
+deep-copied or JSON-normalized. Step-based execution instead deep-copies input
+and metadata before persistence. Each new execution gets its own snapshot; rolling
 back the transaction or savepoint that creates it discards that execution and
 its pending async dispatch. Correlation reuse returns the existing execution
 without capturing the new input or scheduling another task; rolling back a
@@ -344,6 +345,23 @@ Choose the backend in `GENERAL_MANAGER["WORKFLOW_ENGINE"]`, or rely on `WORKFLOW
 - `None`, or a missing setting, to use the mode default
 
 The mode default is `LocalWorkflowEngine` unless `WORKFLOW_MODE` is `production`, in which case it is `CeleryWorkflowEngine`. Import errors, factory errors, and constructor errors propagate. Mapping `options` must be a mapping, and non-`None` settings must resolve to a `WorkflowEngine`.
+
+## Versioned durable steps
+
+A step-based `WorkflowDefinition` pins its version, ordered step keys and
+handler paths when an execution starts. Each step checkpoints its output as the
+next step's input. A signal-gated step waits for a named decision before its
+handler runs; the application must authenticate and authorize that decision.
+The Celery async backend persists the plan and recovers due work and expired
+leases through Beat. The local backend and legacy single-handler workflows do
+not provide this step execution model.
+
+A handler may run more than once, including after a worker loses its lease.
+The context's stable idempotency key helps downstream systems deduplicate
+side effects; it cannot guarantee exactly-once effects on its own. Keep old
+handler paths available until all runs pinned to them finish, and use a new
+version and paths for incompatible changes. See the [operations guide](../howto/workflow_ops.md#run-versioned-approval-workflows)
+and [approval recipe](../examples/workflow_durable_approval.md).
 
 ## Related guides
 

@@ -82,6 +82,8 @@ JSON-normalized; database registries rely on Django field serialization.
 
 ::: general_manager.workflow.config.workflow_async_enabled
 
+::: general_manager.workflow.config.workflow_durable_steps_enabled
+
 ::: general_manager.workflow.config.workflow_beat_enabled
 
 ::: general_manager.workflow.config.workflow_beat_outbox_interval_seconds
@@ -120,6 +122,8 @@ reading settings attributes.
 
 ::: general_manager.workflow.models.WorkflowExecutionRecord
 
+::: general_manager.workflow.models.WorkflowStepRecord
+
 ::: general_manager.workflow.models.WorkflowDeliveryAttempt
 
 The workflow persistence models are durable implementation records used by the
@@ -151,6 +155,10 @@ migration.
 ::: general_manager.workflow.tasks.resume_execution_task
 
 ::: general_manager.workflow.tasks.cancel_execution_task
+
+::: general_manager.workflow.tasks.publish_durable_steps
+
+::: general_manager.workflow.tasks.execute_workflow_step
 
 ::: general_manager.workflow.telemetry.set_outbox_snapshot
 
@@ -278,11 +286,13 @@ state is in memory only and is not shared across processes.
 
 ::: general_manager.workflow.backends.celery.CeleryWorkflowEngine
 
-`start(...)` captures a shallow `dict(...)` copy of input before persistence.
+For legacy single-handler executions, `start(...)` captures a shallow `dict(...)`
+copy of input before persistence.
 Async dispatch uses that captured input after the outer transaction commits;
 later top-level changes to the caller's mapping do not affect the task payload.
 Rolling back the transaction or the savepoint containing `start(...)` discards
 the task publication. Nested objects are not deep-copied or JSON-normalized.
+For step-based executions, input and metadata are deep-copied before persistence.
 
 Correlation reuse checks for an existing active or completed execution before
 inserting. Protection against concurrent inserts also requires database support
@@ -299,12 +309,69 @@ requests.
 
 ## Versioned durable execution
 
-[Versioned approvals and operations](../howto/workflow_ops.md#run-versioned-approval-workflows)
-covers the opt-in Celery backend, `WorkflowDefinition.steps`,
-`WorkflowStep`, `WorkflowStepContext` and the step-scoped `resume()` signal.
-A durable `WorkflowExecution` exposes its pinned `version`; existing
-single-handler executions return `None` for this added field.
+::: general_manager.workflow.engine.WorkflowStep
 
-Durable resume signals accept JSON data. Step names, signal IDs, and strings
-within the payload (including object keys) must not contain U+0000. An invalid
-signal leaves the workflow waiting.
+::: general_manager.workflow.engine.WorkflowStepContext
+
+::: general_manager.workflow.engine.WorkflowStepConfigurationError
+
+::: general_manager.workflow.engine.WorkflowSignalError
+
+`WorkflowStep(key, handler_path, wait_for_signal=False, max_attempts=3,
+claim_seconds=300, retry_seconds=15)` declares one ordered step. Keys must be
+unique, nonblank and at most 128 characters; handler paths must be importable
+callables of at most 512 characters. Attempts must be 1–100, lease seconds
+1–86400 and retry seconds 0–86400. A step handler accepts one
+`WorkflowStepContext` and returns a string-keyed JSON mapping or `None` (treated
+as `{}`). Invalid output or handler failure consumes an attempt. Context fields
+are `execution_id`, `workflow_id`, pinned `version`, `step`, stable
+`idempotency_key`, `input_data`, and optional `signal` data.
+
+`WorkflowDefinition.steps` defaults to `()`. A nonempty tuple requires Celery,
+async mode, and `WORKFLOW_DURABLE_STEPS_ENABLED`; it cannot be combined with a
+legacy handler or `metadata["handler_path"]`. Its version must be nonblank and
+at most 128 characters. Invalid plans raise `WorkflowStepConfigurationError`
+before insertion, except when a correlation ID first reuses an existing run.
+`WorkflowExecution.version` is the pinned version for step-based runs and
+`None` for legacy runs. First-step state is `waiting` for a signal gate and
+`pending` otherwise. Step input and metadata are deep-copied at start.
+
+`CeleryWorkflowEngine.resume(execution_id, signal)` returns an execution
+snapshot. A durable signal is `{"step": key, "id": decision_id, "data": {…}}`;
+`data` defaults to `{}`. The step and ID must be nonblank strings, the ID at
+most 128 characters, and neither may contain U+0000. Data must be a JSON
+mapping with string top-level keys, finite numbers, and no U+0000 or unpaired
+surrogates in decoded strings or keys. Invalid signals raise
+`WorkflowSignalError` and do not release the gate. Repeating the same ID and
+canonical payload for that step returns the current snapshot; reusing the ID
+with different data raises `WorkflowSignalError`. A different decision for a
+step that is not waiting raises `WorkflowInvalidStateError`. Unknown runs raise
+`WorkflowExecutionNotFoundError`; cancelled runs raise `WorkflowCancelledError`.
+
+`resume_execution_task(execution_id, signal=None)` returns `True` when a waiting
+run accepts a signal and `False` when it is not waiting. It raises
+`WorkflowExecutionNotFoundError` for an unknown run and propagates durable
+signal and state errors. Unlike the engine method, it checks the run is waiting
+before applying the durable signal, so a replay after it has left waiting returns
+`False`. Legacy executions complete and store a supplied signal in metadata.
+
+`publish_durable_steps()` dispatches up to the configured outbox process chunk
+size of due or expired-lease steps and returns the number successfully
+published, not the number completed. `execute_workflow_step(step_id)` returns
+`None`: it claims due work, runs the pinned handler, and checkpoints or retries
+it. A missing, stale, or non-due claim is a no-op. `WorkflowStepRecord` is the
+migration-owned persistence record for operations; application code should use
+the engine rather than mutate records.
+
+`workflow_durable_steps_enabled(django_settings=settings)` returns a boolean;
+nested `GENERAL_MANAGER` settings take precedence over top-level settings, and
+the default is `False`. With Beat, async mode, and durable steps enabled,
+`configure_workflow_beat_schedule_from_settings()` adds
+`general_manager.workflow.publish_durable_steps` on `workflow.events`, using
+the outbox interval and jitter. Disabling either async or durable steps removes
+that entry when the schedule is configured successfully.
+
+[Workflow concepts](../concepts/workflow.md#versioned-durable-steps), the
+[operations guide](../howto/workflow_ops.md#run-versioned-approval-workflows),
+and the [approval recipe](../examples/workflow_durable_approval.md) cover setup,
+recovery, and side effects.
