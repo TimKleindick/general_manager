@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from json import dumps
+from json import dumps, loads
 from secrets import randbelow
 from typing import NoReturn, ParamSpec, Protocol, TypeVar, cast, overload
 
@@ -543,5 +543,8 @@ def _normalize_step_output(result: object) -> dict[str, object]:
     ):
         raise _WorkflowStepOutputError
     output = dict(result) if result is not None else {}
-    dumps(output, allow_nan=False)
+    from general_manager.workflow.durable import contains_invalid_json_text
+
+    if contains_invalid_json_text(loads(dumps(output, allow_nan=False))):
+        raise _WorkflowStepOutputError
     return output

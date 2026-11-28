@@ -226,10 +226,10 @@ class CeleryWorkflowEngine:
                             state="waiting"
                             if workflow.steps[0].wait_for_signal
                             else "pending",
-                            input_data=deepcopy(input_data or {}),
+                            input_data=deepcopy(dict(input_data or {})),
                             correlation_id=correlation_id,
                             started_at=self._utcnow(),
-                            metadata=deepcopy(metadata or {}),
+                            metadata=deepcopy(dict(metadata or {})),
                         )
                         create_steps(record, workflow)
                 except IntegrityError:
