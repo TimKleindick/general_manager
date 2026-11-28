@@ -297,12 +297,37 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
 
+  verify-publication:
+    name: Verify public PyPI availability and artifact hashes
+    needs: [artifact, release]
+    if: ${{ needs.artifact.outputs.released == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download validated distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: validated-distributions-${{ github.sha }}
+          path: validated-dist
+
       - id: verify_pypi_after
         name: Verify public PyPI availability and artifact hashes
-        timeout-minutes: 2
+        timeout-minutes: 17
         env:
           EXPECTED_VERSION: ${{ needs.artifact.outputs.version }}
         run: >-
           python scripts/verify_pypi_artifacts.py
           GeneralManager "$EXPECTED_VERSION" validated-dist --require-all
-          --wait-seconds 60
+          --wait-seconds 900
