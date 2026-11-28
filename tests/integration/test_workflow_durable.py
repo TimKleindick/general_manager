@@ -1,6 +1,7 @@
 """Durable multi-step workflow contract at the production engine boundary."""
 
 from datetime import timedelta
+from types import MappingProxyType
 
 import pytest
 from django.utils import timezone
@@ -62,6 +63,20 @@ def start_workflow():
 
 def step_id(execution_id):
     return WorkflowStepRecord.objects.get(execution__execution_id=execution_id).pk
+
+
+def test_durable_start_accepts_read_only_input_and_metadata():
+    engine = CeleryWorkflowEngine()
+    run = engine.start(
+        WorkflowDefinition(
+            "drawing-release",
+            steps=(WorkflowStep("approve", HANDLER_PATH, wait_for_signal=True),),
+        ),
+        MappingProxyType({"drawing": "P1"}),
+        metadata=MappingProxyType({"source": "manager"}),
+    )
+    assert run.input_data == {"drawing": "P1"}
+    assert run.metadata == {"source": "manager"}
 
 
 def test_waiting_run_resumes_pinned_step_and_replays_same_signal():
@@ -155,9 +170,15 @@ def test_postgres_signal_replay_preserves_submitted_number():
 
 
 @pytest.mark.parametrize(
-    "payload", [{"nested": [{"value": "\x00"}]}, {"nested": {"\x00": True}}]
+    "payload",
+    [
+        {"nested": [{"value": "\x00"}]},
+        {"nested": {"\x00": True}},
+        {"nested": [{"value": "\ud800"}]},
+        {"nested": {"\udc00": True}},
+    ],
 )
-def test_signal_rejects_nested_null_characters_without_losing_wait(payload):
+def test_signal_rejects_nested_invalid_json_text_without_losing_wait(payload):
     engine = CeleryWorkflowEngine()
     run = start_workflow()
     signal = {"step": "approve", "id": "one", "data": payload}
@@ -165,6 +186,45 @@ def test_signal_rejects_nested_null_characters_without_losing_wait(payload):
         engine.resume(run.execution_id, signal)
     assert engine.status(run.execution_id).state == "waiting"
     assert engine.resume(run.execution_id, {**signal, "data": {}}).state == "pending"
+
+
+def test_supplementary_unicode_signal_and_output_are_preserved():
+    engine = CeleryWorkflowEngine()
+    run = start_workflow()
+    signal = {"step": "approve", "id": "one", "data": {"text": "\ud83d\ude00"}}
+    assert engine.resume(run.execution_id, signal).state == "pending"
+    execute_workflow_step(step_id(run.execution_id))
+    result = engine.status(run.execution_id)
+    assert result.state == "completed"
+    assert result.output_data["signal"] == {"text": "😀"}
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        {"nested": [{"value": "\x00"}]},
+        {"nested": {"\x00": True}},
+        {"nested": {"\ud800": True}},
+    ],
+)
+def test_invalid_handler_json_uses_configured_retry(monkeypatch, output):
+    engine = CeleryWorkflowEngine()
+    run = engine.start(
+        WorkflowDefinition(
+            "drawing-release",
+            steps=(
+                WorkflowStep("approve", HANDLER_PATH, max_attempts=2, retry_seconds=15),
+            ),
+        ),
+        {},
+    )
+    pk = step_id(run.execution_id)
+    monkeypatch.setattr(f"{__name__}.record_approval", lambda _context: output)
+    execute_workflow_step(pk)
+    step = WorkflowStepRecord.objects.get(pk=pk)
+    assert step.state == "pending"
+    assert step.available_at > timezone.now()
+    assert step.claim_until is None
 
 
 def test_two_versions_keep_their_own_handler_and_resume_uses_a_single_decision():

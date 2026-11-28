@@ -105,14 +105,15 @@ def _kick_after_commit(step_id: int) -> None:
     transaction.on_commit(lambda: dispatch_workflow_step(step_id), robust=True)
 
 
-def _contains_null_character(value: object) -> bool:
+def contains_invalid_json_text(value: object) -> bool:
+    """Detect text JSONB cannot store after decoding the JSON representation."""
     if isinstance(value, str):
-        return "\x00" in value
+        return "\x00" in value or any("\ud800" <= char <= "\udfff" for char in value)
     if isinstance(value, list):
-        return any(_contains_null_character(item) for item in value)
+        return any(contains_invalid_json_text(item) for item in value)
     if isinstance(value, dict):
         return any(
-            _contains_null_character(key) or _contains_null_character(item)
+            contains_invalid_json_text(key) or contains_invalid_json_text(item)
             for key, item in value.items()
         )
     return False
@@ -139,7 +140,7 @@ def resume_steps(
         raise WorkflowSignalError()
     try:
         canonical_payload = dumps(dict(payload), sort_keys=True, allow_nan=False)
-        if _contains_null_character(loads(canonical_payload)):
+        if contains_invalid_json_text(loads(canonical_payload)):
             raise WorkflowSignalError()
     except (TypeError, ValueError, RecursionError) as exc:
         raise WorkflowSignalError() from exc
