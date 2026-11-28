@@ -21,6 +21,7 @@ from general_manager.workflow.tasks import (
     cancel_execution_task,
     execute_workflow_step,
     publish_durable_steps,
+    resume_execution_task,
 )
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -99,6 +100,24 @@ def test_waiting_run_resumes_pinned_step_and_replays_same_signal():
     assert engine.resume(run.execution_id, signal).state == "completed"
     with pytest.raises(WorkflowInvalidStateError):
         engine.resume(run.execution_id, {**signal, "id": "decision-2"})
+
+
+def test_celery_resume_task_applies_signal_and_runs_pinned_step():
+    engine = CeleryWorkflowEngine()
+    run = start_workflow()
+    signal = {"step": "approve", "id": "decision-1", "data": {"approved": True}}
+    with pytest.raises(WorkflowSignalError):
+        resume_execution_task(run.execution_id, {"step": "approve"})
+
+    assert engine.status(run.execution_id).state == "waiting"
+    assert resume_execution_task(run.execution_id, signal) is True
+    assert engine.status(run.execution_id).state == "pending"
+    assert resume_execution_task(run.execution_id, signal) is False
+
+    execute_workflow_step(step_id(run.execution_id))
+    completed = engine.status(run.execution_id)
+    assert completed.state == "completed"
+    assert completed.output_data["signal"] == {"approved": True}
 
 
 def test_expired_claim_is_recoverable_and_late_completion_is_fenced():

@@ -397,23 +397,25 @@ def resume_execution_task(
     signal: WorkflowTaskPayload | None = None,
 ) -> bool:
     """
-    Mark a waiting persisted execution as completed.
+    Resume a waiting durable step or complete a legacy execution.
 
     Parameters:
-        execution_id: Durable workflow execution id.
-        signal: Optional resume signal stored in execution metadata.
+        execution_id: Workflow execution id.
+        signal: Durable step signal or optional legacy metadata.
 
     Returns:
-        bool: `True` when a waiting execution was completed, `False` when the
-        execution exists but is not in `waiting`.
+        bool: `True` when a waiting execution accepted the signal, or
+        `False` when the execution is not waiting.
 
     Raises:
         WorkflowExecutionNotFoundError: If `execution_id` does not exist.
+        WorkflowSignalError: If a durable signal is invalid or conflicts.
+        WorkflowInvalidStateError: If the requested durable step is not waiting.
 
-    The resume `signal` is stored only in execution metadata under
-    `resume_signal`; output data is not changed. This task does not configure
-    Celery retries, so unexpected persistence errors propagate to the
-    caller/worker.
+    For legacy executions the signal is stored in metadata under
+    `resume_signal` and the output is unchanged. For durable executions it
+    queues the pinned step after commit. Unexpected persistence errors
+    propagate to the worker.
     """
     from general_manager.workflow.models import WorkflowExecutionRecord
 
@@ -427,6 +429,11 @@ def resume_execution_task(
             raise WorkflowExecutionNotFoundError(execution_id)
         if execution.state != "waiting":
             return False
+        if execution.durable_version is not None:
+            from general_manager.workflow.durable import resume_steps
+
+            resume_steps(execution, signal)
+            return True
         metadata = dict(execution.metadata)
         if signal is not None:
             metadata["resume_signal"] = dict(signal)
