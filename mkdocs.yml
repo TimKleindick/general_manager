@@ -198,6 +198,7 @@ nav:
       - examples/excel_interface_end_to_end.md
       - examples/startup_hooks.md
       - examples/workflow_input_snapshot.md
+      - examples/workflow_durable_approval.md
       - examples/production_maintenance.md
       - examples/remote_manager_interface_end_to_end.md
       - examples/request_interface_end_to_end.md

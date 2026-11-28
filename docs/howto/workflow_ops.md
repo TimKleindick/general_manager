@@ -41,7 +41,7 @@ with transaction.atomic():
     assert execution.input_data == {"project_id": 42, "status": "ready"}
 ```
 
-The top-level changes after `start()` do not affect the stored execution or the
+For this legacy single-handler example, top-level changes after `start()` do not affect the stored execution or the
 eventual Celery task. Nested values are shallow-copied only, so nested mutation
 requires the caller to provide its own immutable or copied values. A rollback
 of the containing transaction or savepoint discards the new execution and its
@@ -118,9 +118,11 @@ synchronous handler, passes `dict(input_data or {})`, and stores `dict(result or
 execution ids raise `WorkflowExecutionNotFoundError`; handler import/call/output
 conversion failures are captured as failed execution records.
 
-`resume_execution_task(execution_id, signal)` completes only waiting executions
-and stores `signal` in metadata under `resume_signal`. It does not change output
-data. `cancel_execution_task(execution_id, reason)` cancels active executions:
+`resume_execution_task(execution_id, signal)` accepts only waiting executions.
+For legacy executions it completes the run and stores a supplied signal under
+`metadata["resume_signal"]` without changing output. For durable executions it
+validates the step signal and queues the pinned step after commit.
+`cancel_execution_task(execution_id, reason)` cancels active executions:
 `pending`, `running`, or `waiting`. Both tasks return `False` for existing
 records in the wrong state and raise `WorkflowExecutionNotFoundError` for missing
 records.
@@ -215,6 +217,9 @@ backend. If a custom Prometheus registry or collector fails, that exception
 propagates to the workflow operation that attempted to record the metric.
 
 ## Run versioned approval workflows
+
+For a complete handler and caller example, see the
+[durable approval recipe](../examples/workflow_durable_approval.md).
 
 Versioned steps are opt-in. Apply GeneralManager's migrations, keep
 `WORKFLOW_MODE="production"`, and set
