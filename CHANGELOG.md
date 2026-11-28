@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.93.1 (2026-11-28)
+
+### Bug Fixes
+
+- **ci**: Verify PyPI publication in a separate job
+  ([`a3dae4b`](https://github.com/TimKleindick/general_manager/commit/a3dae4b3b2bdd58d5230cdf43c72d5c495b5b078))
+
+
 ## v0.93.0 (2026-11-28)
 
 ### Bug Fixes
