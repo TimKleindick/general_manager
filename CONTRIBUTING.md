@@ -176,7 +176,7 @@ with a [normalized project name](https://packaging.python.org/en/latest/specific
 and a [cache revalidation request](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.1.4).
 Revalidation does not guarantee immediate visibility. After upload, only HTTP
 404 or a valid, hash-matching subset of the expected files is polled every five seconds, with
-a 60-second visibility budget (an operational limit, not a PyPI propagation SLA).
+a 15-minute visibility budget (an operational limit, not a PyPI propagation SLA).
 Every response is checked for unexpected files and hash mismatches before
 waiting. Authentication, rate-limit, server,
 transport, and malformed-response errors fail immediately. Pre-upload checks
@@ -189,12 +189,17 @@ response and missing filenames before considering recovery. The monotonic
 budget limits polling and rejects late results. Because Python's
 [network timeout](https://docs.python.org/3.12/library/urllib.request.html#urllib.request.urlopen)
 applies to blocking operations rather than the whole request, the
-read-only verification step also has an independent two-minute CI timeout.
+read-only verification step also has an independent 17-minute CI timeout.
 
 GitHub retains the artifact for 90 days, but permits workflow reruns for only 30
-days. Within that rerun window, use **Re-run failed jobs** so the failed release
-job reuses the validated artifact; do not rerun all jobs and rebuild it. After
-30 days, stop and investigate instead of rebuilding or uploading files
-manually.
+days. Public availability verification is a separate read-only job that downloads
+the validated artifact and has no release or upload step. Within the rerun
+window, rerun only that job if its visibility check fails; this preserves the
+original artifacts without publishing again. If the release job fails, inspect
+its logs and recovery guards before rerunning it: that job includes release and
+upload operations. Do not rerun all jobs and rebuild the artifacts. After 30
+days, stop and investigate instead of rebuilding or uploading files manually.
+Historical runs created before this separation still combine publishing and
+verification in one job; rerunning that job also reruns publication steps.
 
 Thanks again for investing your time into GeneralManager!
